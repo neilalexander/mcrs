@@ -1,0 +1,26 @@
+[package]
+name = "meshcore-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mcrs-protocol = { path = "../protocol" }
+
+[[bin]]
+name = "protocol_packet"
+path = "fuzz_targets/protocol_packet.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "protocol_payloads"
+path = "fuzz_targets/protocol_payloads.rs"
+test = false
+doc = false
+bench = false

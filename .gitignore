@@ -1,0 +1,7 @@
+/target
+*.html
+.DS_Store
+/dist
+/fuzz/artifacts
+/fuzz/corpus
+/fuzz/target

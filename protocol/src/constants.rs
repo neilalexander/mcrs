@@ -1,0 +1,13 @@
+pub const PUB_KEY_SIZE: usize = 32;
+pub const PRV_KEY_SIZE: usize = 64;
+pub const SEED_SIZE: usize = 32;
+pub const SIGNATURE_SIZE: usize = 64;
+pub const CIPHER_KEY_SIZE: usize = 16;
+pub const CIPHER_BLOCK_SIZE: usize = 16;
+pub const CIPHER_MAC_SIZE: usize = 2;
+pub const MAX_ADVERT_DATA_SIZE: usize = 32;
+pub const MAX_PACKET_PAYLOAD: usize = 184;
+pub const MAX_PATH_SIZE: usize = 64;
+pub const MAX_TRANS_UNIT: usize = 255;
+pub const MAX_GROUP_DATA_LENGTH: usize = 165;
+pub const MAX_TEXT_LEN: usize = 160;
