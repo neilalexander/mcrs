@@ -1,0 +1,38 @@
+[alias]
+check-heltec-v3 = "check -p mcrs-firmware --target xtensa-esp32s3-none-elf --features board-heltec-v3"
+build-heltec-v3 = "build -p mcrs-firmware --release --target xtensa-esp32s3-none-elf --features board-heltec-v3"
+run-heltec-v3 = [
+    "run",
+    "-p",
+    "mcrs-firmware",
+    "--release",
+    "--target",
+    "xtensa-esp32s3-none-elf",
+    "--features",
+    "board-heltec-v3",
+    "--config",
+    "target.xtensa-esp32s3-none-elf.runner='espflash flash --chip esp32s3 --flash-size 8mb --flash-mode dio --flash-freq 40mhz --partition-table firmware/partitions_heltec_v3.csv --monitor'",
+]
+check-heltec-v4 = "check -p mcrs-firmware --target xtensa-esp32s3-none-elf --features board-heltec-v4"
+build-heltec-v4 = "build -p mcrs-firmware --release --target xtensa-esp32s3-none-elf --features board-heltec-v4"
+run-heltec-v4 = [
+    "run",
+    "-p",
+    "mcrs-firmware",
+    "--release",
+    "--target",
+    "xtensa-esp32s3-none-elf",
+    "--features",
+    "board-heltec-v4",
+    "--config",
+    "target.xtensa-esp32s3-none-elf.runner='espflash flash --chip esp32s3 --flash-size 16mb --flash-mode qio --flash-freq 80mhz --partition-table firmware/partitions_heltec_v4.csv --monitor'",
+]
+
+[target.xtensa-esp32s3-none-elf]
+rustflags = [
+    "-C",
+    "link-arg=-nostartfiles",
+]
+
+[unstable]
+build-std = ["alloc", "core"]
