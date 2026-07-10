@@ -25,7 +25,7 @@ run-heltec-v4 = [
     "--features",
     "board-heltec-v4",
     "--config",
-    "target.xtensa-esp32s3-none-elf.runner='espflash flash --chip esp32s3 --flash-size 16mb --flash-mode qio --flash-freq 80mhz --partition-table firmware/partitions_heltec_v4.csv --target-app-partition factory --erase-parts otadata --monitor'",
+    "target.xtensa-esp32s3-none-elf.runner='espflash flash --chip esp32s3 --flash-size 16mb --flash-mode dio --flash-freq 40mhz --partition-table firmware/partitions_heltec_v4.csv --target-app-partition factory --erase-parts otadata --monitor'",
 ]
 
 [target.xtensa-esp32s3-none-elf]
