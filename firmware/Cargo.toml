@@ -48,6 +48,7 @@ esp32s3 = [
     "esp-backtrace/panic-handler",
     "esp-backtrace/println",
     "esp-hal/esp32s3",
+    "esp-hal/psram",
     "esp-hal/unstable",
     "esp-hal-embassy/esp32s3",
     "esp-println/esp32s3",
