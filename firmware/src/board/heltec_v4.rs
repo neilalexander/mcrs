@@ -147,7 +147,7 @@ async fn init(platform: crate::platform::Platform) -> ! {
         I2cConfig::default().with_frequency(Rate::from_khz(400)),
     ) {
         Ok(i2c) => {
-            let power = Output::new(platform.peripherals.GPIO36, Level::High, output_config);
+            let power = Output::new(platform.peripherals.GPIO36, Level::Low, output_config);
             let reset = Output::new(platform.peripherals.GPIO21, Level::High, output_config);
             let i2c = i2c
                 .with_sda(platform.peripherals.GPIO17)
@@ -158,7 +158,7 @@ async fn init(platform: crate::platform::Platform) -> ! {
                     i2c,
                     reset,
                     power,
-                    crate::modules::ssd1306::PowerActiveLevel::High,
+                    crate::modules::ssd1306::PowerActiveLevel::Low,
                 ),
             )
         }
