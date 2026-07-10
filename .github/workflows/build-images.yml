@@ -49,7 +49,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust for Xtensa
         uses: esp-rs/xtensa-toolchain@v1.7.0
@@ -60,7 +60,7 @@ jobs:
           override: false
 
       - name: Cache Cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo
@@ -76,7 +76,7 @@ jobs:
         run: make ${{ matrix.board.make_target }}
 
       - name: Upload images
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.board.id }}-firmware-${{ github.sha }}
           path: ${{ matrix.board.artifact_paths }}
