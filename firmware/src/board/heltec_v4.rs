@@ -93,7 +93,7 @@ impl heltec::RadioFrontend for HeltecV4Frontend {
                 let _ = self.gc_tx_enable.set_low();
             }
             HeltecV4FrontendKind::Kct8103l => {
-                let _ = self.kct_ctx.set_high();
+                let _ = self.kct_ctx.set_low();
             }
         }
     }
