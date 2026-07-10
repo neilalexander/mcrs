@@ -59,7 +59,12 @@ where
     match receive_update(connection, &header[body_start..header_len], content_len).await {
         Ok(bytes) => {
             let mut response = [0u8; 64];
-            let len = write_decimal_response(&mut response, b"OK - wrote ", bytes, b" bytes\n");
+            let len = write_decimal_response(
+                &mut response,
+                b"OK - wrote ",
+                bytes,
+                b" bytes; reboot to apply\n",
+            );
             write_response(connection, "200 OK", "text/plain", &response[..len]).await?;
         }
         Err(error) => {

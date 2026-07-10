@@ -64,7 +64,7 @@ embedded-hal-async = "1.0.0"
 embedded-io-async = "0.7.0"
 critical-section = "1.2.0"
 embassy-executor = { version = "0.7.0", optional = true }
-embassy-net = { version = "0.9.1", default-features = false, features = ["medium-ethernet", "proto-ipv4", "tcp"], optional = true }
+embassy-net = { version = "0.9.1", default-features = false, features = ["medium-ethernet", "proto-ipv4", "tcp", "udp"], optional = true }
 embassy-sync = "0.6.2"
 embassy-time = { version = "0.4.0", optional = true }
 embedded-alloc = { version = "0.7.0", default-features = false, features = ["llff"], optional = true }

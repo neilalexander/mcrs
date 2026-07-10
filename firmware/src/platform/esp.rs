@@ -47,6 +47,11 @@ const WIFI_ALLOC_ALIGN: usize = core::mem::align_of::<usize>();
 const FLASH_SECTOR_SIZE: usize = 4096;
 const OTA_WRITE_WORDS: usize = 256;
 const ESP_IMAGE_MAGIC: u8 = 0xe9;
+const ESP_IMAGE_HEADER_LEN: usize = 24;
+const ESP_SEGMENT_HEADER_LEN: usize = 8;
+const ESP_IMAGE_CHECKSUM_SEED: u8 = 0xef;
+const ESP_APP_DESC_OFFSET: u32 = 0x20;
+const ESP_APP_DESC_MAGIC: u32 = 0xabcd_5432;
 const STORAGE_MAGIC: [u8; 4] = *b"MCFS";
 const STORAGE_VERSION: u8 = 1;
 const STORAGE_HEADER_LEN: usize = 12;
@@ -190,9 +195,20 @@ pub fn finish_ota_update(mut update: OtaUpdate) -> Result<(), OtaError> {
         .ota_data()
         .and_then(|mut ota| ota.set_current_app_partition(update.slot))
         .map_err(|_| OtaError::Storage)?;
+    let selected = updater
+        .selected_partition()
+        .map_err(|_| OtaError::Storage)?;
+    if selected != update.slot {
+        log_fmt(format_args!(
+            "OTA: activation readback mismatch: wanted={} selected={}",
+            app_partition_name(update.slot),
+            app_partition_name(selected)
+        ));
+        return Err(OtaError::Storage);
+    }
     log_fmt(format_args!(
-        "OTA: activated {}, reboot to apply",
-        app_partition_name(update.slot)
+        "OTA: activated {} and verified selection, reboot to apply",
+        app_partition_name(selected)
     ));
     Ok(())
 }
@@ -255,6 +271,68 @@ impl OtaUpdate {
             self.flushed += self.tail.len();
             self.tail = [0xff; 4];
             self.tail_len = 0;
+        }
+        self.verify_image()
+    }
+
+    fn verify_image(&self) -> Result<(), OtaError> {
+        let mut header = [0u8; ESP_IMAGE_HEADER_LEN];
+        read_flash(self.offset, &mut header)?;
+        let segment_count = header[1] as usize;
+        if header[0] != ESP_IMAGE_MAGIC || segment_count == 0 || segment_count > 16 {
+            return Err(OtaError::InvalidImage);
+        }
+
+        let mut app_desc_magic = [0u8; 4];
+        read_flash(self.offset + ESP_APP_DESC_OFFSET, &mut app_desc_magic)?;
+        if u32::from_le_bytes(app_desc_magic) != ESP_APP_DESC_MAGIC {
+            return Err(OtaError::InvalidImage);
+        }
+
+        let mut position = ESP_IMAGE_HEADER_LEN;
+        let mut checksum = ESP_IMAGE_CHECKSUM_SEED;
+        let mut buffer = [0u8; 1024];
+        for _ in 0..segment_count {
+            let header_end = position
+                .checked_add(ESP_SEGMENT_HEADER_LEN)
+                .ok_or(OtaError::InvalidImage)?;
+            if header_end > self.written {
+                return Err(OtaError::InvalidImage);
+            }
+            let mut segment_header = [0u8; ESP_SEGMENT_HEADER_LEN];
+            read_flash(self.offset + position as u32, &mut segment_header)?;
+            let segment_len = u32::from_le_bytes([
+                segment_header[4],
+                segment_header[5],
+                segment_header[6],
+                segment_header[7],
+            ]) as usize;
+            position = header_end;
+            let segment_end = position
+                .checked_add(segment_len)
+                .ok_or(OtaError::InvalidImage)?;
+            if segment_end > self.written {
+                return Err(OtaError::InvalidImage);
+            }
+            while position < segment_end {
+                let count = (segment_end - position).min(buffer.len());
+                read_flash(self.offset + position as u32, &mut buffer[..count])?;
+                for byte in &buffer[..count] {
+                    checksum ^= byte;
+                }
+                position += count;
+            }
+        }
+
+        let checksum_offset =
+            align_up(position.checked_add(1).ok_or(OtaError::InvalidImage)?, 16) - 1;
+        if checksum_offset >= self.written {
+            return Err(OtaError::InvalidImage);
+        }
+        let mut stored_checksum = [0u8; 1];
+        read_flash(self.offset + checksum_offset as u32, &mut stored_checksum)?;
+        if stored_checksum[0] != checksum {
+            return Err(OtaError::InvalidImage);
         }
         Ok(())
     }

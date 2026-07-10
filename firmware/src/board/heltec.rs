@@ -32,6 +32,11 @@ const FIRMWARE_VERSION: &str = env!("MESHCORE_FIRMWARE_VERSION");
 const OTA_AP_IP: embassy_net::Ipv4Address = embassy_net::Ipv4Address::new(192, 168, 4, 1);
 const OTA_AP_PREFIX: u8 = 24;
 const OTA_HTTP_PORT: u16 = 80;
+const OTA_DHCP_SERVER_PORT: u16 = 67;
+const OTA_DHCP_CLIENT_PORT: u16 = 68;
+const OTA_CLIENT_IP: embassy_net::Ipv4Address = embassy_net::Ipv4Address::new(192, 168, 4, 2);
+const DHCP_PACKET_LEN: usize = 300;
+const DHCP_COOKIE: [u8; 4] = [99, 130, 83, 99];
 const DISPLAY_AWAKE_MS: u32 = 5_000;
 const PRG_ADVERT_HOLD_MS: u32 = 2_000;
 const BATTERY_SAMPLE_INTERVAL_MS: u32 = 60_000;
@@ -437,10 +442,26 @@ async fn ota_task(
     let seed = crate::platform::now_millis();
     let (stack, mut runner) = embassy_net::new(interfaces.ap, net_config, stack_resources, seed);
     let mut runner = pin!(runner.run());
+    let mut dhcp_rx_meta = [embassy_net::udp::PacketMetadata::EMPTY; 1];
+    let mut dhcp_tx_meta = [embassy_net::udp::PacketMetadata::EMPTY; 1];
+    let mut dhcp_rx_buffer = [0u8; 576];
+    let mut dhcp_tx_buffer = [0u8; DHCP_PACKET_LEN];
+    let mut dhcp_socket = embassy_net::udp::UdpSocket::new(
+        stack,
+        &mut dhcp_rx_meta,
+        &mut dhcp_rx_buffer,
+        &mut dhcp_tx_meta,
+        &mut dhcp_tx_buffer,
+    );
+    if dhcp_socket.bind(OTA_DHCP_SERVER_PORT).is_err() {
+        crate::platform::log_fmt(format_args!("OTA: DHCP bind failed"));
+        core::future::pending::<()>().await;
+    }
+    let mut dhcp = pin!(dhcp_server(&dhcp_socket));
 
     loop {
         if !context.ota_requested() {
-            wait_for_ota_requested(context, true, &mut runner).await;
+            wait_for_ota_requested(context, true, &mut runner, &mut dhcp).await;
         }
         if let Err(error) = start_ota_ap(&mut controller, &ssid).await {
             crate::platform::log_fmt(format_args!("OTA: AP start failed: {:?}", error));
@@ -458,12 +479,12 @@ async fn ota_task(
             let mut socket =
                 embassy_net::tcp::TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
 
-            if !accept_ota_connection(context, &mut runner, &mut socket).await {
+            if !accept_ota_connection(context, &mut runner, &mut dhcp, &mut socket).await {
                 break;
             }
 
             crate::platform::log_fmt(format_args!("OTA: client connected"));
-            match drive_ota_connection(context, &mut runner, &mut socket).await {
+            match drive_ota_connection(context, &mut runner, &mut dhcp, &mut socket).await {
                 OtaConnectionResult::Complete(Ok(())) => {}
                 OtaConnectionResult::Complete(Err(error)) => {
                     crate::platform::log_fmt(format_args!("OTA: request failed: {:?}", error));
@@ -475,7 +496,9 @@ async fn ota_task(
             socket.abort();
         }
 
-        if let Err(error) = drive_network(&mut runner, stop_ota_ap(&mut controller)).await {
+        if let Err(error) =
+            drive_network(&mut runner, &mut dhcp, stop_ota_ap(&mut controller)).await
+        {
             crate::platform::log_fmt(format_args!("OTA: AP stop failed: {:?}", error));
         } else {
             crate::platform::log_fmt(format_args!("OTA: AP stopped"));
@@ -521,6 +544,95 @@ where
     )
 }
 
+async fn dhcp_server(socket: &embassy_net::udp::UdpSocket<'_>) -> ! {
+    let mut request = [0u8; 576];
+    let mut response = [0u8; DHCP_PACKET_LEN];
+    loop {
+        let Ok((len, _)) = socket.recv_from(&mut request).await else {
+            continue;
+        };
+        let Some(response_len) = build_dhcp_response(&request[..len], &mut response) else {
+            continue;
+        };
+        let destination = embassy_net::IpEndpoint::new(
+            embassy_net::IpAddress::Ipv4(embassy_net::Ipv4Address::BROADCAST),
+            OTA_DHCP_CLIENT_PORT,
+        );
+        let _ = socket.send_to(&response[..response_len], destination).await;
+    }
+}
+
+fn build_dhcp_response(request: &[u8], response: &mut [u8; DHCP_PACKET_LEN]) -> Option<usize> {
+    if request.len() < 240
+        || request[0] != 1
+        || request[1] != 1
+        || request[2] != 6
+        || request[236..240] != DHCP_COOKIE
+    {
+        return None;
+    }
+
+    let message_type = dhcp_message_type(&request[240..])?;
+    let reply_type = match message_type {
+        1 => 2, // DISCOVER -> OFFER
+        3 => 5, // REQUEST -> ACK
+        _ => return None,
+    };
+
+    response.fill(0);
+    response[0] = 2;
+    response[1..4].copy_from_slice(&request[1..4]);
+    response[4..8].copy_from_slice(&request[4..8]);
+    response[10..12].copy_from_slice(&request[10..12]);
+    response[16..20].copy_from_slice(&OTA_CLIENT_IP.octets());
+    response[20..24].copy_from_slice(&OTA_AP_IP.octets());
+    response[24..28].copy_from_slice(&request[24..28]);
+    response[28..44].copy_from_slice(&request[28..44]);
+    response[236..240].copy_from_slice(&DHCP_COOKIE);
+
+    let mut offset = 240;
+    offset = append_dhcp_option(response, offset, 53, &[reply_type])?;
+    offset = append_dhcp_option(response, offset, 54, &OTA_AP_IP.octets())?;
+    offset = append_dhcp_option(response, offset, 51, &3600u32.to_be_bytes())?;
+    offset = append_dhcp_option(response, offset, 1, &[255, 255, 255, 0])?;
+    offset = append_dhcp_option(response, offset, 3, &OTA_AP_IP.octets())?;
+    response[offset] = 255;
+    Some(DHCP_PACKET_LEN)
+}
+
+fn dhcp_message_type(mut options: &[u8]) -> Option<u8> {
+    while let Some((&code, rest)) = options.split_first() {
+        options = rest;
+        match code {
+            0 => continue,
+            255 => return None,
+            _ => {
+                let (&len, rest) = options.split_first()?;
+                let len = len as usize;
+                if rest.len() < len {
+                    return None;
+                }
+                if code == 53 && len == 1 {
+                    return Some(rest[0]);
+                }
+                options = &rest[len..];
+            }
+        }
+    }
+    None
+}
+
+fn append_dhcp_option(response: &mut [u8], offset: usize, code: u8, value: &[u8]) -> Option<usize> {
+    let end = offset.checked_add(2)?.checked_add(value.len())?;
+    if end >= response.len() || value.len() > u8::MAX as usize {
+        return None;
+    }
+    response[offset] = code;
+    response[offset + 1] = value.len() as u8;
+    response[offset + 2..end].copy_from_slice(value);
+    Some(end)
+}
+
 async fn wait_for_ota_requested_idle(
     context: &crate::app::AppContext<crate::platform::EspStorage>,
     requested: bool,
@@ -547,12 +659,14 @@ async fn wait_for_ota_requested_idle(
     }
 }
 
-async fn wait_for_ota_requested<R>(
+async fn wait_for_ota_requested<R, D>(
     context: &crate::app::AppContext<crate::platform::EspStorage>,
     requested: bool,
     runner: &mut core::pin::Pin<&mut R>,
+    dhcp: &mut core::pin::Pin<&mut D>,
 ) where
     R: Future,
+    D: Future,
 {
     loop {
         if context.ota_requested() == requested {
@@ -562,6 +676,7 @@ async fn wait_for_ota_requested<R>(
         let generation = context.ota_generation();
         poll_fn(|cx| {
             let _ = runner.as_mut().poll(cx);
+            let _ = dhcp.as_mut().poll(cx);
 
             if context.ota_requested() == requested || context.ota_generation() != generation {
                 return Poll::Ready(());
@@ -578,19 +693,22 @@ async fn wait_for_ota_requested<R>(
     }
 }
 
-async fn accept_ota_connection<'a, R>(
+async fn accept_ota_connection<'a, R, D>(
     context: &crate::app::AppContext<crate::platform::EspStorage>,
     runner: &mut core::pin::Pin<&mut R>,
+    dhcp: &mut core::pin::Pin<&mut D>,
     socket: &mut embassy_net::tcp::TcpSocket<'a>,
 ) -> bool
 where
     R: Future,
+    D: Future,
 {
     let mut accept = pin!(socket.accept(OTA_HTTP_PORT));
     let generation = context.ota_generation();
 
     poll_fn(|cx| {
         let _ = runner.as_mut().poll(cx);
+        let _ = dhcp.as_mut().poll(cx);
 
         if !context.ota_requested() {
             return Poll::Ready(false);
@@ -617,19 +735,22 @@ enum OtaConnectionResult {
     Stopped,
 }
 
-async fn drive_ota_connection<'a, R>(
+async fn drive_ota_connection<'a, R, D>(
     context: &crate::app::AppContext<crate::platform::EspStorage>,
     runner: &mut core::pin::Pin<&mut R>,
+    dhcp: &mut core::pin::Pin<&mut D>,
     socket: &mut embassy_net::tcp::TcpSocket<'a>,
 ) -> OtaConnectionResult
 where
     R: Future,
+    D: Future,
 {
     let mut connection = pin!(crate::app::ota::handle_connection(socket));
     let generation = context.ota_generation();
 
     poll_fn(|cx| {
         let _ = runner.as_mut().poll(cx);
+        let _ = dhcp.as_mut().poll(cx);
 
         if !context.ota_requested() {
             return Poll::Ready(OtaConnectionResult::Stopped);
@@ -650,14 +771,20 @@ where
     .await
 }
 
-async fn drive_network<R, F>(runner: &mut core::pin::Pin<&mut R>, future: F) -> F::Output
+async fn drive_network<R, D, F>(
+    runner: &mut core::pin::Pin<&mut R>,
+    dhcp: &mut core::pin::Pin<&mut D>,
+    future: F,
+) -> F::Output
 where
     R: Future,
+    D: Future,
     F: Future,
 {
     let mut future = pin!(future);
     poll_fn(|cx| {
         let _ = runner.as_mut().poll(cx);
+        let _ = dhcp.as_mut().poll(cx);
 
         future.as_mut().poll(cx)
     })
