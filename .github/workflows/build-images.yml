@@ -1,0 +1,70 @@
+name: Build Images
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-images-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  build:
+    name: ${{ matrix.board.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        board:
+          - id: heltec-v3
+            name: Heltec V3
+            build_target: esp32s3
+            make_target: heltec-v3-bins
+            artifact_paths: |
+              dist/mcrs-heltec-v3-merged.bin
+              dist/mcrs-heltec-v3-app.bin
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust for Xtensa
+        uses: esp-rs/xtensa-toolchain@v1.7.0
+        with:
+          buildtargets: ${{ matrix.board.build_target }}
+          default: false
+          ldproxy: false
+          override: false
+
+      - name: Cache Cargo dependencies and build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ matrix.board.id }}-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ matrix.board.id }}-${{ runner.os }}-
+
+      - name: Install espflash
+        run: cargo install espflash --version 4.4.0 --locked
+
+      - name: Build images
+        run: make ${{ matrix.board.make_target }}
+
+      - name: Upload images
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.board.id }}-firmware-${{ github.sha }}
+          path: ${{ matrix.board.artifact_paths }}
+          if-no-files-found: error
