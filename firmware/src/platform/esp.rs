@@ -157,7 +157,6 @@ pub fn begin_ota_update() -> Result<OtaUpdate, OtaError> {
         .next_partition()
         .map_err(|_| OtaError::NotAvailable)?;
     let (offset, capacity) = find_app_partition(slot).ok_or(OtaError::NotAvailable)?;
-    erase_flash_range(offset, capacity)?;
     log_fmt(format_args!(
         "OTA: writing {} at offset=0x{:x} size={}",
         app_partition_name(slot),
@@ -170,6 +169,7 @@ pub fn begin_ota_update() -> Result<OtaUpdate, OtaError> {
         capacity,
         written: 0,
         flushed: 0,
+        erased: 0,
         tail: [0xff; 4],
         tail_len: 0,
         saw_header: false,
@@ -218,7 +218,7 @@ impl OtaUpdate {
             self.written += 1;
             data = &data[1..];
             if self.tail_len == self.tail.len() {
-                write_ota_aligned(self.offset + self.flushed as u32, &self.tail)?;
+                self.write_aligned_tail()?;
                 self.flushed += self.tail.len();
                 self.tail = [0xff; 4];
                 self.tail_len = 0;
@@ -227,6 +227,7 @@ impl OtaUpdate {
 
         let aligned_len = data.len() & !0x03;
         if aligned_len > 0 {
+            self.ensure_erased(self.flushed + aligned_len)?;
             write_ota_aligned(self.offset + self.flushed as u32, &data[..aligned_len])?;
             self.flushed += aligned_len;
             self.written += aligned_len;
@@ -250,10 +251,24 @@ impl OtaUpdate {
             if self.flushed.saturating_add(self.tail.len()) > self.capacity {
                 return Err(OtaError::TooLarge);
             }
-            write_ota_aligned(self.offset + self.flushed as u32, &self.tail)?;
+            self.write_aligned_tail()?;
             self.flushed += self.tail.len();
             self.tail = [0xff; 4];
             self.tail_len = 0;
+        }
+        Ok(())
+    }
+
+    fn write_aligned_tail(&mut self) -> Result<(), OtaError> {
+        self.ensure_erased(self.flushed + self.tail.len())?;
+        write_ota_aligned(self.offset + self.flushed as u32, &self.tail)?;
+        Ok(())
+    }
+
+    fn ensure_erased(&mut self, end: usize) -> Result<(), OtaError> {
+        while self.erased < end {
+            erase_flash_sector(self.offset + self.erased as u32)?;
+            self.erased += FLASH_SECTOR_SIZE;
         }
         Ok(())
     }
@@ -291,6 +306,7 @@ pub struct OtaUpdate {
     capacity: usize,
     written: usize,
     flushed: usize,
+    erased: usize,
     tail: [u8; 4],
     tail_len: usize,
     saw_header: bool,
@@ -531,18 +547,19 @@ fn read_flash(offset: u32, bytes: &mut [u8]) -> Result<(), crate::platform::stor
     Ok(())
 }
 
+#[esp_hal::ram]
 fn write_flash_words(offset: u32, words: &[u32]) -> Result<(), crate::platform::storage::Error> {
     if !offset.is_multiple_of(4) {
         return Err(crate::platform::storage::Error::Io);
     }
 
-    let result = unsafe {
+    let result = critical_section::with(|_| unsafe {
         esp_rom_sys::rom::spiflash::esp_rom_spiflash_write(
             offset,
             words.as_ptr(),
             (words.len() * 4) as u32,
         )
-    };
+    });
     if result == esp_rom_sys::rom::spiflash::ESP_ROM_SPIFLASH_RESULT_OK {
         Ok(())
     } else {
@@ -580,14 +597,26 @@ fn erase_flash_range(offset: u32, len: usize) -> Result<(), crate::platform::sto
     let first_sector = offset as usize / FLASH_SECTOR_SIZE;
     let last_sector = (offset as usize + len - 1) / FLASH_SECTOR_SIZE;
     for sector in first_sector..=last_sector {
-        let result =
-            unsafe { esp_rom_sys::rom::spiflash::esp_rom_spiflash_erase_sector(sector as u32) };
-        if result != esp_rom_sys::rom::spiflash::ESP_ROM_SPIFLASH_RESULT_OK {
-            return Err(crate::platform::storage::Error::Io);
-        }
+        erase_flash_sector((sector * FLASH_SECTOR_SIZE) as u32)?;
     }
 
     Ok(())
+}
+
+#[esp_hal::ram]
+fn erase_flash_sector(offset: u32) -> Result<(), crate::platform::storage::Error> {
+    if !(offset as usize).is_multiple_of(FLASH_SECTOR_SIZE) {
+        return Err(crate::platform::storage::Error::Io);
+    }
+
+    let result = critical_section::with(|_| unsafe {
+        esp_rom_sys::rom::spiflash::esp_rom_spiflash_erase_sector(offset / FLASH_SECTOR_SIZE as u32)
+    });
+    if result == esp_rom_sys::rom::spiflash::ESP_ROM_SPIFLASH_RESULT_OK {
+        Ok(())
+    } else {
+        Err(crate::platform::storage::Error::Io)
+    }
 }
 
 fn find_app_partition(slot: AppPartitionSubType) -> Option<(u32, usize)> {
