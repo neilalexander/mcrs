@@ -32,7 +32,12 @@ run-heltec-v4 = [
 rustflags = [
     "-C",
     "link-arg=-nostartfiles",
+    "-C",
+    "link-arg=-Tlinkall.x",
 ]
+
+[env]
+EMBASSY_EXECUTOR_TASK_ARENA_SIZE = "32768"
 
 [unstable]
 build-std = ["alloc", "core"]
