@@ -16,6 +16,7 @@ const MAX_NODE_NAME_LEN: usize = 31;
 const DEFAULT_FLOOD_MAX_UNSCOPED_HOPS: u8 = 5;
 const DEFAULT_FLOOD_MAX_ADVERT_HOPS: u8 = 3;
 const DEFAULT_PATH_HASH_MODE: u8 = 2;
+const DEFAULT_DUTY_CYCLE_PERCENT: u8 = 10;
 const UNPROVISIONED_CONFIG_TEXT: &[u8] = b"# MCRS app.conf\nversion=1\n";
 const COORDINATE_SCALE: i32 = 1_000_000;
 const MIN_LATITUDE_MICRODEGREES: i32 = -90 * COORDINATE_SCALE;
@@ -37,6 +38,7 @@ pub struct AppConfig {
     flood_max_unscoped_hops: u8,
     flood_max_advert_hops: u8,
     path_hash_mode: u8,
+    duty_cycle_percent: u8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,6 +96,7 @@ impl AppConfig {
             flood_max_unscoped_hops: stored.flood_max_unscoped_hops,
             flood_max_advert_hops: stored.flood_max_advert_hops,
             path_hash_mode: stored.path_hash_mode,
+            duty_cycle_percent: stored.duty_cycle_percent,
         }
     }
 
@@ -153,6 +156,10 @@ impl AppConfig {
         self.path_hash_mode
     }
 
+    pub fn duty_cycle_percent(&self) -> u8 {
+        self.duty_cycle_percent
+    }
+
     pub fn set_node_name(&mut self, node_name: &str) -> Result<(), ConfigError> {
         self.node_name = fit_node_name(node_name)?;
         Ok(())
@@ -197,6 +204,14 @@ impl AppConfig {
     pub fn set_transmit_power_dbm(&mut self, transmit_power_dbm: i32) -> Result<(), ConfigError> {
         self.radio.transmit_power_dbm = transmit_power_dbm;
         self.radio.validate()
+    }
+
+    pub fn set_duty_cycle_percent(&mut self, percent: u8) -> Result<(), ConfigError> {
+        if !(1..=100).contains(&percent) {
+            return Err(ConfigError::InvalidDutyCycle);
+        }
+        self.duty_cycle_percent = percent;
+        Ok(())
     }
 
     pub fn put_region(&mut self, name: &str) -> Result<(), ConfigError> {
@@ -382,6 +397,7 @@ struct StoredAppConfig {
     flood_max_unscoped_hops: u8,
     flood_max_advert_hops: u8,
     path_hash_mode: u8,
+    duty_cycle_percent: u8,
 }
 
 impl StoredAppConfig {
@@ -405,6 +421,7 @@ impl StoredAppConfig {
             flood_max_unscoped_hops: DEFAULT_FLOOD_MAX_UNSCOPED_HOPS,
             flood_max_advert_hops: DEFAULT_FLOOD_MAX_ADVERT_HOPS,
             path_hash_mode: DEFAULT_PATH_HASH_MODE,
+            duty_cycle_percent: DEFAULT_DUTY_CYCLE_PERCENT,
         }
     }
 
@@ -422,6 +439,7 @@ impl StoredAppConfig {
             flood_max_unscoped_hops: config.flood_max_unscoped_hops,
             flood_max_advert_hops: config.flood_max_advert_hops,
             path_hash_mode: config.path_hash_mode,
+            duty_cycle_percent: config.duty_cycle_percent,
         }
     }
 }
@@ -512,6 +530,9 @@ fn decode_config_text(data: &[u8], defaults: &StoredAppConfig) -> Option<StoredA
             "radio.tx_power_dbm" => {
                 config.radio.transmit_power_dbm = value.parse::<i32>().ok()?;
             }
+            "radio.duty_cycle_percent" => {
+                config.duty_cycle_percent = value.parse::<u8>().ok()?;
+            }
             "region.default" => {
                 config.regions.set_default_from_config(&value).ok()?;
             }
@@ -544,6 +565,9 @@ fn decode_config_text(data: &[u8], defaults: &StoredAppConfig) -> Option<StoredA
         config.node_name = fit_node_name(&generated_node_name(&config.identity_seed)).ok()?;
     }
     config.radio.validate().ok()?;
+    if !(1..=100).contains(&config.duty_cycle_percent) {
+        return None;
+    }
     validate_flood_max_hops(config.flood_max_unscoped_hops).ok()?;
     validate_flood_max_hops(config.flood_max_advert_hops).ok()?;
     validate_path_hash_mode(config.path_hash_mode).ok()?;
@@ -619,6 +643,13 @@ fn encode_sparse_config_text(config: &StoredAppConfig, defaults: &StoredAppConfi
             &mut out,
             "radio.tx_power_dbm={}",
             config.radio.transmit_power_dbm
+        );
+    }
+    if config.duty_cycle_percent != defaults.duty_cycle_percent {
+        let _ = writeln!(
+            &mut out,
+            "radio.duty_cycle_percent={}",
+            config.duty_cycle_percent
         );
     }
     config
@@ -708,6 +739,11 @@ fn encode_full_config_text_redacted(config: &StoredAppConfig, redact_secrets: bo
         "radio.tx_power_dbm={}",
         config.radio.transmit_power_dbm
     );
+    let _ = writeln!(
+        &mut out,
+        "radio.duty_cycle_percent={}",
+        config.duty_cycle_percent
+    );
     config.regions.write_config_lines(&mut out);
     let _ = writeln!(
         &mut out,
@@ -739,6 +775,7 @@ pub enum ConfigError {
     InvalidSpreadingFactor,
     InvalidCodingRate,
     InvalidTransmitPower,
+    InvalidDutyCycle,
     InvalidFloodMaxHops,
     InvalidPathHashMode,
     Region(RegionError),
@@ -755,6 +792,7 @@ impl fmt::Display for ConfigError {
             ConfigError::InvalidSpreadingFactor => f.write_str("invalid spreading factor"),
             ConfigError::InvalidCodingRate => f.write_str("invalid coding rate"),
             ConfigError::InvalidTransmitPower => f.write_str("invalid transmit power"),
+            ConfigError::InvalidDutyCycle => f.write_str("invalid duty cycle"),
             ConfigError::InvalidFloodMaxHops => f.write_str("invalid flood max hops"),
             ConfigError::InvalidPathHashMode => f.write_str("invalid path hash mode"),
             ConfigError::Region(error) => write!(f, "region: {}", error),

@@ -8,7 +8,6 @@ Supported features:
   * Owner information is not yet supported
 * Remote telemetry, including the neighbour list
   * Sensors are not yet supported
-  * Airtime % is not calculated yet
 * Regions
   * Allow or deny regions and setting the default advert region works
   * Optional `region capture` allows unscoped flood traffic that arrives directly to the repeater to be forwarded into the default scope instead of unscoped

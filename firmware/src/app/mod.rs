@@ -35,6 +35,9 @@ const CAD_MAX_ATTEMPTS: usize = 6;
 const CAD_BUSY_BACKOFF_BASE_MS: u32 = 10;
 const CAD_BUSY_BACKOFF_AIRTIME_DIVISOR: u32 = 2;
 const CAD_BUSY_BACKOFF_SYMBOLS: u32 = 4;
+const DUTY_CYCLE_WINDOW_MS: u64 = 3_600_000;
+const MIN_TX_BUDGET_RESERVE_MS: u64 = 100;
+const MIN_TX_BUDGET_AIRTIME_DIVISOR: u64 = 2;
 const BATTERY_LEVEL_UNKNOWN: u8 = u8::MAX;
 const BATTERY_MILLIVOLTS_UNKNOWN: u16 = u16::MAX;
 
@@ -60,6 +63,7 @@ where
     started_at_ms: u64,
     packets_received: AtomicU32,
     packets_sent: AtomicU32,
+    tx_airtime_ms: AtomicU32,
     packet_errors: AtomicU32,
     battery_level_percent: AtomicU8,
     battery_millivolts: AtomicU16,
@@ -96,6 +100,7 @@ where
             started_at_ms: crate::platform::now_millis(),
             packets_received: AtomicU32::new(0),
             packets_sent: AtomicU32::new(0),
+            tx_airtime_ms: AtomicU32::new(0),
             packet_errors: AtomicU32::new(0),
             battery_level_percent: AtomicU8::new(BATTERY_LEVEL_UNKNOWN),
             battery_millivolts: AtomicU16::new(BATTERY_MILLIVOLTS_UNKNOWN),
@@ -245,6 +250,7 @@ where
             uptime_seconds: crate::platform::now_millis().saturating_sub(self.started_at_ms) / 1000,
             packets_received: self.packets_received.load(Ordering::Relaxed),
             packets_sent: self.packets_sent.load(Ordering::Relaxed),
+            tx_airtime_ms: self.tx_airtime_ms.load(Ordering::Relaxed),
             packet_errors: self.packet_errors.load(Ordering::Relaxed),
             outbound_queue_len: self.outbound.len().min(u16::MAX as usize) as u16,
             battery_level_percent: optional_battery_level(
@@ -311,6 +317,14 @@ where
         self.packets_sent
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
                 Some(count.saturating_add(1))
+            })
+            .ok();
+    }
+
+    fn record_tx_airtime(&self, airtime_ms: u32) {
+        self.tx_airtime_ms
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |total| {
+                Some(total.saturating_add(airtime_ms))
             })
             .ok();
     }
@@ -504,6 +518,7 @@ pub struct Status {
     pub uptime_seconds: u64,
     pub packets_received: u32,
     pub packets_sent: u32,
+    pub tx_airtime_ms: u32,
     pub packet_errors: u32,
     pub outbound_queue_len: u16,
     pub battery_level_percent: Option<u8>,
@@ -526,6 +541,68 @@ struct QueuedTransmit {
 
 struct OutboundSchedule {
     pending: VecDeque<QueuedTransmit>,
+}
+
+struct AirtimeBudget {
+    available_ms: u64,
+    last_update_ms: u64,
+}
+
+impl AirtimeBudget {
+    fn new(now_ms: u64, duty_cycle_percent: u8) -> Self {
+        Self {
+            available_ms: duty_cycle_max_budget_ms(duty_cycle_percent),
+            last_update_ms: now_ms,
+        }
+    }
+
+    fn update(&mut self, now_ms: u64, duty_cycle_percent: u8) {
+        if duty_cycle_percent >= 100 {
+            self.available_ms = DUTY_CYCLE_WINDOW_MS;
+            self.last_update_ms = now_ms;
+            return;
+        }
+        self.available_ms = self
+            .available_ms
+            .min(duty_cycle_max_budget_ms(duty_cycle_percent));
+        let elapsed_ms = now_ms.saturating_sub(self.last_update_ms);
+        let refill_ms = elapsed_ms.saturating_mul(duty_cycle_percent.clamp(1, 100) as u64) / 100;
+        if refill_ms > 0 {
+            self.available_ms = self
+                .available_ms
+                .saturating_add(refill_ms)
+                .min(duty_cycle_max_budget_ms(duty_cycle_percent));
+            self.last_update_ms = now_ms;
+        }
+    }
+
+    fn ready_at_ms(&mut self, now_ms: u64, required_ms: u64, duty_cycle_percent: u8) -> u64 {
+        if duty_cycle_percent >= 100 {
+            return now_ms;
+        }
+        self.update(now_ms, duty_cycle_percent);
+        if self.available_ms >= required_ms {
+            now_ms
+        } else {
+            let needed_ms = required_ms - self.available_ms;
+            now_ms.saturating_add(div_ceil_u64(
+                needed_ms.saturating_mul(100),
+                duty_cycle_percent.clamp(1, 100) as u64,
+            ))
+        }
+    }
+
+    fn record_transmit(&mut self, now_ms: u64, airtime_ms: u32, duty_cycle_percent: u8) {
+        if duty_cycle_percent >= 100 {
+            return;
+        }
+        self.update(now_ms, duty_cycle_percent);
+        self.available_ms = self.available_ms.saturating_sub(airtime_ms as u64);
+    }
+}
+
+fn duty_cycle_max_budget_ms(duty_cycle_percent: u8) -> u64 {
+    DUTY_CYCLE_WINDOW_MS * duty_cycle_percent.clamp(1, 100) as u64 / 100
 }
 
 impl OutboundSchedule {
@@ -583,10 +660,14 @@ where
 {
     let mut receive_buffer = [0u8; RECEIVE_BUFFER_LEN];
     let mut outbound = OutboundSchedule::new();
+    let duty_cycle_percent = context
+        .with_config(|config| config.duty_cycle_percent())
+        .await;
+    let mut airtime_budget = AirtimeBudget::new(crate::platform::now_millis(), duty_cycle_percent);
 
     loop {
         drain_outbound_channel(context, &mut outbound);
-        drain_eligible_outbound(radio, context, delay, &mut outbound).await;
+        drain_eligible_outbound(radio, context, delay, &mut outbound, &mut airtime_budget).await;
 
         match wait_for_read_or_eligible_outbound(
             radio,
@@ -594,6 +675,7 @@ where
             &mut receive_buffer,
             delay,
             &outbound,
+            &mut airtime_budget,
         )
         .await
         {
@@ -721,26 +803,30 @@ async fn drain_eligible_outbound<R, S, D>(
     context: &AppContext<S>,
     delay: &mut D,
     outbound: &mut OutboundSchedule,
+    airtime_budget: &mut AirtimeBudget,
 ) where
     R: crate::modules::Receiver,
     S: crate::platform::storage::Storage,
     D: DelayNs,
 {
-    while let Some(queued) = outbound.pop_eligible(crate::platform::now_millis()) {
-        mark_outbound_seen(context, &queued.packet);
-        if let Some(region) = context.outbound_region_label(&queued.packet).await {
-            crate::platform::log_fmt(format_args!(
-                "Outbound packet: transmitting {} bytes region={}",
-                queued.packet.len(),
-                region
-            ));
+    loop {
+        let (radio_config, duty_cycle_percent) = context
+            .with_config(|config| (config.radio(), config.duty_cycle_percent()))
+            .await;
+        let now_ms = crate::platform::now_millis();
+        let required_ms = if duty_cycle_percent >= 100 {
+            0
         } else {
-            crate::platform::log_fmt(format_args!(
-                "Outbound packet: transmitting {} bytes",
-                queued.packet.len()
-            ));
+            minimum_tx_budget_ms(radio_config)
+        };
+        if airtime_budget.ready_at_ms(now_ms, required_ms, duty_cycle_percent) > now_ms {
+            return;
         }
-        let radio_config = context.with_config(|config| config.radio()).await;
+        let Some(queued) = outbound.pop_eligible(crate::platform::now_millis()) else {
+            return;
+        };
+        mark_outbound_seen(context, &queued.packet);
+        let region = context.outbound_region_label(&queued.packet).await;
         if transmit_when_clear(radio, &queued.packet, radio_config, delay)
             .await
             .is_err()
@@ -750,6 +836,46 @@ async fn drain_eligible_outbound<R, S, D>(
             return;
         }
         context.record_packet_sent();
+        let airtime_ms = radio_config.packet_airtime_ms(queued.packet.len());
+        context.record_tx_airtime(airtime_ms);
+        airtime_budget.record_transmit(
+            crate::platform::now_millis(),
+            airtime_ms,
+            duty_cycle_percent,
+        );
+        if duty_cycle_percent >= 100 {
+            match region {
+                Some(region) => crate::platform::log_fmt(format_args!(
+                    "Outbound packet: transmitted {} bytes region={} airtime={}ms dutycycle=100% budget=unlimited",
+                    queued.packet.len(),
+                    region,
+                    airtime_ms
+                )),
+                None => crate::platform::log_fmt(format_args!(
+                    "Outbound packet: transmitted {} bytes airtime={}ms dutycycle=100% budget=unlimited",
+                    queued.packet.len(),
+                    airtime_ms
+                )),
+            }
+        } else {
+            match region {
+                Some(region) => crate::platform::log_fmt(format_args!(
+                    "Outbound packet: transmitted {} bytes region={} airtime={}ms dutycycle={}% budget={}ms",
+                    queued.packet.len(),
+                    region,
+                    airtime_ms,
+                    duty_cycle_percent,
+                    airtime_budget.available_ms
+                )),
+                None => crate::platform::log_fmt(format_args!(
+                    "Outbound packet: transmitted {} bytes airtime={}ms dutycycle={}% budget={}ms",
+                    queued.packet.len(),
+                    airtime_ms,
+                    duty_cycle_percent,
+                    airtime_budget.available_ms
+                )),
+            }
+        }
         if queued.reboot_after_tx {
             crate::platform::reboot();
         }
@@ -778,20 +904,37 @@ async fn wait_for_read_or_eligible_outbound<R, S, D>(
     receive_buffer: &mut [u8],
     delay: &mut D,
     outbound: &OutboundSchedule,
+    airtime_budget: &mut AirtimeBudget,
 ) -> RadioWait
 where
     R: crate::modules::Receiver,
     S: crate::platform::storage::Storage,
     D: DelayNs,
 {
-    if outbound.has_eligible(crate::platform::now_millis()) {
+    let (radio_config, duty_cycle_percent) = context
+        .with_config(|config| (config.radio(), config.duty_cycle_percent()))
+        .await;
+    let now_ms = crate::platform::now_millis();
+    let budget_ready_ms = if duty_cycle_percent >= 100 {
+        now_ms
+    } else {
+        airtime_budget.ready_at_ms(
+            now_ms,
+            minimum_tx_budget_ms(radio_config),
+            duty_cycle_percent,
+        )
+    };
+    if outbound.has_eligible(now_ms) && now_ms >= budget_ready_ms {
         return RadioWait::OutboundDue;
     }
 
     let mut receive = pin!(radio.wait_for_read(receive_buffer));
     let mut new_outbound = pin!(context.receive_outbound());
 
-    let Some(eligible_at_ms) = outbound.next_eligible_ms() else {
+    let Some(eligible_at_ms) = outbound
+        .next_eligible_ms()
+        .map(|eligible_at_ms| eligible_at_ms.max(budget_ready_ms))
+    else {
         return poll_fn(|cx| {
             if let Poll::Ready(queued) = new_outbound.as_mut().poll(cx) {
                 return Poll::Ready(RadioWait::NewOutbound(queued));
@@ -1125,6 +1268,16 @@ fn cad_busy_backoff_ms(payload: &[u8], radio_config: config::RadioConfig, attemp
     lower_ms
         .saturating_add(attempt as u32 * minimum_ms)
         .saturating_add(seed % jitter_window_ms)
+}
+
+fn minimum_tx_budget_ms(radio_config: config::RadioConfig) -> u64 {
+    MIN_TX_BUDGET_RESERVE_MS.max(
+        radio_config.packet_airtime_ms(RECEIVE_BUFFER_LEN) as u64 / MIN_TX_BUDGET_AIRTIME_DIVISOR,
+    )
+}
+
+fn div_ceil_u64(numerator: u64, denominator: u64) -> u64 {
+    numerator / denominator + u64::from(!numerator.is_multiple_of(denominator))
 }
 
 enum ForwardDecision {

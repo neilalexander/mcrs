@@ -395,7 +395,7 @@ fn encode_status_binary_response(status: super::Status, out: &mut Vec<u8>) {
     );
     write_u32(stats, &mut offset, status.packets_received);
     write_u32(stats, &mut offset, status.packets_sent);
-    write_u32(stats, &mut offset, 0);
+    write_u32(stats, &mut offset, status.tx_airtime_ms / 1_000);
     write_u32(
         stats,
         &mut offset,
@@ -594,12 +594,15 @@ async fn handle_command(
                 })
                 .await;
             format!(
-                "Radio: freq={} bw={} sf={} cr=4/{} tx_power={}dBm region.default={}",
+                "Radio: freq={} bw={} sf={} cr=4/{} tx_power={}dBm dutycycle={}% region.default={}",
                 format_scaled(radio.receive_frequency_hz, 1_000_000, 3),
                 format_scaled(radio.bandwidth_hz, 1_000, 3),
                 radio.spreading_factor,
                 radio.coding_rate_denominator,
                 radio.transmit_power_dbm,
+                context
+                    .with_config(|config| config.duty_cycle_percent())
+                    .await,
                 default_region
             )
         }
@@ -657,6 +660,11 @@ async fn handle_get_command(
         "tx" => {
             context
                 .with_config(|config| format!("> {}", config.radio().transmit_power_dbm))
+                .await
+        }
+        "dutycycle" => {
+            context
+                .with_config(|config| format!("> {}", config.duty_cycle_percent()))
                 .await
         }
         "lat" => {
@@ -854,6 +862,19 @@ async fn handle_set_command(
             .await
         {
             Ok(()) => String::from("OK - reboot to apply"),
+            Err(error) => format!("Error: {}", error),
+        };
+    }
+
+    if let Some(percent) = config.strip_prefix("dutycycle ").map(str::trim) {
+        let Ok(percent) = percent.parse::<u8>() else {
+            return String::from("Error, invalid duty cycle percentage");
+        };
+        return match context
+            .update_config(|config| config.set_duty_cycle_percent(percent))
+            .await
+        {
+            Ok(()) => format!("OK - dutycycle now: {}%", percent),
             Err(error) => format!("Error: {}", error),
         };
     }
@@ -1374,7 +1395,7 @@ fn denied_text() -> String {
 
 fn help_text() -> String {
     String::from(
-        "Commands: help, ver, status, identity, radio, clock, region, region list {allowed|denied}, ota status, get {name|lat|lon|radio|tx|freq|flood.max.unscoped|flood.max.advert|path.hash.mode|public.key|status}; Privileged: time, clock sync, set {name|lat|lon|radio|tx|flood.max.unscoped|flood.max.advert|path.hash.mode|time|prv.key}, password, neighbours, advert, advert.zerohop, discover.neighbours, region {put|remove|allowf|denyf|default}, ota {start|stop}, erase config, reboot",
+        "Commands: help, ver, status, identity, radio, clock, region, region list {allowed|denied}, ota status, get {name|lat|lon|radio|tx|dutycycle|freq|flood.max.unscoped|flood.max.advert|path.hash.mode|public.key|status}; Privileged: time, clock sync, set {name|lat|lon|radio|tx|dutycycle|flood.max.unscoped|flood.max.advert|path.hash.mode|time|prv.key}, password, neighbours, advert, advert.zerohop, discover.neighbours, region {put|remove|allowf|denyf|default}, ota {start|stop}, erase config, reboot",
     )
 }
 
@@ -1384,6 +1405,19 @@ fn status_text(context: &AppContext<impl crate::platform::storage::Storage>) -> 
     let _ = writeln!(output, "Uptime: {}s", status.uptime_seconds);
     let _ = writeln!(output, "Packets received: {}", status.packets_received);
     let _ = writeln!(output, "Packets sent: {}", status.packets_sent);
+    let _ = writeln!(output, "TX airtime: {}ms", status.tx_airtime_ms);
+    let airtime_percent_x100 = if status.uptime_seconds == 0 {
+        0
+    } else {
+        (status.tx_airtime_ms as u64 * 10 / status.uptime_seconds.min(u32::MAX as u64)).min(10_000)
+            as u32
+    };
+    let _ = writeln!(
+        output,
+        "TX airtime percent: {}.{:02}%",
+        airtime_percent_x100 / 100,
+        airtime_percent_x100 % 100
+    );
     let _ = writeln!(output, "Packet errors: {}", status.packet_errors);
     let _ = writeln!(output, "Outbound queue: {}", status.outbound_queue_len);
     if let Some(millivolts) = status.battery_millivolts {
