@@ -59,12 +59,11 @@ jobs:
           ldproxy: false
           override: false
 
-      - name: Cache Cargo dependencies and build output
+      - name: Cache Cargo
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
+            ~/.cargo
             target
           key: ${{ matrix.board.id }}-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
