@@ -6,6 +6,7 @@ edition = "2024"
 [features]
 board-heltec-v3 = ["esp32s3"]
 board-heltec-v4 = ["esp32s3"]
+board-heltec-wsl3 = ["esp32s3"]
 esp32 = [
     "dep:embassy-executor",
     "dep:embassy-net",
