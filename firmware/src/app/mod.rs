@@ -262,6 +262,10 @@ where
 
     pub async fn outbound_region_label(&self, packet: &[u8]) -> Option<String> {
         let packet = Packet::decode(packet).ok()?;
+        self.packet_region_label(&packet).await
+    }
+
+    async fn packet_region_label(&self, packet: &Packet) -> Option<String> {
         match packet.route_type {
             RouteType::TransportFlood => {
                 self.with_config(|config| {
@@ -650,7 +654,8 @@ where
 {
     match mcrs_protocol::Packet::decode(&event.payload) {
         Ok(protocol_packet) => {
-            protocol_log::log_packet(&protocol_packet);
+            let region = context.packet_region_label(&protocol_packet).await;
+            protocol_log::log_packet(&protocol_packet, region.as_deref());
             let node_hash = context.node_hash().await;
             context
                 .observe_neighbour_packet(

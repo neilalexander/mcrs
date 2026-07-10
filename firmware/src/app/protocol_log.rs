@@ -9,12 +9,20 @@ pub fn log_decode_failed(error: &Error) {
     crate::platform::log_fmt(format_args!("Protocol decode failed: {}", error));
 }
 
-pub fn log_packet(packet: &Packet) {
-    crate::platform::log_fmt(format_args!(
-        "Protocol packet: route={}, payload={}",
-        route_type_name(packet.route_type),
-        payload_kind_name(packet.payload.kind())
-    ));
+pub fn log_packet(packet: &Packet, region: Option<&str>) {
+    match region {
+        Some(region) => crate::platform::log_fmt(format_args!(
+            "Protocol packet: route={}, payload={}, region={}",
+            route_type_name(packet.route_type),
+            payload_kind_name(packet.payload.kind()),
+            region
+        )),
+        None => crate::platform::log_fmt(format_args!(
+            "Protocol packet: route={}, payload={}",
+            route_type_name(packet.route_type),
+            payload_kind_name(packet.payload.kind())
+        )),
+    }
 
     if !VERBOSE_PROTOCOL_LOGS {
         return;
