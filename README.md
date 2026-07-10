@@ -23,8 +23,9 @@ Codex helped to write some, but not all, of this code. Special thanks to the htt
 
 ### Hardware
 
-* Heltec v3: Tested, working, with OLED and battery level reporting
-* Heltec v4: Untested, might work
+* Heltec v3: Tested, working, with OLED and battery level reporting.
+* Heltec v4: Tested, working, with OLED and battery level reporting on v4.3. Other revisions untested.
+* Heltec WSL3: Untested.
 
 ### Building
 
@@ -54,7 +55,7 @@ make heltec-v3-flash
 make heltec-v3-bins
 ```
 
-For Heltec v4, use the corresponding `heltec-v4-*` Make targets.
+For Heltec v4 and WSL3, use the corresponding `heltec-v4-*` and `heltec-wsl3-*` Make targets.
 
 Fuzzing uses `cargo-fuzz`, which requires nightly Rust:
 
@@ -64,10 +65,6 @@ cargo install cargo-fuzz
 cargo +nightly fuzz run protocol_packet
 cargo +nightly fuzz run protocol_payloads
 ```
-
-### Observations
-
-MCRS seems to yield far fewer packet decode errors than the official firmware.
 
 ### Opinions
 

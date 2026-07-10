@@ -39,6 +39,13 @@ jobs:
             artifact_paths: |
               dist/mcrs-heltec-v4-merged.bin
               dist/mcrs-heltec-v4-app.bin
+          - id: heltec-wsl3
+            name: Heltec WSL3
+            build_target: esp32s3
+            make_target: heltec-wsl3-bins
+            artifact_paths: |
+              dist/mcrs-heltec-wsl3-merged.bin
+              dist/mcrs-heltec-wsl3-app.bin
 
     steps:
       - name: Check out repository

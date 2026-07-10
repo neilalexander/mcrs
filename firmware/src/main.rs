@@ -4,10 +4,20 @@
 
 extern crate alloc;
 
-#[cfg(not(any(feature = "board-heltec-v3", feature = "board-heltec-v4")))]
-compile_error!("Select firmware board feature: board-heltec-v3 or board-heltec-v4");
+#[cfg(not(any(
+    feature = "board-heltec-v3",
+    feature = "board-heltec-v4",
+    feature = "board-heltec-wsl3"
+)))]
+compile_error!(
+    "Select firmware board feature: board-heltec-v3, board-heltec-v4, or board-heltec-wsl3"
+);
 
-#[cfg(all(feature = "board-heltec-v3", feature = "board-heltec-v4"))]
+#[cfg(any(
+    all(feature = "board-heltec-v3", feature = "board-heltec-v4"),
+    all(feature = "board-heltec-v3", feature = "board-heltec-wsl3"),
+    all(feature = "board-heltec-v4", feature = "board-heltec-wsl3")
+))]
 compile_error!("Select only one firmware board feature");
 
 mod app;

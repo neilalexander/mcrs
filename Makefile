@@ -1,4 +1,4 @@
-.PHONY: heltec-v3-build heltec-v3-flash heltec-v3-bins heltec-v3-merged-bin heltec-v3-ota-bin heltec-v4-build heltec-v4-flash heltec-v4-bins heltec-v4-merged-bin heltec-v4-ota-bin clean-dist
+.PHONY: heltec-v3-build heltec-v3-flash heltec-v3-bins heltec-v3-merged-bin heltec-v3-ota-bin heltec-v4-build heltec-v4-flash heltec-v4-bins heltec-v4-merged-bin heltec-v4-ota-bin heltec-wsl3-build heltec-wsl3-flash heltec-wsl3-bins heltec-wsl3-merged-bin heltec-wsl3-ota-bin clean-dist
 
 HELTEC_V3_CHIP := esp32s3
 HELTEC_V3_FLASH_SIZE := 8mb
@@ -12,6 +12,12 @@ HELTEC_V4_FLASH_MODE := dio
 HELTEC_V4_FLASH_FREQ := 40mhz
 HELTEC_V4_PARTITIONS := firmware/partitions_heltec_v4.csv
 HELTEC_V4_ELF := target/xtensa-esp32s3-none-elf/release/mcrs-firmware
+HELTEC_WSL3_CHIP := esp32s3
+HELTEC_WSL3_FLASH_SIZE := 8mb
+HELTEC_WSL3_FLASH_MODE := dio
+HELTEC_WSL3_FLASH_FREQ := 40mhz
+HELTEC_WSL3_PARTITIONS := firmware/partitions_heltec_v3.csv
+HELTEC_WSL3_ELF := target/xtensa-esp32s3-none-elf/release/mcrs-firmware
 DIST_DIR := dist
 
 heltec-v3-build:
@@ -73,6 +79,36 @@ heltec-v4-ota-bin: heltec-v4-build | $(DIST_DIR)
 		--target-app-partition ota_0 \
 		$(HELTEC_V4_ELF) \
 		$(DIST_DIR)/mcrs-heltec-v4-app.bin
+
+heltec-wsl3-build:
+	cargo +esp build-heltec-wsl3
+
+heltec-wsl3-flash:
+	cargo +esp run-heltec-wsl3
+
+heltec-wsl3-bins: heltec-wsl3-merged-bin heltec-wsl3-ota-bin
+
+heltec-wsl3-merged-bin: heltec-wsl3-build | $(DIST_DIR)
+	espflash save-image \
+		--chip $(HELTEC_WSL3_CHIP) \
+		--flash-size $(HELTEC_WSL3_FLASH_SIZE) \
+		--flash-mode $(HELTEC_WSL3_FLASH_MODE) \
+		--flash-freq $(HELTEC_WSL3_FLASH_FREQ) \
+		--partition-table $(HELTEC_WSL3_PARTITIONS) \
+		--merge \
+		$(HELTEC_WSL3_ELF) \
+		$(DIST_DIR)/mcrs-heltec-wsl3-merged.bin
+
+heltec-wsl3-ota-bin: heltec-wsl3-build | $(DIST_DIR)
+	espflash save-image \
+		--chip $(HELTEC_WSL3_CHIP) \
+		--flash-size $(HELTEC_WSL3_FLASH_SIZE) \
+		--flash-mode $(HELTEC_WSL3_FLASH_MODE) \
+		--flash-freq $(HELTEC_WSL3_FLASH_FREQ) \
+		--partition-table $(HELTEC_WSL3_PARTITIONS) \
+		--target-app-partition ota_0 \
+		$(HELTEC_WSL3_ELF) \
+		$(DIST_DIR)/mcrs-heltec-wsl3-app.bin
 
 $(DIST_DIR):
 	mkdir -p $(DIST_DIR)
