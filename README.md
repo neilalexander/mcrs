@@ -68,6 +68,9 @@ serves the OTA page on port 80 of its assigned address. If `wifi.ssid` is empty,
 `ota start` instead creates the original open OTA access point at
 `192.168.4.1/24`.
 
+Station mode also synchronizes the retained wall clock from `pool.ntp.org`
+after DHCP completes and refreshes it periodically.
+
 For Heltec v4 and WSL3, use the corresponding `heltec-v4-*` and `heltec-wsl3-*` Make targets.
 
 Fuzzing uses `cargo-fuzz`, which requires nightly Rust:

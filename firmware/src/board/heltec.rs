@@ -34,6 +34,11 @@ const FIRMWARE_VERSION: &str = env!("MESHCORE_FIRMWARE_VERSION");
 const OTA_AP_IP: embassy_net::Ipv4Address = embassy_net::Ipv4Address::new(192, 168, 4, 1);
 const OTA_AP_PREFIX: u8 = 24;
 const OTA_HTTP_PORT: u16 = 80;
+const NTP_SERVER: &str = "pool.ntp.org";
+const NTP_PORT: u16 = 123;
+const NTP_UNIX_EPOCH_OFFSET: u32 = 2_208_988_800;
+const NTP_RETRY_SECONDS: u64 = 60;
+const NTP_REFRESH_SECONDS: u64 = 6 * 60 * 60;
 const OTA_DHCP_SERVER_PORT: u16 = 67;
 const OTA_DHCP_CLIENT_PORT: u16 = 68;
 const OTA_CLIENT_IP: embassy_net::Ipv4Address = embassy_net::Ipv4Address::new(192, 168, 4, 2);
@@ -573,7 +578,7 @@ async fn run_ota_station_mode<'a>(
             }
             if let Some(config) = stack.config_v4() {
                 crate::platform::log_fmt(format_args!(
-                    "Wi-Fi: station connected address={:?} ota=http://{}:{}/",
+                    "Wi-Fi: station connected address={} ota=http://{}:{}/",
                     config.address,
                     config.address.address(),
                     OTA_HTTP_PORT
@@ -583,9 +588,13 @@ async fn run_ota_station_mode<'a>(
             }
             {
                 let mut server = pin!(serve_ota(stack, context));
+                let mut ntp = pin!(ntp_loop(stack));
                 let mut disconnected = pin!(controller.wait_for_event(WifiEvent::StaDisconnected));
                 poll_fn(|cx| {
                     if let Poll::Ready(never) = server.as_mut().poll(cx) {
+                        match never {}
+                    }
+                    if let Poll::Ready(never) = ntp.as_mut().poll(cx) {
                         match never {}
                     }
                     if disconnected.as_mut().poll(cx).is_ready() {
@@ -609,6 +618,76 @@ async fn run_ota_station_mode<'a>(
         }
     })
     .await
+}
+
+async fn ntp_loop(stack: embassy_net::Stack<'_>) -> ! {
+    loop {
+        let delay_seconds = match sync_ntp(stack).await {
+            Some(unix_seconds) => {
+                if crate::platform::set_wall_clock_if_forward(unix_seconds) {
+                    crate::platform::log_fmt(format_args!(
+                        "NTP: synchronized unix={}",
+                        unix_seconds
+                    ));
+                }
+                NTP_REFRESH_SECONDS
+            }
+            None => {
+                crate::platform::log_fmt(format_args!("NTP: sync failed; retrying"));
+                NTP_RETRY_SECONDS
+            }
+        };
+        embassy_time::Timer::after_secs(delay_seconds).await;
+    }
+}
+
+async fn sync_ntp(stack: embassy_net::Stack<'_>) -> Option<u32> {
+    let addresses = stack
+        .dns_query(NTP_SERVER, embassy_net::dns::DnsQueryType::A)
+        .await
+        .ok()?;
+    let address = addresses.first().copied()?;
+    let mut rx_meta = [embassy_net::udp::PacketMetadata::EMPTY; 1];
+    let mut tx_meta = [embassy_net::udp::PacketMetadata::EMPTY; 1];
+    let mut rx_buffer = [0u8; 48];
+    let mut tx_buffer = [0u8; 48];
+    let mut socket = embassy_net::udp::UdpSocket::new(
+        stack,
+        &mut rx_meta,
+        &mut rx_buffer,
+        &mut tx_meta,
+        &mut tx_buffer,
+    );
+    socket.bind(0).ok()?;
+    let mut request = [0u8; 48];
+    request[0] = 0x23;
+    request[40..48].copy_from_slice(&crate::platform::now_millis().to_be_bytes());
+    socket.send_to(&request, (address, NTP_PORT)).await.ok()?;
+
+    let mut response = [0u8; 48];
+    let mut timeout = pin!(embassy_time::Timer::after_secs(10));
+    let len = poll_fn(|cx| match socket.poll_recv_from(&mut response, cx) {
+        Poll::Ready(Ok((len, _))) => Poll::Ready(Some(len)),
+        Poll::Ready(Err(_)) => Poll::Ready(None),
+        Poll::Pending if timeout.as_mut().poll(cx).is_ready() => Poll::Ready(None),
+        Poll::Pending => Poll::Pending,
+    })
+    .await?;
+    if len < response.len() {
+        return None;
+    }
+    let leap = response[0] >> 6;
+    let mode = response[0] & 0x07;
+    let stratum = response[1];
+    if leap == 3
+        || !matches!(mode, 4 | 5)
+        || !(1..=15).contains(&stratum)
+        || response[24..32] != request[40..48]
+    {
+        return None;
+    }
+    let ntp_seconds = u32::from_be_bytes(response[40..44].try_into().ok()?);
+    ntp_seconds.checked_sub(NTP_UNIX_EPOCH_OFFSET)
 }
 
 async fn serve_ota(
