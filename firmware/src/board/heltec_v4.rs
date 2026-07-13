@@ -234,7 +234,7 @@ async fn init(platform: crate::platform::Platform) -> ! {
 
     let mut rng = Rng::new(platform.peripherals.RNG);
     let identity_seed = heltec::generate_identity_seed(&mut rng);
-    let ota = heltec::OtaResources {
+    let wifi = heltec::WifiResources {
         timer: ota_timer,
         rng,
         wifi: platform.peripherals.WIFI,
@@ -249,7 +249,7 @@ async fn init(platform: crate::platform::Platform) -> ! {
     heltec::publish_battery_sample(&mut battery, &context).await;
 
     heltec::run_board_tasks(
-        display, prg_button, battery, radio, cli_serial, ota, context,
+        display, prg_button, battery, radio, cli_serial, wifi, context,
     )
     .await
 }

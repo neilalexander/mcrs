@@ -55,6 +55,19 @@ make heltec-v3-flash
 make heltec-v3-bins
 ```
 
+Wi-Fi is configured persistently from the serial CLI:
+
+```text
+set wifi.ssid MyWiFi
+set wifi.pass my-passphrase
+reboot
+```
+
+When configured, the firmware joins that network in station mode and `ota start`
+serves the OTA page on port 80 of its assigned address. If `wifi.ssid` is empty,
+`ota start` instead creates the original open OTA access point at
+`192.168.4.1/24`.
+
 For Heltec v4 and WSL3, use the corresponding `heltec-v4-*` and `heltec-wsl3-*` Make targets.
 
 Fuzzing uses `cargo-fuzz`, which requires nightly Rust:

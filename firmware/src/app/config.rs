@@ -12,6 +12,9 @@ const APP_CONFIG_KEY: &str = "app.conf";
 const APP_CONFIG_TEXT_VERSION: u8 = 1;
 const APP_CONFIG_MAX_LEN: usize = 4096;
 const MAX_REMOTE_PASSWORD_LEN: usize = 64;
+const MAX_WIFI_SSID_LEN: usize = 32;
+const MIN_WIFI_PASSWORD_LEN: usize = 8;
+const MAX_WIFI_PASSWORD_LEN: usize = 63;
 const MAX_NODE_NAME_LEN: usize = 31;
 const DEFAULT_FLOOD_MAX_UNSCOPED_HOPS: u8 = 5;
 const DEFAULT_FLOOD_MAX_ADVERT_HOPS: u8 = 3;
@@ -32,6 +35,7 @@ pub struct AppConfig {
     longitude_microdegrees: Option<i32>,
     node_name: String,
     remote_cli_password: String,
+    wifi: WifiConfig,
     radio: RadioConfig,
     regions: RegionMap,
     region_capture: bool,
@@ -39,6 +43,21 @@ pub struct AppConfig {
     flood_max_advert_hops: u8,
     path_hash_mode: u8,
     duty_cycle_percent: u8,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WifiConfig {
+    ssid: String,
+    password: String,
+}
+
+impl WifiConfig {
+    pub fn ssid(&self) -> &str {
+        &self.ssid
+    }
+    pub fn password(&self) -> &str {
+        &self.password
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,6 +109,7 @@ impl AppConfig {
             longitude_microdegrees: stored.longitude_microdegrees,
             node_name: stored.node_name,
             remote_cli_password: stored.remote_cli_password,
+            wifi: stored.wifi,
             radio: stored.radio,
             regions: stored.regions,
             region_capture: stored.region_capture,
@@ -130,6 +150,28 @@ impl AppConfig {
 
     pub fn remote_cli_password(&self) -> &str {
         &self.remote_cli_password
+    }
+
+    pub fn wifi(&self) -> &WifiConfig {
+        &self.wifi
+    }
+
+    pub fn set_wifi_ssid(&mut self, value: &str) -> Result<(), ConfigError> {
+        if value.len() > MAX_WIFI_SSID_LEN {
+            return Err(ConfigError::InvalidWifiConfig);
+        }
+        self.wifi.ssid = value.into();
+        Ok(())
+    }
+
+    pub fn set_wifi_password(&mut self, value: &str) -> Result<(), ConfigError> {
+        if !(value.is_empty()
+            || (MIN_WIFI_PASSWORD_LEN..=MAX_WIFI_PASSWORD_LEN).contains(&value.len()))
+        {
+            return Err(ConfigError::InvalidWifiConfig);
+        }
+        self.wifi.password = value.into();
+        Ok(())
     }
 
     pub fn radio(&self) -> RadioConfig {
@@ -391,6 +433,7 @@ struct StoredAppConfig {
     longitude_microdegrees: Option<i32>,
     node_name: String,
     remote_cli_password: String,
+    wifi: WifiConfig,
     radio: RadioConfig,
     regions: RegionMap,
     region_capture: bool,
@@ -409,6 +452,7 @@ impl StoredAppConfig {
             node_name: fit_node_name(&generated_node_name(&identity_seed))
                 .unwrap_or_else(|_| String::from("Repeater")),
             remote_cli_password: fit_password(identity::REMOTE_CLI_PASSWORD),
+            wifi: WifiConfig::default(),
             radio: RadioConfig {
                 receive_frequency_hz: 869_618_000,
                 spreading_factor: 8,
@@ -433,6 +477,7 @@ impl StoredAppConfig {
             node_name: fit_node_name(config.node_name())
                 .unwrap_or_else(|_| String::from("Repeater")),
             remote_cli_password: fit_password(config.remote_cli_password()),
+            wifi: config.wifi.clone(),
             radio: config.radio,
             regions: config.regions.clone(),
             region_capture: config.region_capture,
@@ -515,6 +560,8 @@ fn decode_config_text(data: &[u8], defaults: &StoredAppConfig) -> Option<StoredA
             "remote.password" => {
                 config.remote_cli_password = fit_password(&value);
             }
+            "wifi.ssid" => config.wifi.ssid = value,
+            "wifi.pass" => config.wifi.password = value,
             "radio.frequency_hz" => {
                 config.radio.receive_frequency_hz = value.parse::<u32>().ok()?;
             }
@@ -571,7 +618,18 @@ fn decode_config_text(data: &[u8], defaults: &StoredAppConfig) -> Option<StoredA
     validate_flood_max_hops(config.flood_max_unscoped_hops).ok()?;
     validate_flood_max_hops(config.flood_max_advert_hops).ok()?;
     validate_path_hash_mode(config.path_hash_mode).ok()?;
+    validate_wifi_config(&config.wifi).ok()?;
     Some(config)
+}
+
+fn validate_wifi_config(wifi: &WifiConfig) -> Result<(), ConfigError> {
+    if wifi.ssid.len() > MAX_WIFI_SSID_LEN
+        || !(wifi.password.is_empty()
+            || (MIN_WIFI_PASSWORD_LEN..=MAX_WIFI_PASSWORD_LEN).contains(&wifi.password.len()))
+    {
+        return Err(ConfigError::InvalidWifiConfig);
+    }
+    Ok(())
 }
 
 fn encode_config_text(config: &StoredAppConfig) -> Vec<u8> {
@@ -611,6 +669,17 @@ fn encode_sparse_config_text(config: &StoredAppConfig, defaults: &StoredAppConfi
     if config.remote_cli_password != defaults.remote_cli_password {
         out.push_str("remote.password=");
         write_escaped_value(&mut out, &config.remote_cli_password);
+        out.push('\n');
+    }
+
+    if config.wifi.ssid != defaults.wifi.ssid {
+        out.push_str("wifi.ssid=");
+        write_escaped_value(&mut out, &config.wifi.ssid);
+        out.push('\n');
+    }
+    if config.wifi.password != defaults.wifi.password {
+        out.push_str("wifi.pass=");
+        write_escaped_value(&mut out, &config.wifi.password);
         out.push('\n');
     }
 
@@ -698,6 +767,17 @@ fn encode_full_config_text_redacted(config: &StoredAppConfig, redact_secrets: bo
     }
     out.push('\n');
 
+    out.push_str("wifi.ssid=");
+    write_escaped_value(&mut out, &config.wifi.ssid);
+    out.push('\n');
+    if redact_secrets && !config.wifi.password.is_empty() {
+        out.push_str("wifi.pass=<redacted>\n");
+    } else {
+        out.push_str("wifi.pass=");
+        write_escaped_value(&mut out, &config.wifi.password);
+        out.push('\n');
+    }
+
     out.push_str("identity.lat=");
     write_optional_coordinate(&mut out, config.latitude_microdegrees);
     out.push('\n');
@@ -778,6 +858,7 @@ pub enum ConfigError {
     InvalidDutyCycle,
     InvalidFloodMaxHops,
     InvalidPathHashMode,
+    InvalidWifiConfig,
     Region(RegionError),
 }
 
@@ -795,6 +876,7 @@ impl fmt::Display for ConfigError {
             ConfigError::InvalidDutyCycle => f.write_str("invalid duty cycle"),
             ConfigError::InvalidFloodMaxHops => f.write_str("invalid flood max hops"),
             ConfigError::InvalidPathHashMode => f.write_str("invalid path hash mode"),
+            ConfigError::InvalidWifiConfig => f.write_str("invalid Wi-Fi setting"),
             ConfigError::Region(error) => write!(f, "region: {}", error),
         }
     }
@@ -1095,5 +1177,63 @@ fn coding_rate(value: u8) -> lora_phy::mod_params::CodingRate {
         6 => lora_phy::mod_params::CodingRate::_4_6,
         7 => lora_phy::mod_params::CodingRate::_4_7,
         _ => lora_phy::mod_params::CodingRate::_4_8,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn defaults() -> StoredAppConfig {
+        StoredAppConfig::default_with_identity_seed([7; 32])
+    }
+
+    #[test]
+    fn wifi_config_round_trips_escaped_values() {
+        let mut config = defaults();
+        config.wifi.ssid = String::from("lab\\network\nwest");
+        config.wifi.password = String::from("password\\with\\slashes");
+        let encoded = encode_config_text(&config);
+        let decoded = decode_config_text(&encoded, &defaults()).expect("valid config");
+        assert_eq!(decoded.wifi, config.wifi);
+    }
+
+    #[test]
+    fn wifi_password_is_redacted_from_effective_config() {
+        let mut config = defaults();
+        config.wifi.ssid = String::from("lab");
+        config.wifi.password = String::from("supersecret");
+        let rendered = encode_full_config_text_redacted(&config, true);
+        let rendered = core::str::from_utf8(&rendered).expect("UTF-8 config");
+        assert!(rendered.contains("wifi.pass=<redacted>"));
+        assert!(!rendered.contains("supersecret"));
+    }
+
+    #[test]
+    fn empty_wifi_password_round_trips() {
+        let mut config = defaults();
+        config.wifi.ssid = String::from("open-network");
+        let encoded = encode_config_text(&config);
+        let decoded = decode_config_text(&encoded, &defaults()).expect("valid config");
+        assert_eq!(decoded.wifi.password(), "");
+    }
+
+    #[test]
+    fn wifi_lengths_are_validated() {
+        let mut config = AppConfig::generated_defaults([9; 32]);
+        assert!(config.set_wifi_ssid(&"x".repeat(MAX_WIFI_SSID_LEN)).is_ok());
+        assert!(
+            config
+                .set_wifi_ssid(&"x".repeat(MAX_WIFI_SSID_LEN + 1))
+                .is_err()
+        );
+        assert!(config.set_wifi_password("").is_ok());
+        assert!(config.set_wifi_password("12345678").is_ok());
+        assert!(config.set_wifi_password("short").is_err());
+        assert!(
+            config
+                .set_wifi_password(&"x".repeat(MAX_WIFI_PASSWORD_LEN + 1))
+                .is_err()
+        );
     }
 }

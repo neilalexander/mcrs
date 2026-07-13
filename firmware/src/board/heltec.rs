@@ -16,7 +16,9 @@ use core::{
     task::Poll,
 };
 use embedded_hal_async::delay::DelayNs as _;
-use esp_wifi::wifi::{AccessPointConfiguration, AuthMethod, Configuration};
+use esp_wifi::wifi::{
+    AccessPointConfiguration, AuthMethod, ClientConfiguration, Configuration, WifiEvent,
+};
 use static_cell::StaticCell;
 
 pub type RadioSpi = Spi<'static, Blocking>;
@@ -68,7 +70,7 @@ pub struct RadioResources<F> {
     pub frontend: F,
 }
 
-pub struct OtaResources {
+pub struct WifiResources {
     pub timer: WifiTimer,
     pub rng: Rng,
     pub wifi: WIFI<'static>,
@@ -349,7 +351,7 @@ pub async fn run_board_tasks<I2C, RESET, POWER, FRONTEND>(
     battery: BatteryMonitor,
     radio: RadioResources<FRONTEND>,
     mut cli_serial: Option<CliUart>,
-    ota: OtaResources,
+    wifi: WifiResources,
     context: crate::app::AppContext<crate::platform::EspStorage>,
 ) -> !
 where
@@ -365,7 +367,7 @@ where
     let mut handler_future = pin!(crate::app::handler_loop(&context));
     let mut cli_future = pin!(cli_task(&mut cli_serial, &mut cli, &context));
     let mut battery_future = pin!(battery_task(battery, &context));
-    let mut ota_future = pin!(ota_task(ota, &context));
+    let mut ota_future = pin!(wifi_task(wifi, &context));
     let mut periodic_future = pin!(crate::app::periodic::run(&context, &mut periodic_delay));
 
     poll_fn(|cx| {
@@ -407,40 +409,54 @@ where
     .await
 }
 
-async fn ota_task(
-    ota: OtaResources,
+async fn wifi_task(
+    wifi: WifiResources,
+    context: &crate::app::AppContext<crate::platform::EspStorage>,
+) -> ! {
+    let init = match esp_wifi::init(wifi.timer, wifi.rng) {
+        Ok(init) => init,
+        Err(error) => {
+            crate::platform::log_fmt(format_args!("Wi-Fi: init failed: {:?}", error));
+            core::future::pending::<()>().await;
+            unreachable!()
+        }
+    };
+    let (controller, interfaces) = match esp_wifi::wifi::new(&init, wifi.wifi) {
+        Ok(wifi) => wifi,
+        Err(error) => {
+            crate::platform::log_fmt(format_args!("Wi-Fi: device init failed: {:?}", error));
+            core::future::pending::<()>().await;
+            unreachable!()
+        }
+    };
+    if context
+        .with_config(|config| config.wifi().ssid().is_empty())
+        .await
+    {
+        run_ota_ap_mode(controller, interfaces.ap, context).await
+    } else {
+        run_ota_station_mode(controller, interfaces.sta, context).await
+    }
+}
+
+async fn run_ota_ap_mode<'a>(
+    mut controller: esp_wifi::wifi::WifiController<'a>,
+    device: esp_wifi::wifi::WifiDevice<'a>,
     context: &crate::app::AppContext<crate::platform::EspStorage>,
 ) -> ! {
     static STACK_RESOURCES: StaticCell<embassy_net::StackResources<4>> = StaticCell::new();
-
-    let ssid = ota_ssid(context).await;
-    wait_for_ota_requested_idle(context, true).await;
-
-    let init = match esp_wifi::init(ota.timer, ota.rng) {
-        Ok(init) => init,
-        Err(_) => {
-            crate::platform::log_fmt(format_args!("OTA: Wi-Fi init failed"));
-            core::future::pending::<()>().await;
-            unreachable!();
-        }
-    };
-    let (mut controller, interfaces) = match esp_wifi::wifi::new(&init, ota.wifi) {
-        Ok(wifi) => wifi,
-        Err(_) => {
-            crate::platform::log_fmt(format_args!("OTA: Wi-Fi device init failed"));
-            core::future::pending::<()>().await;
-            unreachable!();
-        }
-    };
-
     let stack_resources = STACK_RESOURCES.init(embassy_net::StackResources::new());
     let net_config = embassy_net::Config::ipv4_static(embassy_net::StaticConfigV4 {
         address: embassy_net::Ipv4Cidr::new(OTA_AP_IP, OTA_AP_PREFIX),
         gateway: None,
         dns_servers: Default::default(),
     });
-    let seed = crate::platform::now_millis();
-    let (stack, mut runner) = embassy_net::new(interfaces.ap, net_config, stack_resources, seed);
+    let (stack, mut runner) = embassy_net::new(
+        device,
+        net_config,
+        stack_resources,
+        crate::platform::now_millis(),
+    );
     let mut runner = pin!(runner.run());
     let mut dhcp_rx_meta = [embassy_net::udp::PacketMetadata::EMPTY; 1];
     let mut dhcp_tx_meta = [embassy_net::udp::PacketMetadata::EMPTY; 1];
@@ -458,52 +474,219 @@ async fn ota_task(
         core::future::pending::<()>().await;
     }
     let mut dhcp = pin!(dhcp_server(&dhcp_socket));
-
-    loop {
-        if !context.ota_requested() {
-            wait_for_ota_requested(context, true, &mut runner, &mut dhcp).await;
-        }
-        if let Err(error) = start_ota_ap(&mut controller, &ssid).await {
-            crate::platform::log_fmt(format_args!("OTA: AP start failed: {:?}", error));
-            context.request_ota_stop();
-            continue;
-        }
-        crate::platform::log_fmt(format_args!(
-            "OTA: AP started ssid={} url=http://{}/",
-            ssid, OTA_AP_IP
-        ));
-
-        while context.ota_requested() {
-            let mut rx_buffer = [0u8; 2048];
-            let mut tx_buffer = [0u8; 2048];
-            let mut socket =
-                embassy_net::tcp::TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-
-            if !accept_ota_connection(context, &mut runner, &mut dhcp, &mut socket).await {
-                break;
+    let ssid = ota_ssid(context).await;
+    let mut worker = pin!(async {
+        loop {
+            wait_for_ota_requested_idle(context, true).await;
+            if start_ota_ap(&mut controller, &ssid).await.is_err() {
+                context.request_ota_stop();
+                continue;
             }
+            crate::platform::log_fmt(format_args!(
+                "OTA: AP started ssid={} url=http://{}/",
+                ssid, OTA_AP_IP
+            ));
+            serve_ota_session(stack, context).await;
+            let _ = stop_ota_ap(&mut controller).await;
+        }
+    });
+    let never: core::convert::Infallible = poll_fn(|cx| {
+        let _ = runner.as_mut().poll(cx);
+        let _ = dhcp.as_mut().poll(cx);
+        match worker.as_mut().poll(cx) {
+            Poll::Ready(never) => match never {},
+            Poll::Pending => Poll::Pending,
+        }
+    })
+    .await;
+    match never {}
+}
 
+async fn run_ota_station_mode<'a>(
+    mut controller: esp_wifi::wifi::WifiController<'a>,
+    device: esp_wifi::wifi::WifiDevice<'a>,
+    context: &crate::app::AppContext<crate::platform::EspStorage>,
+) -> ! {
+    static STACK_RESOURCES: StaticCell<embassy_net::StackResources<4>> = StaticCell::new();
+    let stack_resources = STACK_RESOURCES.init(embassy_net::StackResources::new());
+    let (stack, mut runner) = embassy_net::new(
+        device,
+        embassy_net::Config::dhcpv4(Default::default()),
+        stack_resources,
+        crate::platform::now_millis(),
+    );
+    let mut runner = pin!(runner.run());
+    let mut worker = pin!(async {
+        loop {
+            let wifi = context.with_config(|config| config.wifi().clone()).await;
+            let ssid = String::from(wifi.ssid());
+            let password = String::from(wifi.password());
+            if ssid.is_empty() {
+                crate::platform::log_fmt(format_args!("Wi-Fi: configure wifi.ssid"));
+                embassy_time::Timer::after_secs(30).await;
+                continue;
+            }
+            let config = ClientConfiguration {
+                ssid,
+                password: password.clone(),
+                auth_method: if password.is_empty() {
+                    AuthMethod::None
+                } else {
+                    AuthMethod::WPA2Personal
+                },
+                ..Default::default()
+            };
+            if matches!(controller.is_started(), Ok(true)) {
+                let _ = controller.stop_async().await;
+            }
+            if controller
+                .set_configuration(&Configuration::Client(config))
+                .is_err()
+                || controller.start_async().await.is_err()
+                || controller.connect_async().await.is_err()
+            {
+                crate::platform::log_fmt(format_args!("Wi-Fi: station connection failed"));
+                embassy_time::Timer::after_secs(10).await;
+                continue;
+            }
+            let configured = {
+                let mut wait_config = pin!(stack.wait_config_up());
+                let mut disconnected = pin!(controller.wait_for_event(WifiEvent::StaDisconnected));
+                poll_fn(|cx| {
+                    if wait_config.as_mut().poll(cx).is_ready() {
+                        Poll::Ready(true)
+                    } else if disconnected.as_mut().poll(cx).is_ready() {
+                        Poll::Ready(false)
+                    } else {
+                        Poll::Pending
+                    }
+                })
+                .await
+            };
+            if !configured {
+                crate::platform::log_fmt(format_args!(
+                    "Wi-Fi: disconnected before DHCP completed; reconnecting"
+                ));
+                let _ = controller.stop_async().await;
+                embassy_time::Timer::after_secs(5).await;
+                continue;
+            }
+            if let Some(config) = stack.config_v4() {
+                crate::platform::log_fmt(format_args!(
+                    "Wi-Fi: station connected address={:?} ota=http://{}:{}/",
+                    config.address,
+                    config.address.address(),
+                    OTA_HTTP_PORT
+                ));
+            } else {
+                crate::platform::log_fmt(format_args!("Wi-Fi: station connected"));
+            }
+            {
+                let mut server = pin!(serve_ota(stack, context));
+                let mut disconnected = pin!(controller.wait_for_event(WifiEvent::StaDisconnected));
+                poll_fn(|cx| {
+                    if let Poll::Ready(never) = server.as_mut().poll(cx) {
+                        match never {}
+                    }
+                    if disconnected.as_mut().poll(cx).is_ready() {
+                        Poll::Ready(())
+                    } else {
+                        Poll::Pending
+                    }
+                })
+                .await;
+            }
+            crate::platform::log_fmt(format_args!("Wi-Fi: station disconnected; reconnecting"));
+            let _ = controller.stop_async().await;
+            embassy_time::Timer::after_secs(5).await;
+        }
+    });
+    poll_fn(|cx| {
+        let _ = runner.as_mut().poll(cx);
+        match worker.as_mut().poll(cx) {
+            Poll::Ready(never) => match never {},
+            Poll::Pending => Poll::Pending,
+        }
+    })
+    .await
+}
+
+async fn serve_ota(
+    stack: embassy_net::Stack<'_>,
+    context: &crate::app::AppContext<crate::platform::EspStorage>,
+) -> ! {
+    loop {
+        wait_for_ota_requested_idle(context, true).await;
+        serve_ota_session(stack, context).await;
+    }
+}
+
+async fn serve_ota_session(
+    stack: embassy_net::Stack<'_>,
+    context: &crate::app::AppContext<crate::platform::EspStorage>,
+) {
+    while context.ota_requested() {
+        let mut rx_buffer = [0u8; 2048];
+        let mut tx_buffer = [0u8; 2048];
+        let mut socket = embassy_net::tcp::TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
+        if accept_ota_connection(context, &mut socket).await {
             crate::platform::log_fmt(format_args!("OTA: client connected"));
-            match drive_ota_connection(context, &mut runner, &mut dhcp, &mut socket).await {
+            match handle_ota_connection(context, &mut socket).await {
                 OtaConnectionResult::Complete(Ok(())) => {}
                 OtaConnectionResult::Complete(Err(error)) => {
                     crate::platform::log_fmt(format_args!("OTA: request failed: {:?}", error));
                 }
                 OtaConnectionResult::Stopped => {
-                    crate::platform::log_fmt(format_args!("OTA: request aborted by stop"));
+                    crate::platform::log_fmt(format_args!("OTA: request aborted"));
                 }
             }
-            socket.abort();
         }
-
-        if let Err(error) =
-            drive_network(&mut runner, &mut dhcp, stop_ota_ap(&mut controller)).await
-        {
-            crate::platform::log_fmt(format_args!("OTA: AP stop failed: {:?}", error));
-        } else {
-            crate::platform::log_fmt(format_args!("OTA: AP stopped"));
-        }
+        socket.abort();
     }
+}
+
+async fn accept_ota_connection<'a>(
+    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    socket: &mut embassy_net::tcp::TcpSocket<'a>,
+) -> bool {
+    let generation = context.ota_generation();
+    let mut accept = pin!(socket.accept(OTA_HTTP_PORT));
+    poll_fn(|cx| {
+        if !context.ota_requested() || context.ota_generation() != generation {
+            return Poll::Ready(false);
+        }
+        context.register_ota_waker(cx.waker());
+        match accept.as_mut().poll(cx) {
+            Poll::Ready(Ok(())) => Poll::Ready(true),
+            Poll::Ready(Err(_)) => Poll::Ready(false),
+            Poll::Pending => Poll::Pending,
+        }
+    })
+    .await
+}
+
+enum OtaConnectionResult {
+    Complete(Result<(), crate::app::ota::HttpOtaError>),
+    Stopped,
+}
+
+async fn handle_ota_connection<'a>(
+    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    socket: &mut embassy_net::tcp::TcpSocket<'a>,
+) -> OtaConnectionResult {
+    let generation = context.ota_generation();
+    let mut connection = pin!(crate::app::ota::handle_connection(socket));
+    poll_fn(|cx| {
+        if !context.ota_requested() || context.ota_generation() != generation {
+            return Poll::Ready(OtaConnectionResult::Stopped);
+        }
+        context.register_ota_waker(cx.waker());
+        match connection.as_mut().poll(cx) {
+            Poll::Ready(result) => Poll::Ready(OtaConnectionResult::Complete(result)),
+            Poll::Pending => Poll::Pending,
+        }
+    })
+    .await
 }
 
 async fn start_ota_ap(
@@ -657,138 +840,6 @@ async fn wait_for_ota_requested_idle(
         })
         .await;
     }
-}
-
-async fn wait_for_ota_requested<R, D>(
-    context: &crate::app::AppContext<crate::platform::EspStorage>,
-    requested: bool,
-    runner: &mut core::pin::Pin<&mut R>,
-    dhcp: &mut core::pin::Pin<&mut D>,
-) where
-    R: Future,
-    D: Future,
-{
-    loop {
-        if context.ota_requested() == requested {
-            return;
-        }
-
-        let generation = context.ota_generation();
-        poll_fn(|cx| {
-            let _ = runner.as_mut().poll(cx);
-            let _ = dhcp.as_mut().poll(cx);
-
-            if context.ota_requested() == requested || context.ota_generation() != generation {
-                return Poll::Ready(());
-            }
-
-            context.register_ota_waker(cx.waker());
-            if context.ota_requested() == requested || context.ota_generation() != generation {
-                Poll::Ready(())
-            } else {
-                Poll::Pending
-            }
-        })
-        .await;
-    }
-}
-
-async fn accept_ota_connection<'a, R, D>(
-    context: &crate::app::AppContext<crate::platform::EspStorage>,
-    runner: &mut core::pin::Pin<&mut R>,
-    dhcp: &mut core::pin::Pin<&mut D>,
-    socket: &mut embassy_net::tcp::TcpSocket<'a>,
-) -> bool
-where
-    R: Future,
-    D: Future,
-{
-    let mut accept = pin!(socket.accept(OTA_HTTP_PORT));
-    let generation = context.ota_generation();
-
-    poll_fn(|cx| {
-        let _ = runner.as_mut().poll(cx);
-        let _ = dhcp.as_mut().poll(cx);
-
-        if !context.ota_requested() {
-            return Poll::Ready(false);
-        }
-
-        match accept.as_mut().poll(cx) {
-            Poll::Ready(Ok(())) => Poll::Ready(true),
-            Poll::Ready(Err(_)) => Poll::Ready(false),
-            Poll::Pending => {
-                context.register_ota_waker(cx.waker());
-                if context.ota_generation() != generation || !context.ota_requested() {
-                    Poll::Ready(false)
-                } else {
-                    Poll::Pending
-                }
-            }
-        }
-    })
-    .await
-}
-
-enum OtaConnectionResult {
-    Complete(Result<(), crate::app::ota::HttpOtaError>),
-    Stopped,
-}
-
-async fn drive_ota_connection<'a, R, D>(
-    context: &crate::app::AppContext<crate::platform::EspStorage>,
-    runner: &mut core::pin::Pin<&mut R>,
-    dhcp: &mut core::pin::Pin<&mut D>,
-    socket: &mut embassy_net::tcp::TcpSocket<'a>,
-) -> OtaConnectionResult
-where
-    R: Future,
-    D: Future,
-{
-    let mut connection = pin!(crate::app::ota::handle_connection(socket));
-    let generation = context.ota_generation();
-
-    poll_fn(|cx| {
-        let _ = runner.as_mut().poll(cx);
-        let _ = dhcp.as_mut().poll(cx);
-
-        if !context.ota_requested() {
-            return Poll::Ready(OtaConnectionResult::Stopped);
-        }
-
-        match connection.as_mut().poll(cx) {
-            Poll::Ready(result) => Poll::Ready(OtaConnectionResult::Complete(result)),
-            Poll::Pending => {
-                context.register_ota_waker(cx.waker());
-                if context.ota_generation() != generation || !context.ota_requested() {
-                    Poll::Ready(OtaConnectionResult::Stopped)
-                } else {
-                    Poll::Pending
-                }
-            }
-        }
-    })
-    .await
-}
-
-async fn drive_network<R, D, F>(
-    runner: &mut core::pin::Pin<&mut R>,
-    dhcp: &mut core::pin::Pin<&mut D>,
-    future: F,
-) -> F::Output
-where
-    R: Future,
-    D: Future,
-    F: Future,
-{
-    let mut future = pin!(future);
-    poll_fn(|cx| {
-        let _ = runner.as_mut().poll(cx);
-        let _ = dhcp.as_mut().poll(cx);
-
-        future.as_mut().poll(cx)
-    })
-    .await
 }
 
 async fn battery_task(
@@ -951,7 +1002,19 @@ async fn cli_task(
 
         let mut byte = [0];
         match serial.read_async(&mut byte).await {
-            Ok(count) if count > 0 => cli.accept_byte(byte[0], context).await,
+            Ok(count) if count > 0 => {
+                let echo = cli.echo_for_byte(byte[0]);
+                match echo {
+                    crate::app::cli::SerialEcho::None => {}
+                    crate::app::cli::SerialEcho::Byte => {
+                        let _ = serial.write_async(&byte).await;
+                    }
+                    crate::app::cli::SerialEcho::Bytes(bytes) => {
+                        let _ = serial.write_async(bytes).await;
+                    }
+                }
+                cli.accept_byte(byte[0], context).await;
+            }
             Ok(_) | Err(_) => {}
         }
     }

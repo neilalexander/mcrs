@@ -24,6 +24,13 @@ const FIRMWARE_VERSION: &str = env!("MESHCORE_FIRMWARE_VERSION");
 pub struct Cli {
     line: [u8; LINE_BUFFER_LEN],
     len: usize,
+    last_was_carriage_return: bool,
+}
+
+pub enum SerialEcho {
+    None,
+    Byte,
+    Bytes(&'static [u8]),
 }
 
 impl Cli {
@@ -31,6 +38,33 @@ impl Cli {
         Self {
             line: [0; LINE_BUFFER_LEN],
             len: 0,
+            last_was_carriage_return: false,
+        }
+    }
+
+    pub fn echo_for_byte(&mut self, byte: u8) -> SerialEcho {
+        match byte {
+            b'\r' => {
+                self.last_was_carriage_return = true;
+                SerialEcho::Bytes(b"\r\n")
+            }
+            b'\n' if self.last_was_carriage_return => {
+                self.last_was_carriage_return = false;
+                SerialEcho::None
+            }
+            b'\n' => SerialEcho::Bytes(b"\r\n"),
+            0x08 | 0x7f if self.len > 0 => {
+                self.last_was_carriage_return = false;
+                SerialEcho::Bytes(b"\x08 \x08")
+            }
+            byte if !byte.is_ascii_control() && self.len < self.line.len() => {
+                self.last_was_carriage_return = false;
+                SerialEcho::Byte
+            }
+            _ => {
+                self.last_was_carriage_return = false;
+                SerialEcho::None
+            }
         }
     }
 
@@ -641,6 +675,18 @@ async fn handle_get_command(
     context: &AppContext<impl crate::platform::storage::Storage>,
     request: CliRequest,
 ) -> String {
+    if let Some(key) = config.strip_prefix("wifi.") {
+        if request.origin != CliOrigin::Serial {
+            return denied_text();
+        }
+        return context
+            .with_config(|config| match key {
+                "ssid" => format!("> {}", config.wifi().ssid()),
+                "pass" => format!("> {}", config.wifi().password()),
+                _ => format!("Unknown config: wifi.{key}"),
+            })
+            .await;
+    }
     match config {
         "name" => {
             context
@@ -742,6 +788,34 @@ async fn handle_set_command(
 ) -> String {
     if !request.privilege.is_passworded() {
         return denied_text();
+    }
+
+    if let Some(setting) = config.strip_prefix("wifi.") {
+        if request.origin != CliOrigin::Serial {
+            return denied_text();
+        }
+        let (key, value) = match setting.split_once(' ') {
+            Some((key, value)) => (key.trim(), value.trim()),
+            None if setting.trim() == "pass" => ("pass", ""),
+            None => return String::from("Error, missing Wi-Fi value"),
+        };
+        let result = match key {
+            "ssid" => {
+                context
+                    .update_config(|config| config.set_wifi_ssid(value))
+                    .await
+            }
+            "pass" => {
+                context
+                    .update_config(|config| config.set_wifi_password(value))
+                    .await
+            }
+            _ => return String::from("Error, unknown Wi-Fi setting"),
+        };
+        return match result {
+            Ok(()) => String::from("OK - reboot to apply"),
+            Err(error) => format!("Error: {error}"),
+        };
     }
 
     if let Some(name) = config.strip_prefix("name ").map(str::trim) {
