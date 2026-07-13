@@ -589,12 +589,16 @@ async fn run_ota_station_mode<'a>(
             {
                 let mut server = pin!(serve_ota(stack, context));
                 let mut ntp = pin!(ntp_loop(stack));
+                let mut telnet = pin!(crate::app::telnet::serve(stack, context));
                 let mut disconnected = pin!(controller.wait_for_event(WifiEvent::StaDisconnected));
                 poll_fn(|cx| {
                     if let Poll::Ready(never) = server.as_mut().poll(cx) {
                         match never {}
                     }
                     if let Poll::Ready(never) = ntp.as_mut().poll(cx) {
+                        match never {}
+                    }
+                    if let Poll::Ready(never) = telnet.as_mut().poll(cx) {
                         match never {}
                     }
                     if disconnected.as_mut().poll(cx).is_ready() {

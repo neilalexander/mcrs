@@ -49,6 +49,7 @@ pub struct AppConfig {
 pub struct WifiConfig {
     ssid: String,
     password: String,
+    telnet: bool,
 }
 
 impl WifiConfig {
@@ -57,6 +58,9 @@ impl WifiConfig {
     }
     pub fn password(&self) -> &str {
         &self.password
+    }
+    pub fn telnet(&self) -> bool {
+        self.telnet
     }
 }
 
@@ -172,6 +176,10 @@ impl AppConfig {
         }
         self.wifi.password = value.into();
         Ok(())
+    }
+
+    pub fn set_wifi_telnet(&mut self, enabled: bool) {
+        self.wifi.telnet = enabled;
     }
 
     pub fn radio(&self) -> RadioConfig {
@@ -562,6 +570,7 @@ fn decode_config_text(data: &[u8], defaults: &StoredAppConfig) -> Option<StoredA
             }
             "wifi.ssid" => config.wifi.ssid = value,
             "wifi.pass" => config.wifi.password = value,
+            "wifi.telnet" => config.wifi.telnet = parse_bool(&value)?,
             "radio.frequency_hz" => {
                 config.radio.receive_frequency_hz = value.parse::<u32>().ok()?;
             }
@@ -682,6 +691,9 @@ fn encode_sparse_config_text(config: &StoredAppConfig, defaults: &StoredAppConfi
         write_escaped_value(&mut out, &config.wifi.password);
         out.push('\n');
     }
+    if config.wifi.telnet != defaults.wifi.telnet {
+        let _ = writeln!(&mut out, "wifi.telnet={}", bool_text(config.wifi.telnet));
+    }
 
     if config.radio.receive_frequency_hz != defaults.radio.receive_frequency_hz {
         let _ = writeln!(
@@ -777,6 +789,7 @@ fn encode_full_config_text_redacted(config: &StoredAppConfig, redact_secrets: bo
         write_escaped_value(&mut out, &config.wifi.password);
         out.push('\n');
     }
+    let _ = writeln!(&mut out, "wifi.telnet={}", bool_text(config.wifi.telnet));
 
     out.push_str("identity.lat=");
     write_optional_coordinate(&mut out, config.latitude_microdegrees);
@@ -1216,6 +1229,15 @@ mod tests {
         let encoded = encode_config_text(&config);
         let decoded = decode_config_text(&encoded, &defaults()).expect("valid config");
         assert_eq!(decoded.wifi.password(), "");
+    }
+
+    #[test]
+    fn wifi_telnet_round_trips() {
+        let mut config = defaults();
+        config.wifi.telnet = true;
+        let encoded = encode_config_text(&config);
+        let decoded = decode_config_text(&encoded, &defaults()).expect("valid config");
+        assert!(decoded.wifi.telnet());
     }
 
     #[test]

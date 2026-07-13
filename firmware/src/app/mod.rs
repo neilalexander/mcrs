@@ -10,6 +10,7 @@ pub mod periodic;
 mod protocol_log;
 pub mod regions;
 mod remote;
+pub mod telnet;
 
 use alloc::{collections::VecDeque, string::String, vec::Vec};
 use core::{

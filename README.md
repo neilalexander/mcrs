@@ -11,8 +11,10 @@ Supported features:
 * Regions
   * Allow or deny regions and setting the default advert region works
   * Optional `region capture` allows unscoped flood traffic that arrives directly to the repeater to be forwarded into the default scope instead of unscoped
-* OTA firmware updates using Wi-Fi with A/B partitions
-  * Not well tested yet
+* Wi-Fi connectivity
+  * OTA firmware updates with A/B partitions in either AP or STA mode
+  * Automatic NTP clock sync in STA mode
+  * Telnet CLI access with `wifi.telnet = true` in STA mode
 * Press-and-hold `PRG` to send a zero-hop advert
 
 Note: the storage configuration format is different to the original firmware, so a repeater that is switched to this firmware will need to be reconfigured. The default admin password is `meshcore`.
@@ -60,6 +62,7 @@ Wi-Fi is configured persistently from the serial CLI:
 ```text
 set wifi.ssid MyWiFi
 set wifi.pass my-passphrase
+set wifi.telnet true/false
 reboot
 ```
 
@@ -70,6 +73,10 @@ serves the OTA page on port 80 of its assigned address. If `wifi.ssid` is empty,
 
 Station mode also synchronizes the retained wall clock from `pool.ntp.org`
 after DHCP completes and refreshes it periodically.
+
+When `wifi.telnet` is enabled, station mode exposes the privileged CLI on TCP
+port 23. This interface has the same authority as the serial CLI and has no
+additional authentication, so only enable it on a trusted network.
 
 For Heltec v4 and WSL3, use the corresponding `heltec-v4-*` and `heltec-wsl3-*` Make targets.
 

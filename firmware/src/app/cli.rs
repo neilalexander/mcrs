@@ -33,6 +33,16 @@ pub enum SerialEcho {
     Bytes(&'static [u8]),
 }
 
+pub struct CliResponse {
+    pub text: String,
+    pub post_reply: Option<PostReplyAction>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PostReplyAction {
+    Reboot,
+}
+
 impl Cli {
     pub const fn new() -> Self {
         Self {
@@ -100,8 +110,22 @@ impl Cli {
         let command = String::from(core::str::from_utf8(&self.line[..self.len]).unwrap_or(""));
         self.len = 0;
 
-        let _ = handle_command(command.trim(), context, CliRequest::serial()).await;
+        if let Some(response) = handle_command(command.trim(), context, CliRequest::serial()).await
+            && response.post_reply == Some(PostReplyAction::Reboot)
+        {
+            crate::platform::reboot();
+        }
     }
+}
+
+pub async fn handle_privileged_tcp_command<Store>(
+    command: &str,
+    context: &AppContext<Store>,
+) -> Option<CliResponse>
+where
+    Store: crate::platform::storage::Storage,
+{
+    handle_command(command.trim(), context, CliRequest::tcp()).await
 }
 
 pub async fn handle_remote_packet<Store>(
@@ -192,13 +216,16 @@ async fn handle_anonymous_request(
         .await;
     let request = CliRequest::remote(cli_privilege_for_remote(privilege), timestamp);
 
-    let output = handle_command(command, context, request).await?;
+    let response = handle_command(command, context, request).await?;
+    if response.post_reply == Some(PostReplyAction::Reboot) {
+        context.request_reboot_after_next_remote_reply();
+    }
     encode_remote_cli_reply(
         &decrypted.shared_secret,
         &decrypted.sender_pubkey,
         &responder_public_key,
         timestamp,
-        output,
+        response.text,
     )
 }
 
@@ -243,13 +270,16 @@ async fn handle_authenticated_text_message(
         cli_privilege_for_remote(Some(decrypted.privilege)),
         plaintext.timestamp,
     );
-    let output = handle_command(command, context, request).await?;
+    let response = handle_command(command, context, request).await?;
+    if response.post_reply == Some(PostReplyAction::Reboot) {
+        context.request_reboot_after_next_remote_reply();
+    }
     encode_remote_cli_reply(
         &decrypted.shared_secret,
         &decrypted.sender_pubkey,
         &responder_public_key,
         plaintext.timestamp,
-        output,
+        response.text,
     )
 }
 
@@ -459,41 +489,35 @@ async fn handle_command(
     command: &str,
     context: &AppContext<impl crate::platform::storage::Storage>,
     request: CliRequest,
-) -> Option<String> {
+) -> Option<CliResponse> {
     if !request.allows_command(command) {
         let output = denied_text();
-        log_command_output(request, &output);
-        return Some(output);
+        return Some(command_response(request, output));
     }
 
     if let Some(seconds) = command.strip_prefix("time ").map(str::trim) {
         let output = handle_time_set_command(seconds, request);
-        log_command_output(request, &output);
-        return Some(output);
+        return Some(command_response(request, output));
     }
 
     if let Some(config) = command.strip_prefix("get ").map(str::trim) {
         let output = handle_get_command(config, context, request).await;
-        log_command_output(request, &output);
-        return Some(output);
+        return Some(command_response(request, output));
     }
 
     if let Some(config) = command.strip_prefix("set ").map(str::trim) {
         let output = handle_set_command(config, context, request).await;
-        log_command_output(request, &output);
-        return Some(output);
+        return Some(command_response(request, output));
     }
 
     if command == "region" || command.starts_with("region ") {
         let output = handle_region_command(command, context, request).await;
-        log_command_output(request, &output);
-        return Some(output);
+        return Some(command_response(request, output));
     }
 
     if command == "ota" || command.starts_with("ota ") {
         let output = handle_ota_command(command, context, request);
-        log_command_output(request, &output);
-        return Some(output);
+        return Some(command_response(request, output));
     }
 
     if let Some(password) = command.strip_prefix("password ").map(str::trim) {
@@ -516,11 +540,10 @@ async fn handle_command(
         } else {
             denied_text()
         };
-        log_command_output(request, &output);
-        return Some(output);
+        return Some(command_response(request, output));
     }
 
-    let mut reboot_after_serial_output = false;
+    let mut post_reply = None;
     let output = match command {
         "" => return None,
         "help" | "?" => help_text(),
@@ -528,11 +551,7 @@ async fn handle_command(
             if !request.privilege.is_passworded() {
                 denied_text()
             } else {
-                if request.origin == CliOrigin::Remote {
-                    context.request_reboot_after_next_remote_reply();
-                } else {
-                    reboot_after_serial_output = true;
-                }
+                post_reply = Some(PostReplyAction::Reboot);
                 String::from("OK - rebooting")
             }
         }
@@ -542,11 +561,7 @@ async fn handle_command(
             } else {
                 match context.reset_config().await {
                     Ok(()) => {
-                        if request.origin == CliOrigin::Remote {
-                            context.request_reboot_after_next_remote_reply();
-                        } else {
-                            reboot_after_serial_output = true;
-                        }
+                        post_reply = Some(PostReplyAction::Reboot);
                         String::from("OK - config reset, rebooting")
                     }
                     Err(error) => format!("Error - config reset failed: {:?}", error),
@@ -663,11 +678,17 @@ async fn handle_command(
         }
     };
 
-    log_command_output(request, &output);
-    if reboot_after_serial_output {
-        crate::platform::reboot();
+    let mut response = command_response(request, output);
+    response.post_reply = post_reply;
+    Some(response)
+}
+
+fn command_response(request: CliRequest, text: String) -> CliResponse {
+    log_command_output(request, &text);
+    CliResponse {
+        text,
+        post_reply: None,
     }
-    Some(output)
 }
 
 async fn handle_get_command(
@@ -676,13 +697,14 @@ async fn handle_get_command(
     request: CliRequest,
 ) -> String {
     if let Some(key) = config.strip_prefix("wifi.") {
-        if request.origin != CliOrigin::Serial {
+        if !request.origin.is_local() {
             return denied_text();
         }
         return context
             .with_config(|config| match key {
                 "ssid" => format!("> {}", config.wifi().ssid()),
                 "pass" => format!("> {}", config.wifi().password()),
+                "telnet" => format!("> {}", on_off_text(config.wifi().telnet())),
                 _ => format!("Unknown config: wifi.{key}"),
             })
             .await;
@@ -748,14 +770,14 @@ async fn handle_get_command(
             append_hex(&mut output, &context.public_key().await);
             output
         }
-        "prv.key" if request.origin == CliOrigin::Serial => {
+        "prv.key" if request.origin.is_local() => {
             let mut output = String::from("> ");
             let seed = context.with_config(|config| *config.identity_seed()).await;
             append_hex(&mut output, &seed);
             output
         }
         "prv.key" => denied_text(),
-        "password" if request.origin == CliOrigin::Serial => {
+        "password" if request.origin.is_local() => {
             context
                 .with_config(|config| format!("> {}", config.remote_cli_password()))
                 .await
@@ -791,7 +813,7 @@ async fn handle_set_command(
     }
 
     if let Some(setting) = config.strip_prefix("wifi.") {
-        if request.origin != CliOrigin::Serial {
+        if !request.origin.is_local() {
             return denied_text();
         }
         let (key, value) = match setting.split_once(' ') {
@@ -808,6 +830,17 @@ async fn handle_set_command(
             "pass" => {
                 context
                     .update_config(|config| config.set_wifi_password(value))
+                    .await
+            }
+            "telnet" => {
+                let Some(enabled) = parse_bool(value) else {
+                    return String::from("Error, invalid wifi.telnet value");
+                };
+                context
+                    .update_config(|config| {
+                        config.set_wifi_telnet(enabled);
+                        Ok(())
+                    })
                     .await
             }
             _ => return String::from("Error, unknown Wi-Fi setting"),
@@ -992,7 +1025,7 @@ async fn handle_set_command(
         };
     }
 
-    if request.origin == CliOrigin::Serial
+    if request.origin.is_local()
         && let Some(freq) = config.strip_prefix("freq ").map(str::trim)
     {
         let Some(receive_frequency_hz) = parse_decimal_scaled(freq, 1_000_000) else {
@@ -1443,23 +1476,26 @@ fn encode_remote_cli_reply(
 }
 
 fn log_command_output(request: CliRequest, output: &str) {
-    if request.origin == CliOrigin::Remote {
-        if output.starts_with("CLI: denied") {
-            crate::platform::log_fmt(format_args!(
-                "Remote CLI denied: privilege={}",
-                request.privilege.name()
-            ));
-        } else if output.starts_with("CLI: unknown command") {
-            crate::platform::log_fmt(format_args!(
-                "Remote CLI unknown command: privilege={}",
-                request.privilege.name()
-            ));
+    match request.origin {
+        CliOrigin::Serial => {
+            for line in output.lines() {
+                crate::platform::log_fmt(format_args!("{}", line));
+            }
         }
-        return;
-    }
-
-    for line in output.lines() {
-        crate::platform::log_fmt(format_args!("{}", line));
+        CliOrigin::Tcp => {}
+        CliOrigin::Remote => {
+            if output.starts_with("CLI: denied") {
+                crate::platform::log_fmt(format_args!(
+                    "Remote CLI denied: privilege={}",
+                    request.privilege.name()
+                ));
+            } else if output.starts_with("CLI: unknown command") {
+                crate::platform::log_fmt(format_args!(
+                    "Remote CLI unknown command: privilege={}",
+                    request.privilege.name()
+                ));
+            }
+        }
     }
 }
 
@@ -1601,6 +1637,14 @@ impl CliRequest {
         }
     }
 
+    const fn tcp() -> Self {
+        Self {
+            origin: CliOrigin::Tcp,
+            privilege: CliPrivilege::Local,
+            sender_timestamp: 0,
+        }
+    }
+
     fn allows_command(self, command: &str) -> bool {
         if self.origin != CliOrigin::Remote || self.privilege != CliPrivilege::AnonymousRemote {
             return true;
@@ -1616,7 +1660,14 @@ impl CliRequest {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CliOrigin {
     Serial,
+    Tcp,
     Remote,
+}
+
+impl CliOrigin {
+    fn is_local(self) -> bool {
+        matches!(self, Self::Serial | Self::Tcp)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
