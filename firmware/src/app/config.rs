@@ -182,6 +182,28 @@ impl AppConfig {
         self.wifi.telnet = enabled;
     }
 
+    pub fn unset(&mut self, setting: &str) -> Result<(), ConfigError> {
+        let defaults = Self::generated_defaults(self.identity_seed);
+        match setting {
+            "name" => self.node_name = defaults.node_name,
+            "password" => self.remote_cli_password = defaults.remote_cli_password,
+            "lat" => self.latitude_microdegrees = defaults.latitude_microdegrees,
+            "lon" => self.longitude_microdegrees = defaults.longitude_microdegrees,
+            "wifi.ssid" => self.wifi.ssid = defaults.wifi.ssid,
+            "wifi.pass" => self.wifi.password = defaults.wifi.password,
+            "wifi.telnet" => self.wifi.telnet = defaults.wifi.telnet,
+            "radio" => self.radio = defaults.radio,
+            "freq" => self.radio.receive_frequency_hz = defaults.radio.receive_frequency_hz,
+            "tx" => self.radio.transmit_power_dbm = defaults.radio.transmit_power_dbm,
+            "dutycycle" => self.duty_cycle_percent = defaults.duty_cycle_percent,
+            "flood.max.unscoped" => self.flood_max_unscoped_hops = defaults.flood_max_unscoped_hops,
+            "flood.max.advert" => self.flood_max_advert_hops = defaults.flood_max_advert_hops,
+            "path.hash.mode" => self.path_hash_mode = defaults.path_hash_mode,
+            _ => return Err(ConfigError::UnknownSetting),
+        }
+        Ok(())
+    }
+
     pub fn radio(&self) -> RadioConfig {
         self.radio
     }
@@ -860,6 +882,7 @@ fn encode_full_config_text_redacted(config: &StoredAppConfig, redact_secrets: bo
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConfigError {
+    UnknownSetting,
     InvalidName,
     InvalidLatitude,
     InvalidLongitude,
@@ -878,6 +901,7 @@ pub enum ConfigError {
 impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            ConfigError::UnknownSetting => f.write_str("unknown setting"),
             ConfigError::InvalidName => f.write_str("invalid name"),
             ConfigError::InvalidLatitude => f.write_str("invalid latitude"),
             ConfigError::InvalidLongitude => f.write_str("invalid longitude"),
@@ -1238,6 +1262,19 @@ mod tests {
         let encoded = encode_config_text(&config);
         let decoded = decode_config_text(&encoded, &defaults()).expect("valid config");
         assert!(decoded.wifi.telnet());
+    }
+
+    #[test]
+    fn unset_restores_default_and_removes_sparse_override() {
+        let mut config = AppConfig::generated_defaults([7; 32]);
+        config.set_wifi_telnet(true);
+        config.unset("wifi.telnet").expect("known setting");
+
+        assert!(!config.wifi().telnet());
+        let stored = StoredAppConfig::from_app_config(&config);
+        let rendered = encode_config_text(&stored);
+        let rendered = core::str::from_utf8(&rendered).expect("UTF-8 config");
+        assert!(!rendered.contains("wifi.telnet="));
     }
 
     #[test]

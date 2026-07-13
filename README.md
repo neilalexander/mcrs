@@ -66,6 +66,9 @@ set wifi.telnet true/false
 reboot
 ```
 
+Use `unset NAME` to restore a setting to its firmware default and remove its
+override from the next config write, for example `unset wifi.telnet`.
+
 When configured, the firmware joins that network in station mode and `ota start`
 serves the OTA page on port 80 of its assigned address. If `wifi.ssid` is empty,
 `ota start` instead creates the original open OTA access point at

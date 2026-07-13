@@ -510,6 +510,11 @@ async fn handle_command(
         return Some(command_response(request, output));
     }
 
+    if let Some(config) = command.strip_prefix("unset ").map(str::trim) {
+        let output = handle_unset_command(config, context, request).await;
+        return Some(command_response(request, output));
+    }
+
     if command == "region" || command.starts_with("region ") {
         let output = handle_region_command(command, context, request).await;
         return Some(command_response(request, output));
@@ -1045,6 +1050,38 @@ async fn handle_set_command(
     format!("Unknown config: {}", config)
 }
 
+async fn handle_unset_command(
+    setting: &str,
+    context: &AppContext<impl crate::platform::storage::Storage>,
+    request: CliRequest,
+) -> String {
+    if !request.privilege.is_passworded() {
+        return denied_text();
+    }
+    if setting.is_empty() {
+        return String::from("Error, missing config name");
+    }
+    if (setting.starts_with("wifi.") || setting == "freq") && !request.origin.is_local() {
+        return denied_text();
+    }
+
+    match context.update_config(|config| config.unset(setting)).await {
+        Ok(())
+            if matches!(
+                setting,
+                "wifi.ssid" | "wifi.pass" | "wifi.telnet" | "radio" | "freq" | "tx"
+            ) =>
+        {
+            String::from("OK - reset to default; reboot to apply")
+        }
+        Ok(()) => String::from("OK - reset to default"),
+        Err(super::ConfigUpdateError::Invalid(super::config::ConfigError::UnknownSetting)) => {
+            format!("Unknown config: {}", setting)
+        }
+        Err(error) => format!("Error: {}", error),
+    }
+}
+
 async fn handle_region_command(
     command: &str,
     context: &AppContext<impl crate::platform::storage::Storage>,
@@ -1505,7 +1542,7 @@ fn denied_text() -> String {
 
 fn help_text() -> String {
     String::from(
-        "Commands: help, ver, status, identity, radio, clock, region, region list {allowed|denied}, ota status, get {name|lat|lon|radio|tx|dutycycle|freq|flood.max.unscoped|flood.max.advert|path.hash.mode|public.key|status}; Privileged: time, clock sync, set {name|lat|lon|radio|tx|dutycycle|flood.max.unscoped|flood.max.advert|path.hash.mode|time|prv.key}, password, neighbours, advert, advert.zerohop, discover.neighbours, region {put|remove|allowf|denyf|default}, ota {start|stop}, erase config, reboot",
+        "Commands: help, ver, status, identity, radio, clock, region, region list {allowed|denied}, ota status, get {name|lat|lon|radio|tx|dutycycle|freq|flood.max.unscoped|flood.max.advert|path.hash.mode|public.key|status}; Privileged: time, clock sync, set, unset, password, neighbours, advert, advert.zerohop, discover.neighbours, region {put|remove|allowf|denyf|default}, ota {start|stop}, erase config, reboot",
     )
 }
 
