@@ -181,16 +181,38 @@ where
             }
         } else {
             wait_for_prg_button_press(&mut button).await;
-            if display.wake().is_ok() && write_display_status(display, context, None).await.is_ok()
-            {
+            // Start tracking the release before restoring the OLED rail. A
+            // short press can otherwise finish during the display's 110 ms
+            // power-on/reset sequence and be misclassified as a long hold.
+            let (wake_result, action) = {
+                let mut action = pin!(wait_for_prg_button_release_or_hold(
+                    &mut button_delay,
+                    &mut button
+                ));
+                let mut wake_display = pin!(display.wake(&mut display_delay));
+                let mut completed_action = None;
+                let wake_result = poll_fn(|cx| {
+                    if completed_action.is_none()
+                        && let Poll::Ready(action) = action.as_mut().poll(cx)
+                    {
+                        completed_action = Some(action);
+                    }
+                    wake_display.as_mut().poll(cx)
+                })
+                .await;
+                let action = match completed_action {
+                    Some(action) => action,
+                    None => action.as_mut().await,
+                };
+                (wake_result, action)
+            };
+
+            if wake_result.is_ok() && write_display_status(display, context, None).await.is_ok() {
                 crate::platform::log_fmt(format_args!("OLED display woken by PRG button"));
                 awake = true;
-                let action =
-                    wait_for_prg_button_release_or_hold(&mut button_delay, &mut button).await;
                 show_prg_advert_message_if_sent(display, context, action).await;
             } else {
                 crate::platform::log_display_write_failed();
-                let _ = wait_for_prg_button_release_or_hold(&mut button_delay, &mut button).await;
             }
         }
     }

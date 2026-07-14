@@ -111,11 +111,21 @@ where
     }
 
     pub fn sleep(&mut self) -> Result<(), ()> {
-        self.write_commands(&[0xae])
+        // GPIO36 switches the display rail on Heltec boards. Sending DISPLAYOFF
+        // first avoids a visible artifact, then removing the rail eliminates
+        // the controller's standby draw as well.
+        let sleep_result = self.write_commands(&[0xae]);
+        let power_result = self.set_power_enabled(false);
+        sleep_result.and(power_result)
     }
 
-    pub fn wake(&mut self) -> Result<(), ()> {
-        self.write_commands(&[0xaf])
+    pub async fn wake<DLY>(&mut self, delay: &mut DLY) -> Result<(), ()>
+    where
+        DLY: DelayNs,
+    {
+        // The rail was removed while asleep, so the controller needs the same
+        // complete power-on and reset sequence used during initialisation.
+        self.init(delay).await
     }
 
     pub fn clear(&mut self) -> Result<(), ()> {
