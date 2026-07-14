@@ -66,7 +66,10 @@ fuzz_target!(|data: &[u8]| {
             let _ = RequestPlaintext::decode(payload);
         }
         12 => {
-            let _ = TextMessagePlaintext::decode(payload);
+            if let Ok(value) = TextMessagePlaintext::decode(payload) {
+                let encoded = value.encode().expect("decoded text message should encode");
+                assert_eq!(TextMessagePlaintext::decode(&encoded), Ok(value));
+            }
         }
         _ => {
             let _ = TracePayload::decode(payload);

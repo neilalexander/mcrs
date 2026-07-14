@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use crate::{
-    Result, TextType,
+    Error, MAX_TEXT_LEN, Result, TextType,
     wire::{ensure_payload_len, read_u8, read_u32_le},
 };
 
@@ -19,19 +19,26 @@ impl TextMessagePlaintext {
         let mut offset = 0;
         let timestamp = read_u32_le(input, &mut offset, "text timestamp")?;
         let packed = read_u8(input, &mut offset, "text type_attempt")?;
+        let message = input[offset..].to_vec();
+        if message.len() > MAX_TEXT_LEN {
+            return Err(Error::InvalidLength("text message"));
+        }
         Ok(Self {
             timestamp,
             text_type: TextType::from_bits(packed >> 2),
             attempt: packed & 0x03,
-            message: input[offset..].to_vec(),
+            message,
         })
     }
 
-    pub fn encode(&self) -> Vec<u8> {
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        if self.message.len() > MAX_TEXT_LEN {
+            return Err(Error::InvalidLength("text message"));
+        }
         let mut out = Vec::with_capacity(5 + self.message.len());
         out.extend_from_slice(&self.timestamp.to_le_bytes());
         out.push((self.text_type.to_bits() << 2) | (self.attempt & 0x03));
         out.extend_from_slice(&self.message);
-        out
+        Ok(out)
     }
 }

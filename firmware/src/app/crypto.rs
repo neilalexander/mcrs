@@ -135,14 +135,16 @@ pub fn encode_zero_hop_cli_text_response(
         text_type: TextType::CliData,
         attempt: 0,
         message: message.to_vec(),
-    };
+    }
+    .encode()
+    .ok()?;
 
     encode_zero_hop_direct_payload(
         PayloadKindForEncoding::TextMessage,
         shared_secret,
         requester_public_key,
         responder_public_key,
-        &plaintext.encode(),
+        &plaintext,
     )
 }
 

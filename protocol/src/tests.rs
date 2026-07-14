@@ -245,7 +245,10 @@ fn plaintext_helpers_round_trip() {
         attempt: 2,
         message: b"abcdhello".to_vec(),
     };
-    assert_eq!(TextMessagePlaintext::decode(&text.encode()).unwrap(), text);
+    assert_eq!(
+        TextMessagePlaintext::decode(&text.encode().unwrap()).unwrap(),
+        text
+    );
 
     let reply_path = Path::from_hashes(HashSize::One, &[&[1], &[2], &[3]]).unwrap();
     let req = RepeaterSubRequestPlaintext {
@@ -398,6 +401,25 @@ fn payload_decoders_reject_truncation() {
     assert!(RepeaterSubRequestPlaintext::decode(&[0; 5]).is_err());
     assert!(RepeaterLoginResponsePlaintext::decode(&[0; 12]).is_err());
     assert!(RepeaterResponsePlaintext::decode(&[0; 7]).is_err());
+}
+
+#[test]
+fn text_message_rejects_messages_over_the_protocol_limit() {
+    let text = TextMessagePlaintext {
+        timestamp: 1,
+        text_type: TextType::Plain,
+        attempt: 0,
+        message: vec![0; MAX_TEXT_LEN + 1],
+    };
+
+    assert_eq!(text.encode(), Err(Error::InvalidLength("text message")));
+
+    let mut encoded = vec![0; 5];
+    encoded.extend_from_slice(&text.message);
+    assert_eq!(
+        TextMessagePlaintext::decode(&encoded),
+        Err(Error::InvalidLength("text message"))
+    );
 }
 
 #[test]
