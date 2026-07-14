@@ -71,7 +71,7 @@ pub fn decrypt_authenticated_direct_payload(
     if payload.destination_hash != identity.public_key()[0] {
         return None;
     }
-    if payload.ciphertext.is_empty() || !payload.ciphertext.len().is_multiple_of(16) {
+    if !payload.has_complete_ciphertext_blocks() {
         return None;
     }
 
@@ -257,4 +257,37 @@ fn mac_for_ciphertext(shared_secret: &[u8; 32], ciphertext: &[u8]) -> Option<[u8
     mac.update(ciphertext);
     let digest = mac.finalize().into_bytes();
     Some([digest[0], digest[1]])
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use super::*;
+
+    #[test]
+    fn authenticated_direct_decrypt_rejects_unaligned_ciphertext_before_aes() {
+        let identity = Identity::from_private_key_seed(&[1; 32]);
+        let payload = DirectEncryptedPayload {
+            destination_hash: identity.public_key()[0],
+            source_hash: 0,
+            mac: [0; 2],
+            ciphertext: vec![0],
+        };
+
+        assert!(decrypt_authenticated_direct_payload(&payload, &identity, &[]).is_none());
+    }
+
+    #[test]
+    fn anonymous_decrypt_rejects_unaligned_ciphertext_before_aes() {
+        let identity = Identity::from_private_key_seed(&[1; 32]);
+        let payload = AnonymousRequestPayload {
+            destination_hash: identity.public_key()[0],
+            sender_pubkey: [2; 32],
+            mac: [0; 2],
+            ciphertext: vec![0],
+        };
+
+        assert!(decrypt_anonymous_request(&payload, &identity).is_none());
+    }
 }

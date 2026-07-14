@@ -366,6 +366,85 @@ fn malformed_packets_return_errors_instead_of_panicking() {
 }
 
 #[test]
+fn packet_decoder_rejects_truncated_frames() {
+    // Flood ACK header with no path-length byte.
+    assert_eq!(
+        Packet::decode(&[0x0d]),
+        Err(Error::Truncated("path_length"))
+    );
+
+    // Transport ACK header with neither 16-bit transport code present.
+    assert_eq!(
+        Packet::decode(&[0x0c]),
+        Err(Error::Truncated("transport primary"))
+    );
+
+    // Two complete transport codes, but no path-length byte after them.
+    assert_eq!(
+        Packet::decode(&[0x0c, 0, 0, 0, 0]),
+        Err(Error::Truncated("path_length"))
+    );
+
+    // A normal route declaring one one-byte hash, with no hash byte present.
+    assert_eq!(Packet::decode(&[0x0d, 0x01]), Err(Error::Truncated("path")));
+}
+
+#[test]
+fn packet_decoder_rejects_empty_control_and_trace_payloads() {
+    // Direct CONTROL with a zero-hop path but no control flags byte.
+    assert_eq!(
+        Packet::decode(&[0x2e, 0x00]),
+        Err(Error::Truncated("control payload"))
+    );
+
+    // Direct TRACE with a zero-length SNR path but none of its nine-byte
+    // fixed payload bytes (tag, auth code, and flags).
+    assert_eq!(
+        Packet::decode(&[0x26, 0x00]),
+        Err(Error::Truncated("trace tag"))
+    );
+}
+
+#[test]
+fn path_plaintext_rejects_route_and_extra_type_truncation() {
+    // The embedded path claims 63 one-byte hashes, but the plaintext ends
+    // immediately after the length byte.
+    assert_eq!(
+        PathPlaintext::decode(&[0x3f]),
+        Err(Error::Truncated("path"))
+    );
+
+    // A valid empty embedded path still requires an extra-type byte.
+    assert_eq!(
+        PathPlaintext::decode(&[0x00]),
+        Err(Error::Truncated("path plaintext extra_type"))
+    );
+}
+
+#[test]
+fn direct_ciphertext_requires_nonempty_complete_aes_blocks() {
+    let payload = DirectEncryptedPayload {
+        destination_hash: 1,
+        source_hash: 2,
+        mac: [0; CIPHER_MAC_SIZE],
+        ciphertext: vec![],
+    };
+    assert!(!payload.has_complete_ciphertext_blocks());
+
+    let unaligned = DirectEncryptedPayload {
+        ciphertext: vec![0; CIPHER_BLOCK_SIZE - 1],
+        ..payload.clone()
+    };
+    assert!(!unaligned.has_complete_ciphertext_blocks());
+
+    let aligned = DirectEncryptedPayload {
+        ciphertext: vec![0; CIPHER_BLOCK_SIZE],
+        ..payload
+    };
+    assert!(aligned.has_complete_ciphertext_blocks());
+}
+
+#[test]
 fn public_trace_helper_rejects_invalid_manual_trace_payload() {
     let packet = Packet {
         route_type: RouteType::Direct,

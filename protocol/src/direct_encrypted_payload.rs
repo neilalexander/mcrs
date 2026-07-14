@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use crate::{
-    CIPHER_MAC_SIZE, Result,
+    CIPHER_BLOCK_SIZE, CIPHER_MAC_SIZE, Result,
     wire::{ensure_payload_len, read_array, read_u8},
 };
 
@@ -30,5 +30,13 @@ impl DirectEncryptedPayload {
         out.push(self.source_hash);
         out.extend_from_slice(&self.mac);
         out.extend_from_slice(&self.ciphertext);
+    }
+
+    /// Whether ciphertext can be safely processed by the AES block decryptor.
+    ///
+    /// A valid MAC alone is not sufficient: AES decryption consumes complete
+    /// 16-byte blocks and an empty ciphertext is not a valid encrypted payload.
+    pub fn has_complete_ciphertext_blocks(&self) -> bool {
+        !self.ciphertext.is_empty() && self.ciphertext.len().is_multiple_of(CIPHER_BLOCK_SIZE)
     }
 }
