@@ -24,7 +24,7 @@ impl BoardConfig {
     pub const fn heltec_v3() -> Self {
         Self {
             tcxo_ctrl: Some(TcxoCtrlVoltage::Ctrl1V8),
-            use_dcdc: false,
+            use_dcdc: true,
             rx_boost: true,
         }
     }
@@ -33,7 +33,7 @@ impl BoardConfig {
     pub const fn heltec_v4() -> Self {
         Self {
             tcxo_ctrl: Some(TcxoCtrlVoltage::Ctrl1V8),
-            use_dcdc: false,
+            use_dcdc: true,
             rx_boost: true,
         }
     }
