@@ -1,6 +1,9 @@
 use alloc::vec::Vec;
 
-use crate::{Result, wire::read_u32_le};
+use crate::{
+    Result,
+    wire::{ensure_payload_len, read_u32_le},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestPlaintext {
@@ -10,6 +13,7 @@ pub struct RequestPlaintext {
 
 impl RequestPlaintext {
     pub fn decode(input: &[u8]) -> Result<Self> {
+        ensure_payload_len(input)?;
         let mut offset = 0;
         Ok(Self {
             timestamp: read_u32_le(input, &mut offset, "request timestamp")?,

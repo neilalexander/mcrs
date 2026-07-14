@@ -1,4 +1,11 @@
-use crate::{Error, Result};
+use crate::{Error, MAX_PACKET_PAYLOAD, Result};
+
+pub(crate) fn ensure_payload_len(input: &[u8]) -> Result<()> {
+    if input.len() > MAX_PACKET_PAYLOAD {
+        return Err(Error::PayloadTooLong { len: input.len() });
+    }
+    Ok(())
+}
 
 fn read_bytes<'a>(
     input: &'a [u8],

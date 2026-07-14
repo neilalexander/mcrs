@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use crate::{
     CIPHER_MAC_SIZE, Result,
-    wire::{read_array, read_u8},
+    wire::{ensure_payload_len, read_array, read_u8},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,6 +15,7 @@ pub struct DirectEncryptedPayload {
 
 impl DirectEncryptedPayload {
     pub fn decode(input: &[u8]) -> Result<Self> {
+        ensure_payload_len(input)?;
         let mut offset = 0;
         Ok(Self {
             destination_hash: read_u8(input, &mut offset, "direct destination_hash")?,

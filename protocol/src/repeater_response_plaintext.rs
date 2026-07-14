@@ -1,6 +1,9 @@
 use alloc::vec::Vec;
 
-use crate::{Result, wire::read_u32_le};
+use crate::{
+    Result,
+    wire::{ensure_payload_len, read_u32_le},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepeaterResponsePlaintext {
@@ -11,6 +14,7 @@ pub struct RepeaterResponsePlaintext {
 
 impl RepeaterResponsePlaintext {
     pub fn decode(input: &[u8]) -> Result<Self> {
+        ensure_payload_len(input)?;
         let mut offset = 0;
         Ok(Self {
             reflected_tag: read_u32_le(input, &mut offset, "repeater response tag")?,

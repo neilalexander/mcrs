@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use crate::{
     Error, Result, TraceHashSize,
-    wire::{read_u8, read_u32_le},
+    wire::{ensure_payload_len, read_u8, read_u32_le},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,6 +15,7 @@ pub struct TracePayload {
 
 impl TracePayload {
     pub fn decode(input: &[u8]) -> Result<Self> {
+        ensure_payload_len(input)?;
         let mut offset = 0;
         let tag = read_u32_le(input, &mut offset, "trace tag")?;
         let auth_code = read_u32_le(input, &mut offset, "trace auth_code")?;

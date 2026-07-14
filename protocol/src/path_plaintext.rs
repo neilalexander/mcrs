@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use crate::{Error, Path, PayloadKind, Result};
+use crate::{Error, Path, PayloadKind, Result, wire::ensure_payload_len};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathPlaintext {
@@ -11,6 +11,7 @@ pub struct PathPlaintext {
 
 impl PathPlaintext {
     pub fn decode(input: &[u8]) -> Result<Self> {
+        ensure_payload_len(input)?;
         let path_length = *input.first().ok_or(Error::Truncated("path plaintext"))?;
         let (path, used) = Path::decode_wire(path_length, &input[1..])?;
         let extra_offset = 1 + used;

@@ -3,6 +3,7 @@ use alloc::vec::Vec;
 use crate::{
     AckPayload, AdvertPayload, AnonymousRequestPayload, ControlPayload, DirectEncryptedPayload,
     GroupEncryptedPayload, MultipartPayload, PayloadKind, Result, TracePayload,
+    wire::ensure_payload_len,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +45,7 @@ impl Payload {
     }
 
     pub fn decode(kind: PayloadKind, input: &[u8]) -> Result<Self> {
+        ensure_payload_len(input)?;
         Ok(match kind {
             PayloadKind::Request => Self::Request(DirectEncryptedPayload::decode(input)?),
             PayloadKind::Response => Self::Response(DirectEncryptedPayload::decode(input)?),

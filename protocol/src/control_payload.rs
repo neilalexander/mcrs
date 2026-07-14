@@ -2,7 +2,7 @@ use alloc::{vec, vec::Vec};
 
 use crate::{
     AdvertNodeType, ControlMessage, Error, Result,
-    wire::{read_u8, read_u32_le},
+    wire::{ensure_payload_len, read_u8, read_u32_le},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +46,7 @@ impl ControlPayload {
     }
 
     pub fn decode(input: &[u8]) -> Result<Self> {
+        ensure_payload_len(input)?;
         let flags = *input.first().ok_or(Error::Truncated("control payload"))?;
         Ok(Self {
             flags,

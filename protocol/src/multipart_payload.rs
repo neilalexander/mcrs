@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use crate::{Error, PayloadKind, Result};
+use crate::{Error, PayloadKind, Result, wire::ensure_payload_len};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MultipartPayload {
@@ -11,6 +11,7 @@ pub struct MultipartPayload {
 
 impl MultipartPayload {
     pub fn decode(input: &[u8]) -> Result<Self> {
+        ensure_payload_len(input)?;
         let packed = *input.first().ok_or(Error::Truncated("multipart payload"))?;
         Ok(Self {
             remaining: packed >> 4,

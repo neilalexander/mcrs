@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use crate::{
     Result, TextType,
-    wire::{read_u8, read_u32_le},
+    wire::{ensure_payload_len, read_u8, read_u32_le},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,6 +15,7 @@ pub struct TextMessagePlaintext {
 
 impl TextMessagePlaintext {
     pub fn decode(input: &[u8]) -> Result<Self> {
+        ensure_payload_len(input)?;
         let mut offset = 0;
         let timestamp = read_u32_le(input, &mut offset, "text timestamp")?;
         let packed = read_u8(input, &mut offset, "text type_attempt")?;

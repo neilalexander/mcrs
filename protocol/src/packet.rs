@@ -209,10 +209,11 @@ impl Packet {
     }
 
     fn validate_semantics(&self) -> Result<()> {
-        if let Payload::Control(payload) = &self.payload {
-            if payload.zero_hop_only() && !self.is_direct_zero_hop() {
-                return Err(Error::InvalidZeroHopControlRoute);
-            }
+        if let Payload::Control(payload) = &self.payload
+            && payload.zero_hop_only()
+            && !self.is_direct_zero_hop()
+        {
+            return Err(Error::InvalidZeroHopControlRoute);
         }
         Ok(())
     }

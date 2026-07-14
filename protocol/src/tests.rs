@@ -119,6 +119,27 @@ fn advert_payload_rejects_overlong_app_data_instead_of_truncating() {
 }
 
 #[test]
+fn public_payload_decoders_reject_oversized_input() {
+    let input = vec![0; MAX_PACKET_PAYLOAD + 1];
+    let expected = Some(Error::PayloadTooLong { len: input.len() });
+
+    assert_eq!(
+        Payload::decode(PayloadKind::RawCustom, &input).err(),
+        expected
+    );
+    assert_eq!(DirectEncryptedPayload::decode(&input).err(), expected);
+    assert_eq!(AnonymousRequestPayload::decode(&input).err(), expected);
+    assert_eq!(GroupEncryptedPayload::decode(&input).err(), expected);
+    assert_eq!(ControlPayload::decode(&input).err(), expected);
+    assert_eq!(MultipartPayload::decode(&input).err(), expected);
+    assert_eq!(TracePayload::decode(&input).err(), expected);
+    assert_eq!(RequestPlaintext::decode(&input).err(), expected);
+    assert_eq!(RepeaterResponsePlaintext::decode(&input).err(), expected);
+    assert_eq!(TextMessagePlaintext::decode(&input).err(), expected);
+    assert_eq!(PathPlaintext::decode(&input).err(), expected);
+}
+
+#[test]
 fn advert_payload_verifies_signature_over_public_key_timestamp_and_app_data() {
     let signing_key = SigningKey::from_bytes(&[7; SEED_SIZE]);
     let public_key = signing_key.verifying_key().to_bytes();
