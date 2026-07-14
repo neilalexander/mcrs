@@ -11,14 +11,15 @@ esp32 = [
     "dep:embassy-executor",
     "dep:embassy-net",
     "dep:embassy-time",
-    "dep:embedded-alloc",
+    "dep:esp-alloc",
     "dep:esp-backtrace",
     "dep:esp-bootloader-esp-idf",
     "dep:esp-hal",
-    "dep:esp-hal-embassy",
+    "dep:esp-rtos",
     "dep:esp-println",
     "dep:esp-rom-sys",
-    "dep:esp-wifi",
+    "dep:esp-storage",
+    "dep:esp-radio",
     "esp-backtrace/esp32",
     "esp-backtrace/custom-halt",
     "esp-bootloader-esp-idf/esp32",
@@ -26,35 +27,37 @@ esp32 = [
     "esp-backtrace/println",
     "esp-hal/esp32",
     "esp-hal/unstable",
-    "esp-hal-embassy/esp32",
+    "esp-rtos/esp32",
     "esp-println/esp32",
     "esp-println/uart",
-    "esp-wifi/esp32",
+    "esp-radio/esp32",
+    "esp-storage/esp32",
 ]
 esp32s3 = [
     "dep:embassy-executor",
     "dep:embassy-net",
     "dep:embassy-time",
-    "dep:embedded-alloc",
+    "dep:esp-alloc",
     "dep:esp-backtrace",
     "dep:esp-bootloader-esp-idf",
     "dep:esp-hal",
-    "dep:esp-hal-embassy",
+    "dep:esp-rtos",
     "dep:esp-println",
     "dep:esp-rom-sys",
-    "dep:esp-wifi",
+    "dep:esp-storage",
+    "dep:esp-radio",
     "esp-backtrace/esp32s3",
     "esp-backtrace/custom-halt",
     "esp-bootloader-esp-idf/esp32s3",
     "esp-backtrace/panic-handler",
     "esp-backtrace/println",
     "esp-hal/esp32s3",
-    "esp-hal/psram",
     "esp-hal/unstable",
-    "esp-hal-embassy/esp32s3",
+    "esp-rtos/esp32s3",
     "esp-println/esp32s3",
     "esp-println/uart",
-    "esp-wifi/esp32s3",
+    "esp-radio/esp32s3",
+    "esp-storage/esp32s3",
 ]
 
 [dependencies]
@@ -65,19 +68,20 @@ embedded-hal = "1.0.0"
 embedded-hal-async = "1.0.0"
 embedded-io-async = "0.7.0"
 critical-section = "1.2.0"
-embassy-executor = { version = "0.7.0", optional = true }
+embassy-executor = { version = "0.10.0", optional = true }
 embassy-net = { version = "0.9.1", default-features = false, features = ["dhcpv4", "dns", "medium-ethernet", "proto-ipv4", "tcp", "udp"], optional = true }
-embassy-sync = "0.6.2"
-embassy-time = { version = "0.4.0", optional = true }
-embedded-alloc = { version = "0.7.0", default-features = false, features = ["llff"], optional = true }
+embassy-sync = "0.8.0"
+embassy-time = { version = "0.5.0", optional = true }
 embedded-storage = "0.3.1"
-esp-backtrace = { version = "0.19.0", optional = true }
-esp-bootloader-esp-idf = { version = "0.5.0", default-features = false, optional = true }
-esp-hal = { version = "=1.0.0-rc.0", optional = true }
-esp-hal-embassy = { version = "0.9.1", optional = true }
-esp-println = { version = "0.17.0", default-features = false, optional = true }
-esp-rom-sys = { version = "0.1.4", optional = true }
-esp-wifi = { version = "0.15.1", default-features = false, features = ["builtin-scheduler", "wifi"], optional = true }
+esp-alloc = { git = "https://github.com/esp-rs/esp-hal.git", rev = "5e055e4977e6ed85c70a9700f6b3000d2e09a59f", optional = true }
+esp-backtrace = { git = "https://github.com/esp-rs/esp-hal.git", rev = "5e055e4977e6ed85c70a9700f6b3000d2e09a59f", optional = true }
+esp-bootloader-esp-idf = { git = "https://github.com/esp-rs/esp-hal.git", rev = "5e055e4977e6ed85c70a9700f6b3000d2e09a59f", default-features = false, optional = true }
+esp-hal = { git = "https://github.com/esp-rs/esp-hal.git", rev = "5e055e4977e6ed85c70a9700f6b3000d2e09a59f", optional = true }
+esp-rtos = { git = "https://github.com/esp-rs/esp-hal.git", rev = "5e055e4977e6ed85c70a9700f6b3000d2e09a59f", features = ["embassy", "esp-alloc", "esp-radio"], optional = true }
+esp-println = { git = "https://github.com/esp-rs/esp-hal.git", rev = "5e055e4977e6ed85c70a9700f6b3000d2e09a59f", default-features = false, optional = true }
+esp-rom-sys = { git = "https://github.com/esp-rs/esp-hal.git", rev = "5e055e4977e6ed85c70a9700f6b3000d2e09a59f", optional = true }
+esp-storage = { git = "https://github.com/esp-rs/esp-hal.git", rev = "5e055e4977e6ed85c70a9700f6b3000d2e09a59f", default-features = false, features = ["critical-section"], optional = true }
+esp-radio = { git = "https://github.com/esp-rs/esp-hal.git", rev = "5e055e4977e6ed85c70a9700f6b3000d2e09a59f", default-features = false, features = ["esp-alloc", "wifi"], optional = true }
 hmac = { version = "0.12", default-features = false }
 lora-phy = "3.0.1"
 mcrs-protocol = { path = "../protocol" }

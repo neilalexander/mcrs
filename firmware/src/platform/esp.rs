@@ -1,16 +1,12 @@
 use core::{
-    alloc::{GlobalAlloc, Layout},
     cell::{Cell, RefCell},
     fmt,
     hint::spin_loop,
-    mem::MaybeUninit,
-    ptr,
 };
 
 use alloc::vec;
 use critical_section::Mutex;
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use embedded_alloc::LlffHeap as Heap;
 use embedded_hal::delay::DelayNs as BlockingDelayNs;
 use embedded_hal_async::delay::DelayNs;
 use esp_bootloader_esp_idf::{
@@ -20,30 +16,25 @@ use esp_bootloader_esp_idf::{
 use esp_hal::{clock::CpuClock, peripherals::Peripherals, rtc_cntl::Rtc, time::Instant};
 use esp_println::{print, println};
 
+use esp_alloc as _;
 use esp_backtrace as _;
 
-// esp-hal 1.0.0-rc.0's linker script keeps the ESP-IDF app descriptor in
-// .rodata_desc. esp-bootloader-esp-idf 0.5 emits .flash.appdesc by default,
-// which the bootloader can miss and then misread unrelated bytes as metadata.
-#[unsafe(export_name = "esp_app_desc")]
-#[unsafe(link_section = ".rodata_desc")]
-#[used]
-pub static ESP_APP_DESC: esp_bootloader_esp_idf::EspAppDesc =
-    esp_bootloader_esp_idf::EspAppDesc::new_internal(
-        env!("MESHCORE_FIRMWARE_VERSION"),
-        env!("CARGO_PKG_NAME"),
-        esp_bootloader_esp_idf::BUILD_TIME,
-        esp_bootloader_esp_idf::BUILD_DATE,
-        esp_bootloader_esp_idf::ESP_IDF_COMPATIBLE_VERSION,
-        0,
-        u16::MAX,
-        esp_bootloader_esp_idf::MMU_PAGE_SIZE,
-        esp_bootloader_esp_idf::SECURE_VERSION,
-    );
+// The current linker script places this descriptor at the fixed ESP-IDF image
+// offset through `.flash.appdesc`. Keep the generated firmware version while
+// using the bootloader crate's canonical layout and section.
+esp_bootloader_esp_idf::esp_app_desc!(
+    env!("MESHCORE_FIRMWARE_VERSION"),
+    env!("CARGO_PKG_NAME"),
+    esp_bootloader_esp_idf::BUILD_TIME,
+    esp_bootloader_esp_idf::BUILD_DATE,
+    esp_bootloader_esp_idf::ESP_IDF_COMPATIBLE_VERSION,
+    esp_bootloader_esp_idf::MMU_PAGE_SIZE,
+    0,
+    u16::MAX,
+    esp_bootloader_esp_idf::SECURE_VERSION
+);
 
 const HEAP_SIZE: usize = crate::board::MEMORY_PROFILE.heap_size;
-const WIFI_ALLOC_HEADER_SIZE: usize = core::mem::size_of::<usize>();
-const WIFI_ALLOC_ALIGN: usize = core::mem::align_of::<usize>();
 const FLASH_SECTOR_SIZE: usize = 4096;
 const OTA_WRITE_WORDS: usize = 256;
 const ESP_IMAGE_MAGIC: u8 = 0xe9;
@@ -62,9 +53,6 @@ const WALL_CLOCK_RTC_CHECK: u32 = 0xa5a5_5a5a;
 static WALL_CLOCK_OFFSET_SECONDS: Mutex<Cell<u32>> = Mutex::new(Cell::new(0));
 static RTC_CLOCK: Mutex<RefCell<Option<Rtc<'static>>>> = Mutex::new(RefCell::new(None));
 
-#[global_allocator]
-static HEAP: Heap = Heap::empty();
-
 pub struct Platform {
     pub peripherals: Peripherals,
 }
@@ -82,7 +70,7 @@ pub fn init() -> Platform {
 }
 
 pub fn init_storage(layout: crate::platform::storage::Layout) -> EspStorage {
-    let mut flash = RomFlash;
+    let mut flash = bootloader_flash();
     let mut partition_table = [0u8; esp_bootloader_esp_idf::partitions::PARTITION_TABLE_MAX_LEN];
     let inner =
         esp_bootloader_esp_idf::partitions::read_partition_table(&mut flash, &mut partition_table)
@@ -125,7 +113,7 @@ pub fn init_storage(layout: crate::platform::storage::Layout) -> EspStorage {
 }
 
 pub fn ota_status() -> OtaStatus {
-    let mut flash = RomFlash;
+    let mut flash = bootloader_flash();
     let mut partition_table = [0u8; esp_bootloader_esp_idf::partitions::PARTITION_TABLE_MAX_LEN];
     let Ok(mut updater) = OtaUpdater::new(&mut flash, &mut partition_table) else {
         return OtaStatus {
@@ -154,7 +142,7 @@ pub fn ota_status() -> OtaStatus {
 }
 
 pub fn begin_ota_update() -> Result<OtaUpdate, OtaError> {
-    let mut flash = RomFlash;
+    let mut flash = bootloader_flash();
     let mut partition_table = [0u8; esp_bootloader_esp_idf::partitions::PARTITION_TABLE_MAX_LEN];
     let mut updater =
         OtaUpdater::new(&mut flash, &mut partition_table).map_err(|_| OtaError::NotAvailable)?;
@@ -187,7 +175,7 @@ pub fn write_ota_update(update: &mut OtaUpdate, data: &[u8]) -> Result<(), OtaEr
 
 pub fn finish_ota_update(mut update: OtaUpdate) -> Result<(), OtaError> {
     update.finish()?;
-    let mut flash = RomFlash;
+    let mut flash = bootloader_flash();
     let mut partition_table = [0u8; esp_bootloader_esp_idf::partitions::PARTITION_TABLE_MAX_LEN];
     let mut updater =
         OtaUpdater::new(&mut flash, &mut partition_table).map_err(|_| OtaError::NotAvailable)?;
@@ -527,66 +515,12 @@ impl RecordHeader {
     }
 }
 
-struct RomFlash;
-
-impl embedded_storage::ReadStorage for RomFlash {
-    type Error = crate::platform::storage::Error;
-
-    fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
-        read_flash(offset, bytes)
-    }
-
-    fn capacity(&self) -> usize {
-        usize::MAX
-    }
+fn bootloader_flash() -> esp_storage::FlashStorage<'static> {
+    // The application owns the flash peripheral for its entire lifetime. These
+    // short-lived handles serialize access through esp-storage's critical
+    // section and preserve the existing partition/storage format.
+    esp_storage::FlashStorage::new(unsafe { esp_hal::peripherals::FLASH::steal() })
 }
-
-impl embedded_storage::Storage for RomFlash {
-    fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
-        let padded_len = align_up(bytes.len(), 4);
-        let mut words = vec![u32::MAX; padded_len / 4];
-        words_as_bytes_mut(&mut words)[..bytes.len()].copy_from_slice(bytes);
-        erase_flash_range(offset, padded_len)?;
-        write_flash_words(offset, &words)
-    }
-}
-
-impl embedded_storage::nor_flash::ErrorType for RomFlash {
-    type Error = crate::platform::storage::Error;
-}
-
-impl embedded_storage::nor_flash::ReadNorFlash for RomFlash {
-    const READ_SIZE: usize = 1;
-
-    fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
-        read_flash(offset, bytes)
-    }
-
-    fn capacity(&self) -> usize {
-        8 * 1024 * 1024
-    }
-}
-
-impl embedded_storage::nor_flash::NorFlash for RomFlash {
-    const WRITE_SIZE: usize = 4;
-    const ERASE_SIZE: usize = FLASH_SECTOR_SIZE;
-
-    fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> {
-        if from > to {
-            return Err(crate::platform::storage::Error::Corrupt);
-        }
-        erase_flash_range(from, to.saturating_sub(from) as usize)
-    }
-
-    fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
-        if !bytes.len().is_multiple_of(4) {
-            return Err(crate::platform::storage::Error::BufferTooSmall);
-        }
-        write_ota_aligned(offset, bytes)
-    }
-}
-
-impl embedded_storage::nor_flash::MultiwriteNorFlash for RomFlash {}
 
 fn validate_key(key: &str) -> Result<(), crate::platform::storage::Error> {
     if key.is_empty() || key.len() > STORAGE_MAX_KEY_LEN {
@@ -698,7 +632,7 @@ fn erase_flash_sector(offset: u32) -> Result<(), crate::platform::storage::Error
 }
 
 fn find_app_partition(slot: AppPartitionSubType) -> Option<(u32, usize)> {
-    let mut flash = RomFlash;
+    let mut flash = bootloader_flash();
     let mut partition_table = [0u8; esp_bootloader_esp_idf::partitions::PARTITION_TABLE_MAX_LEN];
     let table =
         esp_bootloader_esp_idf::partitions::read_partition_table(&mut flash, &mut partition_table)
@@ -837,7 +771,7 @@ pub extern "Rust" fn panic_reboot() -> ! {
 fn init_rtc_clock() {
     // The board code does not use LPWR directly. We keep one platform-owned RTC
     // handle so wall-clock time can be derived from RTC elapsed time.
-    let rtc = Rtc::new(unsafe { esp_hal::peripherals::LPWR::steal() });
+    let rtc = Rtc::new(unsafe { esp_hal::peripherals::RTC_TIMER::steal() });
     critical_section::with(|cs| {
         RTC_CLOCK.borrow_ref_mut(cs).replace(rtc);
     });
@@ -865,7 +799,7 @@ fn rtc_elapsed_seconds() -> Option<u32> {
     critical_section::with(|cs| {
         let rtc = RTC_CLOCK.borrow_ref(cs);
         let rtc = rtc.as_ref()?;
-        Some((rtc.time_since_boot().as_micros() / 1_000_000).min(u64::from(u32::MAX)) as u32)
+        Some((rtc.time_since_power_up().as_micros() / 1_000_000).min(u64::from(u32::MAX)) as u32)
     })
 }
 
@@ -925,55 +859,7 @@ pub fn battery_millivolts() -> Option<u16> {
 }
 
 fn init_heap() {
-    static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
-
-    // SAFETY: The heap backing storage is static and initialized exactly once
-    // before board initialization can allocate.
-    unsafe {
-        #[allow(static_mut_refs)]
-        HEAP.init(HEAP_MEM.as_ptr() as usize, HEAP_SIZE);
-    }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn esp_wifi_free_internal_heap() -> usize {
-    HEAP.free()
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn esp_wifi_allocate_from_internal_ram(size: usize) -> *mut u8 {
-    let Some(total_size) = size.checked_add(WIFI_ALLOC_HEADER_SIZE) else {
-        return ptr::null_mut();
-    };
-    let Ok(layout) = Layout::from_size_align(total_size, WIFI_ALLOC_ALIGN) else {
-        return ptr::null_mut();
-    };
-
-    let allocation = unsafe { GlobalAlloc::alloc(&HEAP, layout) };
-    if allocation.is_null() {
-        return allocation;
-    }
-
-    unsafe {
-        (allocation as *mut usize).write(total_size);
-        allocation.add(WIFI_ALLOC_HEADER_SIZE)
-    }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn esp_wifi_deallocate_internal_ram(ptr: *mut u8) {
-    if ptr.is_null() {
-        return;
-    }
-
-    unsafe {
-        let allocation = ptr.sub(WIFI_ALLOC_HEADER_SIZE);
-        let total_size = (allocation as *const usize).read();
-        let Ok(layout) = Layout::from_size_align(total_size, WIFI_ALLOC_ALIGN) else {
-            return;
-        };
-        GlobalAlloc::dealloc(&HEAP, allocation, layout);
-    }
+    esp_alloc::heap_allocator!(size: HEAP_SIZE);
 }
 
 pub fn log_starting() {
