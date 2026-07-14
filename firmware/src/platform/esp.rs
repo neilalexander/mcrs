@@ -72,7 +72,7 @@ pub struct Platform {
 pub fn init() -> Platform {
     init_heap();
 
-    let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
+    let config = esp_hal::Config::default().with_cpu_clock(CpuClock::_80MHz);
     let peripherals = esp_hal::init(config);
     init_rtc_clock();
 
