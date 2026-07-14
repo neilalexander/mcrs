@@ -193,8 +193,20 @@ impl Packet {
     }
 
     pub fn dedup_signature(&self) -> Result<[u8; 8]> {
+        if self.route_type.has_transport_codes() && self.transport_codes.is_none() {
+            return Err(Error::MissingTransportCodes);
+        }
+        if !self.route_type.has_transport_codes() && self.transport_codes.is_some() {
+            return Err(Error::UnexpectedTransportCodes);
+        }
+
         let mut hasher = Sha256::new();
         hasher.update([self.payload.kind().to_nibble()]);
+        hasher.update([self.route_type.to_bits()]);
+        if let Some(codes) = self.transport_codes {
+            hasher.update(codes.primary.to_le_bytes());
+            hasher.update(codes.secondary.to_le_bytes());
+        }
         if self.payload.kind() == PayloadKind::Trace {
             let RoutePath::Trace(path) = &self.path else {
                 return Err(Error::PathKindMismatch);

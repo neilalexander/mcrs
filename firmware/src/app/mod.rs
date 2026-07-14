@@ -1042,20 +1042,13 @@ async fn prepare_forward(
         return ForwardDecision::Drop("unsupported payload kind");
     }
 
-    let signature = match packet.dedup_signature() {
-        Ok(signature) => signature,
-        Err(_) => return ForwardDecision::Drop("dedup signature failed"),
-    };
-
     match packet.payload.kind() {
-        PayloadKind::Trace => {
-            prepare_trace_forward(context, packet, signature, snr_quarters, node_hash)
-        }
+        PayloadKind::Trace => prepare_trace_forward(context, packet, snr_quarters, node_hash),
         _ if packet.route_type.is_flood() => {
-            prepare_flood_forward(context, packet, signature, node_hash).await
+            prepare_flood_forward(context, packet, node_hash).await
         }
         _ if packet.route_type.is_direct() => {
-            prepare_direct_forward(context, packet, signature, node_hash).await
+            prepare_direct_forward(context, packet, node_hash).await
         }
         _ => ForwardDecision::Drop("unknown route"),
     }
@@ -1064,7 +1057,6 @@ async fn prepare_forward(
 async fn prepare_flood_forward(
     context: &AppContext<impl crate::platform::storage::Storage>,
     mut packet: Packet,
-    signature: [u8; 8],
     node_hash: &[u8],
 ) -> ForwardDecision {
     if !matches!(
@@ -1126,6 +1118,12 @@ async fn prepare_flood_forward(
         return ForwardDecision::DoNotForward;
     }
 
+    // Capture changes the flood routing namespace. Derive the signature only after
+    // that transformation so scoped and unscoped copies deduplicate independently.
+    let signature = match packet.dedup_signature() {
+        Ok(signature) => signature,
+        Err(_) => return ForwardDecision::Drop("dedup signature failed"),
+    };
     if !context.mark_seen(signature) {
         return ForwardDecision::Drop("duplicate");
     }
@@ -1144,7 +1142,6 @@ async fn prepare_flood_forward(
 async fn prepare_direct_forward(
     context: &AppContext<impl crate::platform::storage::Storage>,
     mut packet: Packet,
-    signature: [u8; 8],
     node_hash: &[u8],
 ) -> ForwardDecision {
     if !matches!(
@@ -1161,6 +1158,10 @@ async fn prepare_direct_forward(
         return ForwardDecision::DoNotForward;
     }
 
+    let signature = match packet.dedup_signature() {
+        Ok(signature) => signature,
+        Err(_) => return ForwardDecision::Drop("dedup signature failed"),
+    };
     match packet.consume_direct_hop(node_hash) {
         Ok(true) => {
             if !context.mark_seen(signature) {
@@ -1176,7 +1177,6 @@ async fn prepare_direct_forward(
 fn prepare_trace_forward(
     context: &AppContext<impl crate::platform::storage::Storage>,
     mut packet: Packet,
-    signature: [u8; 8],
     snr_quarters: i16,
     node_hash: &[u8],
 ) -> ForwardDecision {
@@ -1197,6 +1197,10 @@ fn prepare_trace_forward(
         Err(_) => return ForwardDecision::Drop("trace next-hop check failed"),
     }
 
+    let signature = match packet.dedup_signature() {
+        Ok(signature) => signature,
+        Err(_) => return ForwardDecision::Drop("dedup signature failed"),
+    };
     if !context.mark_seen(signature) {
         return ForwardDecision::Drop("duplicate");
     }

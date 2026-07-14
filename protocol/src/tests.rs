@@ -309,6 +309,38 @@ fn dedup_signature_uses_trace_path_length() {
 }
 
 #[test]
+fn dedup_signature_distinguishes_route_and_transport_scope() {
+    let payload = Payload::RawCustom(vec![1, 2, 3]);
+    let unscoped = Packet {
+        route_type: RouteType::Flood,
+        transport_codes: None,
+        path: RoutePath::Normal(Path::empty()),
+        payload: payload.clone(),
+    };
+    let scoped_a = Packet {
+        route_type: RouteType::TransportFlood,
+        transport_codes: Some(TransportCodes::new(0x1234)),
+        path: RoutePath::Normal(Path::empty()),
+        payload: payload.clone(),
+    };
+    let scoped_b = Packet {
+        route_type: RouteType::TransportFlood,
+        transport_codes: Some(TransportCodes::new(0x5678)),
+        path: RoutePath::Normal(Path::empty()),
+        payload,
+    };
+
+    assert_ne!(
+        unscoped.dedup_signature().unwrap(),
+        scoped_a.dedup_signature().unwrap()
+    );
+    assert_ne!(
+        scoped_a.dedup_signature().unwrap(),
+        scoped_b.dedup_signature().unwrap()
+    );
+}
+
+#[test]
 fn seen_packet_cache_suppresses_until_ttl_expires() {
     let mut cache = SeenPacketCache::new(5);
     let now = 10;
