@@ -2,14 +2,12 @@ use esp_hal::{
     analog::adc::{Adc, AdcCalCurve, AdcConfig, Attenuation},
     gpio::{Flex, Input, InputConfig, Level, Output, OutputConfig, Pull},
     i2c::master::{Config as I2cConfig, I2c},
-    interrupt::software::SoftwareInterruptControl,
     rng::Rng,
     spi::{
         Mode,
         master::{Config as SpiConfig, Spi},
     },
     time::Rate,
-    timer::timg::TimerGroup,
 };
 
 use embedded_hal_async::delay::DelayNs as _;
@@ -120,13 +118,10 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
 }
 
 async fn init(platform: crate::platform::Platform) -> ! {
-    let timg0 = TimerGroup::new(platform.peripherals.TIMG0);
-    let software_interrupt = SoftwareInterruptControl::new(platform.peripherals.SW_INTERRUPT);
-    let sleep = esp_rtos::sleep::configure(platform.peripherals.LPWR);
-    esp_rtos::start_with_idle_hook(
-        timg0.timer0,
-        software_interrupt.software_interrupt0,
-        sleep.light_sleep_hook,
+    crate::platform::start_executor_with_light_sleep(
+        platform.peripherals.TIMG0,
+        platform.peripherals.SW_INTERRUPT,
+        platform.peripherals.LPWR,
     );
 
     let spi = match Spi::new(
@@ -173,7 +168,7 @@ async fn init(platform: crate::platform::Platform) -> ! {
         }
     };
 
-    let prg_button = heltec::SleepWakeInput::new(Input::new(
+    let prg_button = heltec::LightSleepInput::new(Input::new(
         platform.peripherals.GPIO0,
         InputConfig::default().with_pull(Pull::Up),
     ));
@@ -219,23 +214,21 @@ async fn init(platform: crate::platform::Platform) -> ! {
         spi,
         cs: Output::new(platform.peripherals.GPIO8, Level::High, output_config),
         reset: Output::new(platform.peripherals.GPIO12, Level::High, output_config),
-        dio1: heltec::SleepWakeInput::new(Input::new(platform.peripherals.GPIO14, input_config)),
-        busy: heltec::SleepWakeInput::new(Input::new(platform.peripherals.GPIO13, input_config)),
+        dio1: heltec::LightSleepInput::new(Input::new(platform.peripherals.GPIO14, input_config)),
+        busy: heltec::LightSleepInput::new(Input::new(platform.peripherals.GPIO13, input_config)),
         board_config: crate::modules::sx1262::BoardConfig::heltec_v4(),
         frontend: radio_frontend,
     };
 
-    let cli_serial = Some(heltec::CliResources {
+    let cli_serial = heltec::CliResources {
         uart: platform.peripherals.UART0,
         rx: platform.peripherals.GPIO44,
         tx: platform.peripherals.GPIO43,
-    });
+    };
 
     let mut rng = Rng::new();
     let identity_seed = heltec::generate_identity_seed(&mut rng);
-    let wifi = heltec::WifiResources {
-        wifi: platform.peripherals.WIFI,
-    };
+    let wifi = platform.peripherals.WIFI;
 
     let mut storage = crate::platform::init_storage(crate::board::STORAGE_LAYOUT);
     let defaults = crate::app::config::AppConfig::generated_defaults(identity_seed);

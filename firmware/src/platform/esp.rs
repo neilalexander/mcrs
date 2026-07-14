@@ -69,6 +69,22 @@ pub fn init() -> Platform {
     Platform { peripherals }
 }
 
+pub fn start_executor_with_light_sleep(
+    timg0: esp_hal::peripherals::TIMG0<'static>,
+    software_interrupt: esp_hal::peripherals::SW_INTERRUPT<'static>,
+    lpwr: esp_hal::peripherals::LPWR<'static>,
+) {
+    let timg0 = esp_hal::timer::timg::TimerGroup::new(timg0);
+    let software_interrupt =
+        esp_hal::interrupt::software::SoftwareInterruptControl::new(software_interrupt);
+    let sleep = esp_rtos::sleep::configure(lpwr);
+    esp_rtos::start_with_idle_hook(
+        timg0.timer0,
+        software_interrupt.software_interrupt0,
+        sleep.light_sleep_hook,
+    );
+}
+
 pub fn init_storage(layout: crate::platform::storage::Layout) -> EspStorage {
     let mut flash = bootloader_flash();
     let mut partition_table = [0u8; esp_bootloader_esp_idf::partitions::PARTITION_TABLE_MAX_LEN];

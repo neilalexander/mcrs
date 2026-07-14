@@ -23,8 +23,8 @@ use static_cell::StaticCell;
 
 pub type RadioSpi = Spi<'static, Blocking>;
 pub type RadioOutput = Output<'static>;
-pub type RadioIrqInput = SleepWakeInput<'static>;
-pub type ButtonInput = SleepWakeInput<'static>;
+pub type RadioIrqInput = LightSleepInput<'static>;
+pub type ButtonInput = LightSleepInput<'static>;
 pub type BatteryAdc = Adc<'static, ADC1<'static>, Blocking>;
 pub type BatterySensePin = AdcPin<GPIO1<'static>, ADC1<'static>, AdcCalCurve<ADC1<'static>>>;
 
@@ -76,11 +76,11 @@ pub struct RadioResources<F> {
 
 /// GPIO input whose pending waits permit automatic light sleep and wake the
 /// CPU using the ESP32's level-triggered GPIO wake source.
-pub struct SleepWakeInput<'d> {
+pub struct LightSleepInput<'d> {
     inner: Input<'d>,
 }
 
-impl<'d> SleepWakeInput<'d> {
+impl<'d> LightSleepInput<'d> {
     pub fn new(inner: Input<'d>) -> Self {
         Self { inner }
     }
@@ -91,13 +91,24 @@ impl<'d> SleepWakeInput<'d> {
             .await
             .expect("level-triggered GPIO wake must be supported");
     }
+
+    async fn wait_for_opposite_level(&mut self) {
+        let event = if embedded_hal::digital::InputPin::is_high(&mut self.inner)
+            .expect("ESP GPIO input is infallible")
+        {
+            Event::LowLevel
+        } else {
+            Event::HighLevel
+        };
+        self.wait_for_level(event).await;
+    }
 }
 
-impl embedded_hal::digital::ErrorType for SleepWakeInput<'_> {
+impl embedded_hal::digital::ErrorType for LightSleepInput<'_> {
     type Error = core::convert::Infallible;
 }
 
-impl embedded_hal::digital::InputPin for SleepWakeInput<'_> {
+impl embedded_hal::digital::InputPin for LightSleepInput<'_> {
     fn is_high(&mut self) -> Result<bool, Self::Error> {
         embedded_hal::digital::InputPin::is_high(&mut self.inner)
     }
@@ -107,7 +118,7 @@ impl embedded_hal::digital::InputPin for SleepWakeInput<'_> {
     }
 }
 
-impl embedded_hal_async::digital::Wait for SleepWakeInput<'_> {
+impl embedded_hal_async::digital::Wait for LightSleepInput<'_> {
     async fn wait_for_high(&mut self) -> Result<(), Self::Error> {
         self.wait_for_level(Event::HighLevel).await;
         Ok(())
@@ -120,29 +131,22 @@ impl embedded_hal_async::digital::Wait for SleepWakeInput<'_> {
 
     async fn wait_for_rising_edge(&mut self) -> Result<(), Self::Error> {
         if embedded_hal::digital::InputPin::is_high(self)? {
-            self.wait_for_low().await?;
+            self.wait_for_opposite_level().await;
         }
         self.wait_for_high().await
     }
 
     async fn wait_for_falling_edge(&mut self) -> Result<(), Self::Error> {
         if embedded_hal::digital::InputPin::is_low(self)? {
-            self.wait_for_high().await?;
+            self.wait_for_opposite_level().await;
         }
         self.wait_for_low().await
     }
 
     async fn wait_for_any_edge(&mut self) -> Result<(), Self::Error> {
-        if embedded_hal::digital::InputPin::is_high(self)? {
-            self.wait_for_low().await
-        } else {
-            self.wait_for_high().await
-        }
+        self.wait_for_opposite_level().await;
+        Ok(())
     }
-}
-
-pub struct WifiResources {
-    pub wifi: WIFI<'static>,
 }
 
 pub struct CliResources {
@@ -447,8 +451,8 @@ pub async fn run_board_tasks<I2C, RESET, POWER, FRONTEND>(
     prg_button: ButtonInput,
     battery: BatteryMonitor,
     radio: RadioResources<FRONTEND>,
-    mut cli_serial: Option<CliResources>,
-    wifi: WifiResources,
+    mut cli_serial: CliResources,
+    wifi: WIFI<'static>,
     context: crate::app::AppContext<crate::platform::EspStorage>,
 ) -> !
 where
@@ -507,19 +511,15 @@ where
 }
 
 async fn wifi_task(
-    mut wifi: WifiResources,
+    mut wifi: WIFI<'static>,
     context: &crate::app::AppContext<crate::platform::EspStorage>,
 ) -> ! {
-    if context
-        .with_config(|config| config.wifi().ssid().is_empty())
-        .await
-    {
+    let Some(config) = station_wifi_config(context).await else {
         run_ota_ap_mode(&mut wifi, context).await
-    }
+    };
 
-    let config = station_wifi_config(context).await;
     let controller = match WifiController::new(
-        wifi.wifi,
+        wifi,
         ControllerConfig::default().with_initial_config(config),
     ) {
         Ok(controller) => controller,
@@ -533,7 +533,7 @@ async fn wifi_task(
 }
 
 async fn run_ota_ap_mode(
-    wifi: &mut WifiResources,
+    wifi: &mut WIFI<'static>,
     context: &crate::app::AppContext<crate::platform::EspStorage>,
 ) -> ! {
     let mut stack_resources = embassy_net::StackResources::<4>::new();
@@ -545,7 +545,7 @@ async fn run_ota_ap_mode(
             let config =
                 WifiConfig::AccessPoint(AccessPointConfig::default().with_ssid(ssid.as_str()));
             let controller = match WifiController::new(
-                wifi.wifi.reborrow(),
+                wifi.reborrow(),
                 ControllerConfig::default().with_initial_config(config),
             ) {
                 Ok(controller) => controller,
@@ -559,22 +559,16 @@ async fn run_ota_ap_mode(
                 }
             };
 
-            run_ota_ap_session(
-                controller,
-                WifiInterface::access_point(),
-                &mut stack_resources,
-                context,
-            )
-            .await;
+            run_ota_ap_session(WifiInterface::access_point(), &mut stack_resources, context).await;
             // Dropping the esp-radio controller fully stops and deinitializes
             // the adapter, releasing its automatic-light-sleep wake lock.
+            drop(controller);
         }
         crate::platform::log_fmt(format_args!("OTA: Wi-Fi adapter shut down"));
     }
 }
 
-async fn run_ota_ap_session<'a>(
-    _controller: WifiController<'a>,
+async fn run_ota_ap_session(
     device: WifiInterface,
     stack_resources: &mut embassy_net::StackResources<4>,
     context: &crate::app::AppContext<crate::platform::EspStorage>,
@@ -641,15 +635,11 @@ async fn run_ota_station_mode<'a>(
     let mut runner = pin!(runner.run());
     let mut worker = pin!(async {
         loop {
-            let wifi = context.with_config(|config| config.wifi().clone()).await;
-            let ssid = String::from(wifi.ssid());
-            let password = String::from(wifi.password());
-            if ssid.is_empty() {
+            let Some(config) = station_wifi_config(context).await else {
                 crate::platform::log_fmt(format_args!("Wi-Fi: configure wifi.ssid"));
                 embassy_time::Timer::after_secs(30).await;
                 continue;
-            }
-            let config = station_config(&ssid, &password);
+            };
             if controller.set_config(&config).is_err() || controller.connect_async().await.is_err()
             {
                 crate::platform::log_fmt(format_args!("Wi-Fi: station connection failed"));
@@ -885,12 +875,12 @@ fn station_config(ssid: &str, password: &str) -> WifiConfig {
     )
 }
 
-async fn station_wifi_config<S>(context: &crate::app::AppContext<S>) -> WifiConfig
+async fn station_wifi_config<S>(context: &crate::app::AppContext<S>) -> Option<WifiConfig>
 where
     S: crate::platform::storage::Storage,
 {
     let wifi = context.with_config(|config| config.wifi().clone()).await;
-    station_config(wifi.ssid(), wifi.password())
+    (!wifi.ssid().is_empty()).then(|| station_config(wifi.ssid(), wifi.password()))
 }
 
 async fn ota_ssid<S>(context: &crate::app::AppContext<S>) -> String
@@ -1167,21 +1157,16 @@ where
 }
 
 async fn cli_task(
-    serial: &mut Option<CliResources>,
+    resources: &mut CliResources,
     cli: &mut crate::app::cli::Cli,
     context: &crate::app::AppContext<crate::platform::EspStorage>,
 ) -> ! {
     loop {
-        let Some(resources) = serial else {
-            core::future::pending::<()>().await;
-            continue;
-        };
-
         // UART RX holds a wake lock for the lifetime of the driver. Treat the
         // first start bit as a GPIO wake request, then keep UART active while
         // commands are arriving. The wake byte itself may be incomplete, so a
         // terminal may need one initial Enter before the first command.
-        let mut wake = SleepWakeInput::new(Input::new(
+        let mut wake = LightSleepInput::new(Input::new(
             resources.rx.reborrow(),
             InputConfig::default().with_pull(Pull::Up),
         ));
