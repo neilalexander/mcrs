@@ -1,4 +1,4 @@
-use mcrs_protocol::PUB_KEY_SIZE;
+use mcrs_protocol::{PUB_KEY_SIZE, Path};
 
 pub(crate) const MAX_REMOTE_LOGINS: usize = 4;
 pub(crate) const MAX_REMOTE_SESSIONS: usize = MAX_REMOTE_LOGINS * 2;
@@ -6,19 +6,21 @@ const REMOTE_LOGIN_TTL_MS: u64 = 10 * 60 * 1000;
 
 type RemoteLoginEntries = [Option<RemoteLogin>; MAX_REMOTE_LOGINS];
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct RemoteLogin {
     public_key: [u8; PUB_KEY_SIZE],
     shared_secret: [u8; 32],
     last_seen_ms: u64,
     last_timestamp: u32,
+    reply_path: Path,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct RemoteSession {
     pub public_key: [u8; PUB_KEY_SIZE],
     pub shared_secret: [u8; 32],
     pub privilege: RemotePrivilege,
+    pub reply_path: Path,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,8 +37,8 @@ pub struct RemoteLoginTable {
 impl RemoteLoginTable {
     pub const fn new() -> Self {
         Self {
-            admin_entries: [None; MAX_REMOTE_LOGINS],
-            guest_entries: [None; MAX_REMOTE_LOGINS],
+            admin_entries: [const { None }; MAX_REMOTE_LOGINS],
+            guest_entries: [const { None }; MAX_REMOTE_LOGINS],
         }
     }
 
@@ -47,6 +49,7 @@ impl RemoteLoginTable {
         privilege: RemotePrivilege,
         last_timestamp: u32,
         now_ms: u64,
+        reply_path: &Path,
     ) {
         self.prune(now_ms);
 
@@ -55,6 +58,7 @@ impl RemoteLoginTable {
             login.shared_secret = *shared_secret;
             login.last_seen_ms = now_ms;
             login.last_timestamp = last_timestamp;
+            login.reply_path = reply_path.clone();
             return;
         }
 
@@ -64,6 +68,7 @@ impl RemoteLoginTable {
             shared_secret: *shared_secret,
             last_seen_ms: now_ms,
             last_timestamp,
+            reply_path: reply_path.clone(),
         });
     }
 
@@ -94,7 +99,7 @@ impl RemoteLoginTable {
     ) -> [Option<RemoteSession>; MAX_REMOTE_SESSIONS] {
         self.prune(now_ms);
 
-        let mut out = [None; MAX_REMOTE_SESSIONS];
+        let mut out = core::array::from_fn(|_| None);
         let mut index = 0;
         append_matching_sessions(
             &mut out,
@@ -152,6 +157,7 @@ impl RemoteLoginTable {
 fn prune_entries(entries: &mut RemoteLoginEntries, now_ms: u64) {
     for entry in entries {
         if entry
+            .as_ref()
             .is_some_and(|login| now_ms.saturating_sub(login.last_seen_ms) > REMOTE_LOGIN_TTL_MS)
         {
             *entry = None;
@@ -185,6 +191,7 @@ fn append_matching_sessions(
             public_key: login.public_key,
             shared_secret: login.shared_secret,
             privilege,
+            reply_path: login.reply_path.clone(),
         });
         *out_index += 1;
     }

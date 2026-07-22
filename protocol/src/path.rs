@@ -49,6 +49,17 @@ impl Path {
         self.bytes.chunks_exact(self.hash_size.size())
     }
 
+    pub fn reversed(&self) -> Self {
+        let mut bytes = Vec::with_capacity(self.bytes.len());
+        for hash in self.bytes.chunks_exact(self.hash_size.size()).rev() {
+            bytes.extend_from_slice(hash);
+        }
+        Self {
+            hash_size: self.hash_size,
+            bytes,
+        }
+    }
+
     pub fn first_hash(&self) -> Option<&[u8]> {
         self.hashes().next()
     }

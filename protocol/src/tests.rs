@@ -290,6 +290,13 @@ fn path_detects_hash_using_path_hash_size() {
 }
 
 #[test]
+fn path_reverses_whole_hashes() {
+    let path = Path::from_hashes(HashSize::Two, &[&[1, 2], &[3, 4], &[5, 6]]).unwrap();
+
+    assert_eq!(path.reversed().bytes(), &[5, 6, 3, 4, 1, 2]);
+}
+
+#[test]
 fn dedup_signature_uses_trace_path_length() {
     let mut packet = Packet {
         route_type: RouteType::Direct,

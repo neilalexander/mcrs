@@ -26,6 +26,7 @@ pub struct AuthenticatedPlaintext {
     pub sender_pubkey: [u8; 32],
     pub shared_secret: [u8; 32],
     pub privilege: super::remote::RemotePrivilege,
+    pub reply_path: Path,
     pub plaintext: Vec<u8>,
 }
 
@@ -88,6 +89,7 @@ pub fn decrypt_authenticated_direct_payload(
             sender_pubkey: session.public_key,
             shared_secret: session.shared_secret,
             privilege: session.privilege,
+            reply_path: session.reply_path.clone(),
             plaintext,
         });
     }
@@ -95,11 +97,12 @@ pub fn decrypt_authenticated_direct_payload(
     None
 }
 
-pub fn encode_zero_hop_login_response(
+pub fn encode_login_response(
     shared_secret: &[u8; 32],
     requester_public_key: &[u8; 32],
     responder_public_key: &[u8; 32],
     acl_permissions: u8,
+    reply_path: Path,
 ) -> Option<Vec<u8>> {
     let response = RepeaterLoginResponsePlaintext {
         server_timestamp: crate::platform::now_seconds(),
@@ -110,20 +113,22 @@ pub fn encode_zero_hop_login_response(
         firmware_version_level: 2,
     };
 
-    encode_zero_hop_response_plaintext(
+    encode_response_plaintext(
         shared_secret,
         requester_public_key,
         responder_public_key,
         &response.encode(),
+        reply_path,
     )
 }
 
-pub fn encode_zero_hop_cli_text_response(
+pub fn encode_cli_text_response(
     shared_secret: &[u8; 32],
     requester_public_key: &[u8; 32],
     responder_public_key: &[u8; 32],
     request_timestamp: u32,
     message: &[u8],
+    reply_path: Path,
 ) -> Option<Vec<u8>> {
     let mut timestamp = crate::platform::now_seconds();
     if timestamp == request_timestamp {
@@ -139,27 +144,30 @@ pub fn encode_zero_hop_cli_text_response(
     .encode()
     .ok()?;
 
-    encode_zero_hop_direct_payload(
+    encode_direct_payload(
         PayloadKindForEncoding::TextMessage,
         shared_secret,
         requester_public_key,
         responder_public_key,
         &plaintext,
+        reply_path,
     )
 }
 
-pub fn encode_zero_hop_response_plaintext(
+pub fn encode_response_plaintext(
     shared_secret: &[u8; 32],
     requester_public_key: &[u8; 32],
     responder_public_key: &[u8; 32],
     plaintext: &[u8],
+    reply_path: Path,
 ) -> Option<Vec<u8>> {
-    encode_zero_hop_direct_payload(
+    encode_direct_payload(
         PayloadKindForEncoding::Response,
         shared_secret,
         requester_public_key,
         responder_public_key,
         plaintext,
+        reply_path,
     )
 }
 
@@ -168,12 +176,13 @@ enum PayloadKindForEncoding {
     TextMessage,
 }
 
-fn encode_zero_hop_direct_payload(
+fn encode_direct_payload(
     kind: PayloadKindForEncoding,
     shared_secret: &[u8; 32],
     requester_public_key: &[u8; 32],
     responder_public_key: &[u8; 32],
     plaintext: &[u8],
+    reply_path: Path,
 ) -> Option<Vec<u8>> {
     let (mac, ciphertext) = encrypt_payload(shared_secret, plaintext)?;
     let payload = DirectEncryptedPayload {
@@ -186,7 +195,7 @@ fn encode_zero_hop_direct_payload(
     Packet {
         route_type: RouteType::Direct,
         transport_codes: None,
-        path: RoutePath::Normal(Path::empty()),
+        path: RoutePath::Normal(reply_path),
         payload: match kind {
             PayloadKindForEncoding::Response => Payload::Response(payload),
             PayloadKindForEncoding::TextMessage => Payload::TextMessage(payload),
