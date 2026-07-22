@@ -360,6 +360,16 @@ fn seen_packet_cache_drops_oldest_when_capacity_is_reached() {
 }
 
 #[test]
+fn seen_packet_cache_touch_restarts_ttl() {
+    let mut cache = SeenPacketCache::new(5);
+    assert!(cache.check_and_insert([1; 8], 10));
+    cache.touch([1; 8], 14);
+
+    assert!(cache.contains([1; 8], 19));
+    assert!(!cache.contains([1; 8], 20));
+}
+
+#[test]
 fn node_hash_is_public_key_prefix() {
     let mut public_key = [0; PUB_KEY_SIZE];
     public_key[0..5].copy_from_slice(&[1, 2, 3, 4, 5]);

@@ -60,6 +60,7 @@ where
     ota_generation: Cell<u32>,
     reboot_after_next_remote_reply: Cell<bool>,
     seen_packets: RefCell<SeenPacketCache>,
+    pending_forwards: RefCell<Vec<[u8; 8]>>,
     pending_discover: RefCell<Option<PendingDiscover>>,
     started_at_ms: u64,
     packets_received: AtomicU32,
@@ -97,6 +98,7 @@ where
                 SEEN_PACKET_TTL_MS,
                 memory.seen_packet_cache_len,
             )),
+            pending_forwards: RefCell::new(Vec::new()),
             pending_discover: RefCell::new(None),
             started_at_ms: crate::platform::now_millis(),
             packets_received: AtomicU32::new(0),
@@ -381,12 +383,39 @@ where
         delay_ms: u32,
         reboot_after_tx: bool,
     ) -> Result<(), OutboundError> {
+        self.enqueue_outbound_item(packet, delay_ms, reboot_after_tx, None)
+    }
+
+    fn enqueue_forward(
+        &self,
+        packet: Vec<u8>,
+        delay_ms: u32,
+        signature: [u8; 8],
+    ) -> Result<bool, OutboundError> {
+        if !self.reserve_forward(signature) {
+            return Ok(false);
+        }
+        if let Err(error) = self.enqueue_outbound_item(packet, delay_ms, false, Some(signature)) {
+            self.release_forward(signature, false);
+            return Err(error);
+        }
+        Ok(true)
+    }
+
+    fn enqueue_outbound_item(
+        &self,
+        packet: Vec<u8>,
+        delay_ms: u32,
+        reboot_after_tx: bool,
+        dedup_signature: Option<[u8; 8]>,
+    ) -> Result<(), OutboundError> {
         if self.outbound.len() >= self.memory.outbound_queue_len {
             return Err(OutboundError::QueueFull);
         }
         let queued = QueuedTransmit {
             eligible_at_ms: crate::platform::now_millis().saturating_add(delay_ms as u64),
             packet,
+            dedup_signature,
             reboot_after_tx,
         };
         self.outbound
@@ -443,10 +472,43 @@ where
         reboot
     }
 
-    fn mark_seen(&self, signature: [u8; 8]) -> bool {
+    fn is_seen_or_pending(&self, signature: [u8; 8]) -> bool {
+        if self.pending_forwards.borrow().contains(&signature) {
+            return true;
+        }
         self.seen_packets
             .borrow_mut()
-            .check_and_insert(signature, crate::platform::now_millis())
+            .contains(signature, crate::platform::now_millis())
+    }
+
+    fn reserve_forward(&self, signature: [u8; 8]) -> bool {
+        if self.is_seen_or_pending(signature) {
+            return false;
+        }
+        self.pending_forwards.borrow_mut().push(signature);
+        true
+    }
+
+    fn release_forward(&self, signature: [u8; 8], transmitted: bool) {
+        let index = self
+            .pending_forwards
+            .borrow()
+            .iter()
+            .position(|pending| *pending == signature);
+        if let Some(index) = index {
+            self.pending_forwards.borrow_mut().remove(index);
+        }
+        if transmitted {
+            self.seen_packets
+                .borrow_mut()
+                .touch(signature, crate::platform::now_millis());
+        }
+    }
+
+    fn finish_forward(&self, signature: Option<[u8; 8]>, transmitted: bool) {
+        if let Some(signature) = signature {
+            self.release_forward(signature, transmitted);
+        }
     }
 
     pub fn start_discover_neighbours(&self, tag: u32, now_ms: u64) {
@@ -537,6 +599,7 @@ struct PendingDiscover {
 struct QueuedTransmit {
     eligible_at_ms: u64,
     packet: Vec<u8>,
+    dedup_signature: Option<[u8; 8]>,
     reboot_after_tx: bool,
 }
 
@@ -826,16 +889,17 @@ async fn drain_eligible_outbound<R, S, D>(
         let Some(queued) = outbound.pop_eligible(crate::platform::now_millis()) else {
             return;
         };
-        mark_outbound_seen(context, &queued.packet);
         let region = context.outbound_region_label(&queued.packet).await;
         if transmit_when_clear(radio, &queued.packet, radio_config, delay)
             .await
             .is_err()
         {
+            context.finish_forward(queued.dedup_signature, false);
             context.record_packet_error();
             crate::platform::log_fmt(format_args!("Outbound packet: transmit failed"));
             return;
         }
+        context.finish_forward(queued.dedup_signature, true);
         context.record_packet_sent();
         let airtime_ms = radio_config.packet_airtime_ms(queued.packet.len());
         context.record_tx_airtime(airtime_ms);
@@ -881,22 +945,6 @@ async fn drain_eligible_outbound<R, S, D>(
             crate::platform::reboot();
         }
     }
-}
-
-fn mark_outbound_seen<S>(context: &AppContext<S>, packet: &[u8])
-where
-    S: crate::platform::storage::Storage,
-{
-    let Ok(packet) = Packet::decode(packet) else {
-        return;
-    };
-    if !packet.route_type.is_flood() {
-        return;
-    }
-    let Ok(signature) = packet.dedup_signature() else {
-        return;
-    };
-    context.mark_seen(signature);
 }
 
 async fn wait_for_read_or_eligible_outbound<R, S, D>(
@@ -1018,9 +1066,16 @@ async fn queue_repeater_packet<S>(
     }
 
     let encoded_len = encoded.len();
-    if context.enqueue_outbound_after(encoded, delay_ms).is_err() {
-        crate::platform::log_fmt(format_args!("Protocol repeater: outbound queue full"));
-        return;
+    match context.enqueue_forward(encoded, delay_ms, signature) {
+        Ok(true) => {}
+        Ok(false) => {
+            crate::platform::log_fmt(format_args!("Protocol repeater: drop: duplicate"));
+            return;
+        }
+        Err(OutboundError::QueueFull) => {
+            crate::platform::log_fmt(format_args!("Protocol repeater: outbound queue full"));
+            return;
+        }
     }
 
     crate::platform::log_fmt(format_args!(
@@ -1043,13 +1098,11 @@ async fn prepare_forward(
     }
 
     match packet.payload.kind() {
-        PayloadKind::Trace => prepare_trace_forward(context, packet, snr_quarters, node_hash),
+        PayloadKind::Trace => prepare_trace_forward(packet, snr_quarters, node_hash),
         _ if packet.route_type.is_flood() => {
             prepare_flood_forward(context, packet, node_hash).await
         }
-        _ if packet.route_type.is_direct() => {
-            prepare_direct_forward(context, packet, node_hash).await
-        }
+        _ if packet.route_type.is_direct() => prepare_direct_forward(packet, node_hash),
         _ => ForwardDecision::Drop("unknown route"),
     }
 }
@@ -1124,10 +1177,6 @@ async fn prepare_flood_forward(
         Ok(signature) => signature,
         Err(_) => return ForwardDecision::Drop("dedup signature failed"),
     };
-    if !context.mark_seen(signature) {
-        return ForwardDecision::Drop("duplicate");
-    }
-
     if packet.append_flood_hop(node_hash).is_err() {
         return ForwardDecision::DoNotForward;
     }
@@ -1139,11 +1188,7 @@ async fn prepare_flood_forward(
     }
 }
 
-async fn prepare_direct_forward(
-    context: &AppContext<impl crate::platform::storage::Storage>,
-    mut packet: Packet,
-    node_hash: &[u8],
-) -> ForwardDecision {
+fn prepare_direct_forward(mut packet: Packet, node_hash: &[u8]) -> ForwardDecision {
     if !matches!(
         packet.route_type,
         RouteType::Direct | RouteType::TransportDirect
@@ -1163,19 +1208,13 @@ async fn prepare_direct_forward(
         Err(_) => return ForwardDecision::Drop("dedup signature failed"),
     };
     match packet.consume_direct_hop(node_hash) {
-        Ok(true) => {
-            if !context.mark_seen(signature) {
-                return ForwardDecision::Drop("duplicate");
-            }
-            ForwardDecision::Forward { packet, signature }
-        }
+        Ok(true) => ForwardDecision::Forward { packet, signature },
         Ok(false) => ForwardDecision::DoNotForward,
         Err(_) => ForwardDecision::Drop("direct path mutation failed"),
     }
 }
 
 fn prepare_trace_forward(
-    context: &AppContext<impl crate::platform::storage::Storage>,
     mut packet: Packet,
     snr_quarters: i16,
     node_hash: &[u8],
@@ -1201,10 +1240,6 @@ fn prepare_trace_forward(
         Ok(signature) => signature,
         Err(_) => return ForwardDecision::Drop("dedup signature failed"),
     };
-    if !context.mark_seen(signature) {
-        return ForwardDecision::Drop("duplicate");
-    }
-
     if packet
         .append_trace_snr(snr_quarters.clamp(i8::MIN as i16, i8::MAX as i16) as i8)
         .is_err()

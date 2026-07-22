@@ -21,23 +21,36 @@ impl SeenPacketCache {
     }
 
     pub fn check_and_insert(&mut self, signature: [u8; 8], now_ticks: u64) -> bool {
-        self.prune(now_ticks);
-        if self
-            .entries
-            .iter()
-            .any(|(seen_signature, _)| *seen_signature == signature)
-        {
+        if self.contains(signature, now_ticks) {
             return false;
         }
 
+        self.touch(signature, now_ticks);
+        true
+    }
+
+    pub fn contains(&mut self, signature: [u8; 8], now_ticks: u64) -> bool {
+        self.prune(now_ticks);
+        self.entries
+            .iter()
+            .any(|(seen_signature, _)| *seen_signature == signature)
+    }
+
+    pub fn touch(&mut self, signature: [u8; 8], now_ticks: u64) {
+        if let Some(index) = self
+            .entries
+            .iter()
+            .position(|(seen_signature, _)| *seen_signature == signature)
+        {
+            self.entries.remove(index);
+        }
         if self.max_entries == 0 {
-            return true;
+            return;
         }
         while self.entries.len() >= self.max_entries {
             self.entries.pop_front();
         }
         self.entries.push_back((signature, now_ticks));
-        true
     }
 
     pub fn prune(&mut self, now_ticks: u64) {
