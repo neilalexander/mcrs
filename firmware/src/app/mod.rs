@@ -37,8 +37,6 @@ const CAD_BUSY_BACKOFF_BASE_MS: u32 = 10;
 const CAD_BUSY_BACKOFF_AIRTIME_DIVISOR: u32 = 2;
 const CAD_BUSY_BACKOFF_SYMBOLS: u32 = 4;
 const DUTY_CYCLE_WINDOW_MS: u64 = 3_600_000;
-const MIN_TX_BUDGET_RESERVE_MS: u64 = 100;
-const MIN_TX_BUDGET_AIRTIME_DIVISOR: u64 = 2;
 const BATTERY_LEVEL_UNKNOWN: u8 = u8::MAX;
 const BATTERY_MILLIVOLTS_UNKNOWN: u16 = u16::MAX;
 
@@ -616,47 +614,47 @@ struct OutboundSchedule {
 }
 
 struct AirtimeBudget {
-    available_ms: u64,
+    available_ms: i64,
     last_update_ms: u64,
 }
 
 impl AirtimeBudget {
     fn new(now_ms: u64, duty_cycle_percent: u8) -> Self {
         Self {
-            available_ms: duty_cycle_max_budget_ms(duty_cycle_percent),
+            available_ms: duty_cycle_max_budget_ms(duty_cycle_percent) as i64,
             last_update_ms: now_ms,
         }
     }
 
     fn update(&mut self, now_ms: u64, duty_cycle_percent: u8) {
         if duty_cycle_percent >= 100 {
-            self.available_ms = DUTY_CYCLE_WINDOW_MS;
+            self.available_ms = DUTY_CYCLE_WINDOW_MS as i64;
             self.last_update_ms = now_ms;
             return;
         }
-        self.available_ms = self
-            .available_ms
-            .min(duty_cycle_max_budget_ms(duty_cycle_percent));
+        let max_budget_ms = duty_cycle_max_budget_ms(duty_cycle_percent) as i64;
+        self.available_ms = self.available_ms.min(max_budget_ms);
         let elapsed_ms = now_ms.saturating_sub(self.last_update_ms);
         let refill_ms = elapsed_ms.saturating_mul(duty_cycle_percent.clamp(1, 100) as u64) / 100;
         if refill_ms > 0 {
             self.available_ms = self
                 .available_ms
-                .saturating_add(refill_ms)
-                .min(duty_cycle_max_budget_ms(duty_cycle_percent));
+                .saturating_add(refill_ms.min(i64::MAX as u64) as i64)
+                .min(max_budget_ms);
             self.last_update_ms = now_ms;
         }
     }
 
-    fn ready_at_ms(&mut self, now_ms: u64, required_ms: u64, duty_cycle_percent: u8) -> u64 {
+    fn ready_at_ms(&mut self, now_ms: u64, required_ms: u32, duty_cycle_percent: u8) -> u64 {
         if duty_cycle_percent >= 100 {
             return now_ms;
         }
         self.update(now_ms, duty_cycle_percent);
+        let required_ms = i64::from(required_ms);
         if self.available_ms >= required_ms {
             now_ms
         } else {
-            let needed_ms = required_ms - self.available_ms;
+            let needed_ms = required_ms.saturating_sub(self.available_ms) as u64;
             now_ms.saturating_add(div_ceil_u64(
                 needed_ms.saturating_mul(100),
                 duty_cycle_percent.clamp(1, 100) as u64,
@@ -669,7 +667,7 @@ impl AirtimeBudget {
             return;
         }
         self.update(now_ms, duty_cycle_percent);
-        self.available_ms = self.available_ms.saturating_sub(airtime_ms as u64);
+        self.available_ms = self.available_ms.saturating_sub(i64::from(airtime_ms));
     }
 }
 
@@ -700,14 +698,8 @@ impl OutboundSchedule {
         }
     }
 
-    fn has_eligible(&self, now_ms: u64) -> bool {
-        self.pending
-            .front()
-            .is_some_and(|queued| queued.eligible_at_ms <= now_ms)
-    }
-
-    fn next_eligible_ms(&self) -> Option<u64> {
-        self.pending.front().map(|queued| queued.eligible_at_ms)
+    fn next(&self) -> Option<&QueuedTransmit> {
+        self.pending.front()
     }
 }
 
@@ -886,15 +878,21 @@ async fn drain_eligible_outbound<R, S, D>(
             .with_config(|config| (config.radio(), config.duty_cycle_percent()))
             .await;
         let now_ms = crate::platform::now_millis();
+        let Some(next) = outbound.next() else {
+            return;
+        };
+        if next.eligible_at_ms > now_ms {
+            return;
+        }
         let required_ms = if duty_cycle_percent >= 100 {
             0
         } else {
-            minimum_tx_budget_ms(radio_config)
+            radio_config.packet_airtime_ms(next.packet.len())
         };
         if airtime_budget.ready_at_ms(now_ms, required_ms, duty_cycle_percent) > now_ms {
             return;
         }
-        let Some(queued) = outbound.pop_eligible(crate::platform::now_millis()) else {
+        let Some(queued) = outbound.pop_eligible(now_ms) else {
             return;
         };
         let region = context.outbound_region_label(&queued.packet).await;
@@ -972,26 +970,24 @@ where
         .with_config(|config| (config.radio(), config.duty_cycle_percent()))
         .await;
     let now_ms = crate::platform::now_millis();
-    let budget_ready_ms = if duty_cycle_percent >= 100 {
-        now_ms
-    } else {
-        airtime_budget.ready_at_ms(
+    let next = outbound.next();
+    let budget_ready_ms = match next {
+        Some(_) if duty_cycle_percent >= 100 => now_ms,
+        Some(queued) => airtime_budget.ready_at_ms(
             now_ms,
-            minimum_tx_budget_ms(radio_config),
+            radio_config.packet_airtime_ms(queued.packet.len()),
             duty_cycle_percent,
-        )
+        ),
+        None => now_ms,
     };
-    if outbound.has_eligible(now_ms) && now_ms >= budget_ready_ms {
+    if next.is_some_and(|queued| queued.eligible_at_ms <= now_ms && now_ms >= budget_ready_ms) {
         return RadioWait::OutboundDue;
     }
 
     let mut receive = pin!(radio.wait_for_read(receive_buffer));
     let mut new_outbound = pin!(context.receive_outbound());
 
-    let Some(eligible_at_ms) = outbound
-        .next_eligible_ms()
-        .map(|eligible_at_ms| eligible_at_ms.max(budget_ready_ms))
-    else {
+    let Some(eligible_at_ms) = next.map(|queued| queued.eligible_at_ms.max(budget_ready_ms)) else {
         return poll_fn(|cx| {
             if let Poll::Ready(queued) = new_outbound.as_mut().poll(cx) {
                 return Poll::Ready(RadioWait::NewOutbound(queued));
@@ -1316,12 +1312,6 @@ fn cad_busy_backoff_ms(payload: &[u8], radio_config: config::RadioConfig, attemp
     lower_ms
         .saturating_add(attempt as u32 * minimum_ms)
         .saturating_add(seed % jitter_window_ms)
-}
-
-fn minimum_tx_budget_ms(radio_config: config::RadioConfig) -> u64 {
-    MIN_TX_BUDGET_RESERVE_MS.max(
-        radio_config.packet_airtime_ms(RECEIVE_BUFFER_LEN) as u64 / MIN_TX_BUDGET_AIRTIME_DIVISOR,
-    )
 }
 
 fn div_ceil_u64(numerator: u64, denominator: u64) -> u64 {
