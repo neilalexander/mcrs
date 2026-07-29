@@ -98,7 +98,9 @@ where
                 SEEN_PACKET_TTL_MS,
                 memory.seen_packet_cache_len,
             )),
-            pending_forwards: RefCell::new(Vec::new()),
+            pending_forwards: RefCell::new(Vec::with_capacity(
+                memory.outbound_queue_len.min(OUTBOUND_QUEUE_CAPACITY),
+            )),
             pending_discover: RefCell::new(None),
             started_at_ms: crate::platform::now_millis(),
             packets_received: AtomicU32::new(0),
@@ -394,7 +396,7 @@ where
         delay_ms: u32,
         signature: [u8; 8],
     ) -> Result<bool, OutboundError> {
-        if !self.reserve_forward(signature) {
+        if !self.reserve_forward(signature)? {
             return Ok(false);
         }
         if let Err(error) = self.enqueue_outbound_item(packet, delay_ms, false, Some(signature)) {
@@ -483,12 +485,16 @@ where
             .contains(signature, crate::platform::now_millis())
     }
 
-    fn reserve_forward(&self, signature: [u8; 8]) -> bool {
+    fn reserve_forward(&self, signature: [u8; 8]) -> Result<bool, OutboundError> {
         if self.is_seen_or_pending(signature) {
-            return false;
+            return Ok(false);
         }
-        self.pending_forwards.borrow_mut().push(signature);
-        true
+        let mut pending = self.pending_forwards.borrow_mut();
+        if pending.len() >= self.memory.outbound_queue_len.min(OUTBOUND_QUEUE_CAPACITY) {
+            return Err(OutboundError::QueueFull);
+        }
+        pending.push(signature);
+        Ok(true)
     }
 
     fn release_forward(&self, signature: [u8; 8], transmitted: bool) {
