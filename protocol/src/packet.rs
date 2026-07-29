@@ -205,7 +205,6 @@ impl Packet {
         hasher.update([self.route_type.to_bits()]);
         if let Some(codes) = self.transport_codes {
             hasher.update(codes.primary.to_le_bytes());
-            hasher.update(codes.secondary.to_le_bytes());
         }
         if self.payload.kind() == PayloadKind::Trace {
             let RoutePath::Trace(path) = &self.path else {

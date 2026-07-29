@@ -330,9 +330,18 @@ fn dedup_signature_distinguishes_route_and_transport_scope() {
         path: RoutePath::Normal(Path::empty()),
         payload: payload.clone(),
     };
-    let scoped_b = Packet {
+    let scoped_other_primary = Packet {
         route_type: RouteType::TransportFlood,
         transport_codes: Some(TransportCodes::new(0x5678)),
+        path: RoutePath::Normal(Path::empty()),
+        payload: payload.clone(),
+    };
+    let scoped_other_secondary = Packet {
+        route_type: RouteType::TransportFlood,
+        transport_codes: Some(TransportCodes {
+            primary: 0x1234,
+            secondary: 0x5678,
+        }),
         path: RoutePath::Normal(Path::empty()),
         payload,
     };
@@ -343,7 +352,11 @@ fn dedup_signature_distinguishes_route_and_transport_scope() {
     );
     assert_ne!(
         scoped_a.dedup_signature().unwrap(),
-        scoped_b.dedup_signature().unwrap()
+        scoped_other_primary.dedup_signature().unwrap()
+    );
+    assert_eq!(
+        scoped_a.dedup_signature().unwrap(),
+        scoped_other_secondary.dedup_signature().unwrap()
     );
 }
 
