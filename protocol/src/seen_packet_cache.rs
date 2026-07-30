@@ -1,5 +1,7 @@
 use alloc::collections::VecDeque;
 
+const DEFAULT_MAX_ENTRIES: usize = 256;
+
 #[derive(Debug)]
 pub struct SeenPacketCache {
     ttl_ticks: u64,
@@ -9,7 +11,7 @@ pub struct SeenPacketCache {
 
 impl SeenPacketCache {
     pub fn new(ttl_ticks: u64) -> Self {
-        Self::new_with_capacity(ttl_ticks, usize::MAX)
+        Self::new_with_capacity(ttl_ticks, DEFAULT_MAX_ENTRIES)
     }
 
     pub fn new_with_capacity(ttl_ticks: u64, max_entries: usize) -> Self {

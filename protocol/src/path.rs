@@ -23,7 +23,18 @@ impl Path {
     }
 
     pub fn from_hashes(hash_size: HashSize, hashes: &[&[u8]]) -> Result<Self> {
-        let mut bytes = Vec::with_capacity(hash_size.size() * hashes.len());
+        if hashes.len() > 63 {
+            return Err(Error::InvalidPathLength);
+        }
+        let len = hash_size
+            .size()
+            .checked_mul(hashes.len())
+            .ok_or(Error::InvalidPathLength)?;
+        if len > MAX_PATH_SIZE {
+            return Err(Error::PathTooLong { len });
+        }
+
+        let mut bytes = Vec::with_capacity(len);
         for hash in hashes {
             if hash.len() != hash_size.size() {
                 return Err(Error::InvalidLength("path hash"));

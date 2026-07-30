@@ -390,6 +390,31 @@ fn seen_packet_cache_touch_restarts_ttl() {
 }
 
 #[test]
+fn default_seen_packet_cache_is_bounded() {
+    let mut cache = SeenPacketCache::new(u64::MAX);
+    for index in 0..300u16 {
+        let mut signature = [0u8; 8];
+        signature[..2].copy_from_slice(&index.to_le_bytes());
+        cache.touch(signature, 0);
+    }
+
+    assert!(!cache.contains([0; 8], 0));
+    let mut newest = [0u8; 8];
+    newest[..2].copy_from_slice(&299u16.to_le_bytes());
+    assert!(cache.contains(newest, 0));
+}
+
+#[test]
+fn path_from_hashes_rejects_oversized_input_before_allocation() {
+    let hash = [0u8; 2];
+    let hashes = [&hash[..]; 33];
+    assert_eq!(
+        Path::from_hashes(HashSize::Two, &hashes),
+        Err(Error::PathTooLong { len: 66 })
+    );
+}
+
+#[test]
 fn node_hash_is_public_key_prefix() {
     let mut public_key = [0; PUB_KEY_SIZE];
     public_key[0..5].copy_from_slice(&[1, 2, 3, 4, 5]);
