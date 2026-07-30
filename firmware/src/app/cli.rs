@@ -151,15 +151,21 @@ where
         return handle_anonymous_request(payload, reply_path, context).await;
     }
 
-    if !packet.route_type.is_direct()
-        || !packet_targets_this_node(packet, &context.node_hash().await)
-    {
-        return None;
-    }
-
     match &packet.payload {
-        Payload::Request(payload) => handle_authenticated_request(payload, context).await,
-        Payload::TextMessage(payload) => handle_authenticated_text_message(payload, context).await,
+        Payload::Request(payload)
+            if packet.route_type.is_flood()
+                || (packet.route_type.is_direct()
+                    && packet_targets_this_node(packet, &context.node_hash().await)) =>
+        {
+            handle_authenticated_request(packet, payload, context).await
+        }
+        Payload::TextMessage(payload)
+            if packet.route_type.is_flood()
+                || (packet.route_type.is_direct()
+                    && packet_targets_this_node(packet, &context.node_hash().await)) =>
+        {
+            handle_authenticated_text_message(payload, context).await
+        }
         _ => None,
     }
 }
@@ -282,6 +288,7 @@ async fn handle_authenticated_text_message(
     }
 
     let command = core::str::from_utf8(&plaintext.message).ok()?.trim();
+    let (correlation_prefix, command) = split_cli_correlation_prefix(command);
     if command.is_empty() {
         return None;
     }
@@ -290,9 +297,12 @@ async fn handle_authenticated_text_message(
         cli_privilege_for_remote(Some(decrypted.privilege)),
         plaintext.timestamp,
     );
-    let response = handle_command(command, context, request).await?;
+    let mut response = handle_command(command, context, request).await?;
     if response.post_reply == Some(PostReplyAction::Reboot) {
         context.request_reboot_after_next_remote_reply();
+    }
+    if let Some(prefix) = correlation_prefix {
+        response.text.insert_str(0, prefix);
     }
     encode_remote_cli_reply(
         &decrypted.shared_secret,
@@ -304,10 +314,32 @@ async fn handle_authenticated_text_message(
     )
 }
 
+fn split_cli_correlation_prefix(command: &str) -> (Option<&str>, &str) {
+    let bytes = command.as_bytes();
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_hexdigit()
+        && bytes[1].is_ascii_hexdigit()
+        && bytes[2] == b'|'
+    {
+        (Some(&command[..3]), command[3..].trim())
+    } else {
+        (None, command)
+    }
+}
+
 async fn handle_authenticated_request(
+    packet: &Packet,
     payload: &mcrs_protocol::DirectEncryptedPayload,
     context: &AppContext<impl crate::platform::storage::Storage>,
 ) -> Option<Vec<u8>> {
+    let flood_region = if packet.route_type.is_flood() {
+        let region = context
+            .with_config(|config| config.regions().match_flood_region(packet))
+            .await?;
+        Some(region)
+    } else {
+        None
+    };
     let now_ms = crate::platform::now_millis();
     let decrypted = decrypt_authenticated_payload(payload, context, now_ms).await?;
     let plaintext = RequestPlaintext::decode(&decrypted.plaintext).ok()?;
@@ -327,6 +359,22 @@ async fn handle_authenticated_request(
 
     let response_body =
         handle_binary_request(&plaintext, context, now_ms, decrypted.privilege).await?;
+    if let Some(region) = flood_region {
+        let discovered_path = packet.normal_path()?.clone();
+        let mut response = super::crypto::encode_path_response_packet(
+            &decrypted.shared_secret,
+            &decrypted.sender_pubkey,
+            &responder_public_key,
+            &response_body,
+            discovered_path,
+        )?;
+        context
+            .with_config(|config| config.regions().apply_scope(&mut response, &region))
+            .await
+            .ok()?;
+        return response.encode().ok();
+    }
+
     super::crypto::encode_response_plaintext(
         &decrypted.shared_secret,
         &decrypted.sender_pubkey,
@@ -1760,5 +1808,31 @@ impl CliPrivilege {
             Self::AnonymousRemote => "anonymous",
             Self::PasswordedRemote => "passworded",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_cli_correlation_prefix;
+
+    #[test]
+    fn splits_cli_correlation_prefix() {
+        assert_eq!(
+            split_cli_correlation_prefix("04|region"),
+            (Some("04|"), "region")
+        );
+        assert_eq!(
+            split_cli_correlation_prefix("aF|  get radio  "),
+            (Some("aF|"), "get radio")
+        );
+    }
+
+    #[test]
+    fn leaves_unprefixed_and_non_hex_commands_unchanged() {
+        assert_eq!(split_cli_correlation_prefix("region"), (None, "region"));
+        assert_eq!(
+            split_cli_correlation_prefix("zz|region"),
+            (None, "zz|region")
+        );
     }
 }

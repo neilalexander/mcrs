@@ -165,10 +165,24 @@ impl RegionMap {
         let Some(region) = self.default_region() else {
             return Ok(false);
         };
-        let code = self.transport_code_for(&region, packet)?;
-        packet.route_type = RouteType::TransportFlood;
-        packet.transport_codes = Some(TransportCodes::new(code));
+        self.apply_scope(packet, &region)?;
         Ok(true)
+    }
+
+    pub fn apply_scope(
+        &self,
+        packet: &mut Packet,
+        region: &RegionEntry,
+    ) -> Result<(), RegionError> {
+        if region.is_wildcard() {
+            packet.route_type = RouteType::Flood;
+            packet.transport_codes = None;
+        } else {
+            let code = self.transport_code_for(region, packet)?;
+            packet.route_type = RouteType::TransportFlood;
+            packet.transport_codes = Some(TransportCodes::new(code));
+        }
+        Ok(())
     }
 
     pub fn write_tree(&self, out: &mut String) {
