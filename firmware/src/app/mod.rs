@@ -4,6 +4,8 @@ mod crypto;
 pub(crate) mod discovery;
 pub mod identity;
 
+#[cfg(feature = "mqtt")]
+pub mod mqtt;
 mod neighbours;
 pub mod ota;
 pub mod periodic;
@@ -58,9 +60,17 @@ where
     remote_logins: AppMutex<remote::RemoteLoginTable>,
     inbound: Channel<CriticalSectionRawMutex, RxEvent, INBOUND_QUEUE_CAPACITY>,
     outbound: SortedOutboundChannel,
+    #[cfg(feature = "mqtt")]
+    mqtt: [Channel<CriticalSectionRawMutex, mqtt::PacketEvent, 8>; config::MQTT_SERVER_COUNT],
     ota_requested: Cell<bool>,
     ota_waker: RefCell<Option<Waker>>,
     ota_generation: Cell<u32>,
+    #[cfg(feature = "mqtt")]
+    mqtt_generation: Cell<u32>,
+    #[cfg(feature = "mqtt")]
+    mqtt_wakers: [RefCell<Option<Waker>>; config::MQTT_SERVER_COUNT],
+    #[cfg(feature = "mqtt")]
+    mqtt_states: [AtomicU8; config::MQTT_SERVER_COUNT],
     reboot_after_next_remote_reply: Cell<bool>,
     seen_packets: RefCell<SeenPacketCache>,
     pending_forwards: RefCell<Vec<[u8; 8]>>,
@@ -93,9 +103,19 @@ where
             remote_logins: Mutex::new(remote::RemoteLoginTable::new()),
             inbound: Channel::new(),
             outbound: SortedOutboundChannel::new(memory.outbound_queue_len),
+            #[cfg(feature = "mqtt")]
+            mqtt: core::array::from_fn(|_| Channel::new()),
             ota_requested: Cell::new(false),
             ota_waker: RefCell::new(None),
             ota_generation: Cell::new(0),
+            #[cfg(feature = "mqtt")]
+            mqtt_generation: Cell::new(0),
+            #[cfg(feature = "mqtt")]
+            mqtt_wakers: core::array::from_fn(|_| RefCell::new(None)),
+            #[cfg(feature = "mqtt")]
+            mqtt_states: core::array::from_fn(|_| {
+                AtomicU8::new(mqtt::ConnectionState::Disconnected as u8)
+            }),
             reboot_after_next_remote_reply: Cell::new(false),
             seen_packets: RefCell::new(SeenPacketCache::new_with_capacity(
                 SEEN_PACKET_TTL_MS,
@@ -347,6 +367,18 @@ where
             .ok();
     }
 
+    #[cfg(feature = "mqtt")]
+    fn report_mqtt_packet(&self, direction: mqtt::Direction, payload: &[u8], rssi: i16, snr: i16) {
+        for channel in &self.mqtt {
+            let _ = channel.try_send(mqtt::PacketEvent::new(direction, payload, rssi, snr));
+        }
+    }
+
+    #[cfg(feature = "mqtt")]
+    pub async fn receive_mqtt_packet(&self, index: usize) -> mqtt::PacketEvent {
+        self.mqtt[index].receive().await
+    }
+
     fn enqueue_inbound(&self, payload: &[u8], rssi: i16, snr: i16) -> Result<(), InboundError> {
         if self.inbound.len() >= self.memory.inbound_queue_len {
             return Err(InboundError::QueueFull);
@@ -449,6 +481,44 @@ where
 
     pub fn register_ota_waker(&self, waker: &Waker) {
         self.ota_waker.borrow_mut().replace(waker.clone());
+    }
+
+    #[cfg(feature = "mqtt")]
+    pub fn request_mqtt_restart(&self) {
+        self.mqtt_generation
+            .set(self.mqtt_generation.get().wrapping_add(1));
+        for waker in &self.mqtt_wakers {
+            if let Some(waker) = waker.borrow_mut().take() {
+                waker.wake();
+            }
+        }
+    }
+
+    #[cfg(feature = "mqtt")]
+    pub fn mqtt_generation(&self) -> u32 {
+        self.mqtt_generation.get()
+    }
+
+    #[cfg(feature = "mqtt")]
+    pub fn register_mqtt_waker(&self, index: usize, waker: &Waker) {
+        if let Some(slot) = self.mqtt_wakers.get(index) {
+            slot.borrow_mut().replace(waker.clone());
+        }
+    }
+
+    #[cfg(feature = "mqtt")]
+    pub fn set_mqtt_state(&self, index: usize, state: mqtt::ConnectionState) {
+        if let Some(current) = self.mqtt_states.get(index) {
+            current.store(state as u8, Ordering::Relaxed);
+        }
+    }
+
+    #[cfg(feature = "mqtt")]
+    pub fn mqtt_state(&self, index: usize) -> mqtt::ConnectionState {
+        self.mqtt_states
+            .get(index)
+            .map(|state| mqtt::ConnectionState::from_u8(state.load(Ordering::Relaxed)))
+            .unwrap_or(mqtt::ConnectionState::Disabled)
     }
 
     fn wake_ota(&self) {
@@ -808,6 +878,8 @@ where
                     packet.snr,
                     payload,
                 );
+                #[cfg(feature = "mqtt")]
+                context.report_mqtt_packet(mqtt::Direction::Rx, payload, packet.rssi, packet.snr);
 
                 if context
                     .enqueue_inbound(payload, packet.rssi, packet.snr)
@@ -939,6 +1011,8 @@ async fn transmit_eligible_outbound<R, S, D>(
     }
     context.finish_forward(queued.dedup_signature, true);
     context.record_packet_sent();
+    #[cfg(feature = "mqtt")]
+    context.report_mqtt_packet(mqtt::Direction::Tx, &queued.packet, 0, 0);
     let airtime_ms = radio_config.packet_airtime_ms(queued.packet.len());
     context.record_tx_airtime(airtime_ms);
     airtime_budget.record_transmit(

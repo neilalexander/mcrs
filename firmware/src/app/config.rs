@@ -1,5 +1,7 @@
 extern crate alloc;
 
+#[cfg(feature = "mqtt")]
+use alloc::string::ToString;
 use alloc::{string::String, vec::Vec};
 use core::fmt::{self, Write};
 
@@ -16,6 +18,10 @@ const MAX_WIFI_SSID_LEN: usize = 32;
 const MIN_WIFI_PASSWORD_LEN: usize = 8;
 const MAX_WIFI_PASSWORD_LEN: usize = 63;
 const MAX_NODE_NAME_LEN: usize = 31;
+#[cfg(feature = "mqtt")]
+const MAX_MQTT_VALUE_LEN: usize = 255;
+#[cfg(feature = "mqtt")]
+pub const MQTT_SERVER_COUNT: usize = 3;
 const DEFAULT_FLOOD_MAX_UNSCOPED_HOPS: u8 = 5;
 const DEFAULT_FLOOD_MAX_ADVERT_HOPS: u8 = 3;
 const DEFAULT_PATH_HASH_MODE: u8 = 2;
@@ -43,6 +49,34 @@ pub struct AppConfig {
     flood_max_advert_hops: u8,
     path_hash_mode: u8,
     duty_cycle_percent: u8,
+    #[cfg(feature = "mqtt")]
+    mqtt: [MqttConfig; MQTT_SERVER_COUNT],
+}
+
+#[cfg(feature = "mqtt")]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MqttConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub topic_root: String,
+    pub iata: String,
+}
+
+#[cfg(feature = "mqtt")]
+impl MqttConfig {
+    pub fn value(&self, key: &str) -> Option<String> {
+        Some(match key {
+            "host" => self.host.clone(),
+            "port" => self.port.to_string(),
+            "username" => self.username.clone(),
+            "password" => self.password.clone(),
+            "topic.root" => self.topic_root.clone(),
+            "iata" => self.iata.clone(),
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -121,6 +155,8 @@ impl AppConfig {
             flood_max_advert_hops: stored.flood_max_advert_hops,
             path_hash_mode: stored.path_hash_mode,
             duty_cycle_percent: stored.duty_cycle_percent,
+            #[cfg(feature = "mqtt")]
+            mqtt: stored.mqtt,
         }
     }
 
@@ -182,8 +218,52 @@ impl AppConfig {
         self.wifi.telnet = enabled;
     }
 
+    #[cfg(feature = "mqtt")]
+    pub fn mqtt(&self, index: usize) -> Option<&MqttConfig> {
+        self.mqtt.get(index)
+    }
+
+    #[cfg(feature = "mqtt")]
+    pub fn set_mqtt_value(
+        &mut self,
+        index: usize,
+        key: &str,
+        value: &str,
+    ) -> Result<(), ConfigError> {
+        if value.len() > MAX_MQTT_VALUE_LEN {
+            return Err(ConfigError::InvalidMqttConfig);
+        }
+        let mqtt = self
+            .mqtt
+            .get_mut(index)
+            .ok_or(ConfigError::InvalidMqttConfig)?;
+        match key {
+            "host" => mqtt.host = value.into(),
+            "port" => mqtt.port = value.parse().map_err(|_| ConfigError::InvalidMqttConfig)?,
+            "username" => mqtt.username = value.into(),
+            "password" => mqtt.password = value.into(),
+            "topic.root" => mqtt.topic_root = value.into(),
+            "iata" => mqtt.iata = value.into(),
+            _ => return Err(ConfigError::InvalidMqttConfig),
+        }
+        Ok(())
+    }
+
     pub fn unset(&mut self, setting: &str) -> Result<(), ConfigError> {
         let defaults = Self::generated_defaults(self.identity_seed);
+        #[cfg(feature = "mqtt")]
+        if let Some(number) = setting.strip_prefix("mqtt.")
+            && !number.contains('.')
+        {
+            let index = number
+                .parse::<usize>()
+                .ok()
+                .and_then(|number| number.checked_sub(1))
+                .filter(|index| *index < MQTT_SERVER_COUNT)
+                .ok_or(ConfigError::UnknownSetting)?;
+            self.mqtt[index] = defaults.mqtt[index].clone();
+            return Ok(());
+        }
         match setting {
             "name" => self.node_name = defaults.node_name,
             "password" => self.remote_cli_password = defaults.remote_cli_password,
@@ -471,6 +551,18 @@ struct StoredAppConfig {
     flood_max_advert_hops: u8,
     path_hash_mode: u8,
     duty_cycle_percent: u8,
+    #[cfg(feature = "mqtt")]
+    mqtt: [MqttConfig; MQTT_SERVER_COUNT],
+}
+
+#[cfg(feature = "mqtt")]
+fn default_mqtt_servers() -> [MqttConfig; MQTT_SERVER_COUNT] {
+    core::array::from_fn(|_| MqttConfig {
+        port: 1883,
+        topic_root: "meshcore/{IATA}/{PUBLIC_KEY}/packets".into(),
+        iata: "XXX".into(),
+        ..Default::default()
+    })
 }
 
 impl StoredAppConfig {
@@ -496,6 +588,8 @@ impl StoredAppConfig {
             flood_max_advert_hops: DEFAULT_FLOOD_MAX_ADVERT_HOPS,
             path_hash_mode: DEFAULT_PATH_HASH_MODE,
             duty_cycle_percent: DEFAULT_DUTY_CYCLE_PERCENT,
+            #[cfg(feature = "mqtt")]
+            mqtt: default_mqtt_servers(),
         }
     }
 
@@ -515,6 +609,8 @@ impl StoredAppConfig {
             flood_max_advert_hops: config.flood_max_advert_hops,
             path_hash_mode: config.path_hash_mode,
             duty_cycle_percent: config.duty_cycle_percent,
+            #[cfg(feature = "mqtt")]
+            mqtt: config.mqtt.clone(),
         }
     }
 }
@@ -593,6 +689,20 @@ fn decode_config_text(data: &[u8], defaults: &StoredAppConfig) -> Option<StoredA
             "wifi.ssid" => config.wifi.ssid = value,
             "wifi.pass" => config.wifi.password = value,
             "wifi.telnet" => config.wifi.telnet = parse_bool(&value)?,
+            #[cfg(feature = "mqtt")]
+            key if key.starts_with("mqtt.") => {
+                let (server, field) = parse_mqtt_key(key)?;
+                let mqtt = config.mqtt.get_mut(server)?;
+                match field {
+                    "host" => mqtt.host = value,
+                    "port" => mqtt.port = value.parse().ok()?,
+                    "username" => mqtt.username = value,
+                    "password" => mqtt.password = value,
+                    "topic.root" => mqtt.topic_root = value,
+                    "iata" => mqtt.iata = value,
+                    _ => {}
+                }
+            }
             "radio.frequency_hz" => {
                 config.radio.receive_frequency_hz = value.parse::<u32>().ok()?;
             }
@@ -782,6 +892,10 @@ fn encode_sparse_config_text(config: &StoredAppConfig, defaults: &StoredAppConfi
     if config.path_hash_mode != defaults.path_hash_mode {
         let _ = writeln!(&mut out, "path.hash.mode={}", config.path_hash_mode);
     }
+    #[cfg(feature = "mqtt")]
+    for (index, mqtt) in config.mqtt.iter().enumerate() {
+        write_mqtt_config(&mut out, index, mqtt, Some(&defaults.mqtt[index]), false);
+    }
 
     out.into_bytes()
 }
@@ -876,8 +990,78 @@ fn encode_full_config_text_redacted(config: &StoredAppConfig, redact_secrets: bo
         config.flood_max_advert_hops
     );
     let _ = writeln!(&mut out, "path.hash.mode={}", config.path_hash_mode);
+    #[cfg(feature = "mqtt")]
+    for (index, mqtt) in config.mqtt.iter().enumerate() {
+        write_mqtt_config(&mut out, index, mqtt, None, redact_secrets);
+    }
 
     out.into_bytes()
+}
+
+#[cfg(feature = "mqtt")]
+fn parse_mqtt_key(key: &str) -> Option<(usize, &str)> {
+    let key = key.strip_prefix("mqtt.")?;
+    let (number, field) = key.split_once('.')?;
+    let index = number.parse::<usize>().ok()?.checked_sub(1)?;
+    (index < MQTT_SERVER_COUNT).then_some((index, field))
+}
+
+#[cfg(feature = "mqtt")]
+fn write_mqtt_config(
+    out: &mut String,
+    index: usize,
+    mqtt: &MqttConfig,
+    defaults: Option<&MqttConfig>,
+    redact: bool,
+) {
+    let prefix = index + 1;
+    let values = [
+        (
+            "host",
+            mqtt.host.as_str(),
+            defaults.map(|d| d.host.as_str()),
+            false,
+        ),
+        (
+            "username",
+            mqtt.username.as_str(),
+            defaults.map(|d| d.username.as_str()),
+            false,
+        ),
+        (
+            "password",
+            mqtt.password.as_str(),
+            defaults.map(|d| d.password.as_str()),
+            true,
+        ),
+        (
+            "topic.root",
+            mqtt.topic_root.as_str(),
+            defaults.map(|d| d.topic_root.as_str()),
+            false,
+        ),
+        (
+            "iata",
+            mqtt.iata.as_str(),
+            defaults.map(|d| d.iata.as_str()),
+            false,
+        ),
+    ];
+    for (key, value, default, secret) in values {
+        if default == Some(value) {
+            continue;
+        }
+        let _ = write!(out, "mqtt.{prefix}.{key}=");
+        if redact && secret && !value.is_empty() {
+            out.push_str("<redacted>");
+        } else {
+            write_escaped_value(out, value);
+        }
+        out.push('\n');
+    }
+    if defaults.is_none_or(|default| default.port != mqtt.port) {
+        let _ = writeln!(out, "mqtt.{prefix}.port={}", mqtt.port);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -895,6 +1079,8 @@ pub enum ConfigError {
     InvalidFloodMaxHops,
     InvalidPathHashMode,
     InvalidWifiConfig,
+    #[cfg(feature = "mqtt")]
+    InvalidMqttConfig,
     Region(RegionError),
 }
 
@@ -914,6 +1100,8 @@ impl fmt::Display for ConfigError {
             ConfigError::InvalidFloodMaxHops => f.write_str("invalid flood max hops"),
             ConfigError::InvalidPathHashMode => f.write_str("invalid path hash mode"),
             ConfigError::InvalidWifiConfig => f.write_str("invalid Wi-Fi setting"),
+            #[cfg(feature = "mqtt")]
+            ConfigError::InvalidMqttConfig => f.write_str("invalid MQTT setting"),
             ConfigError::Region(error) => write!(f, "region: {}", error),
         }
     }
@@ -1294,5 +1482,23 @@ mod tests {
                 .set_wifi_password(&"x".repeat(MAX_WIFI_PASSWORD_LEN + 1))
                 .is_err()
         );
+    }
+
+    #[cfg(feature = "mqtt")]
+    #[test]
+    fn unset_mqtt_server_restores_all_defaults() {
+        let mut config = AppConfig::generated_defaults([11; 32]);
+        config.set_mqtt_value(0, "host", "broker.example").unwrap();
+        config.set_mqtt_value(0, "port", "2883").unwrap();
+        config.set_mqtt_value(0, "password", "secret").unwrap();
+
+        config.unset("mqtt.1").expect("known MQTT server");
+
+        assert_eq!(
+            config.mqtt(0),
+            AppConfig::generated_defaults([11; 32]).mqtt(0)
+        );
+        assert!(config.unset("mqtt.0").is_err());
+        assert!(config.unset("mqtt.4").is_err());
     }
 }

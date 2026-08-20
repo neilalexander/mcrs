@@ -654,6 +654,12 @@ async fn run_ota_station_mode<'a>(
                 let mut server = pin!(serve_ota(stack, context));
                 let mut ntp = pin!(ntp_loop(stack));
                 let mut telnet = pin!(crate::app::telnet::serve(stack, context));
+                #[cfg(feature = "mqtt")]
+                let mut mqtt1 = pin!(mqtt_loop(stack, context, 0));
+                #[cfg(feature = "mqtt")]
+                let mut mqtt2 = pin!(mqtt_loop(stack, context, 1));
+                #[cfg(feature = "mqtt")]
+                let mut mqtt3 = pin!(mqtt_loop(stack, context, 2));
                 let mut disconnected = pin!(controller.wait_for_event(WifiEvent::StaDisconnected));
                 poll_fn(|cx| {
                     if let Poll::Ready(never) = server.as_mut().poll(cx) {
@@ -665,6 +671,12 @@ async fn run_ota_station_mode<'a>(
                     if let Poll::Ready(never) = telnet.as_mut().poll(cx) {
                         match never {}
                     }
+                    #[cfg(feature = "mqtt")]
+                    for mqtt in [&mut mqtt1, &mut mqtt2, &mut mqtt3] {
+                        if let Poll::Ready(never) = mqtt.as_mut().poll(cx) {
+                            match never {}
+                        }
+                    }
                     if disconnected.as_mut().poll(cx).is_ready() {
                         Poll::Ready(())
                     } else {
@@ -672,6 +684,10 @@ async fn run_ota_station_mode<'a>(
                     }
                 })
                 .await;
+                #[cfg(feature = "mqtt")]
+                for index in 0..crate::app::config::MQTT_SERVER_COUNT {
+                    context.set_mqtt_state(index, crate::app::mqtt::ConnectionState::Disconnected);
+                }
             }
             crate::platform::log_fmt(format_args!("Wi-Fi: station disconnected; reconnecting"));
             let _ = controller.stop_async().await;
@@ -683,6 +699,144 @@ async fn run_ota_station_mode<'a>(
         match worker.as_mut().poll(cx) {
             Poll::Ready(never) => match never {},
             Poll::Pending => Poll::Pending,
+        }
+    })
+    .await
+}
+
+#[cfg(feature = "mqtt")]
+async fn mqtt_loop(
+    stack: embassy_net::Stack<'_>,
+    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    index: usize,
+) -> ! {
+    use embedded_io_async::{Read, Write};
+    loop {
+        let generation = context.mqtt_generation();
+        let Some(mqtt) = context
+            .with_config(|config| config.mqtt(index).cloned())
+            .await
+        else {
+            core::future::pending::<()>().await;
+            unreachable!();
+        };
+        if mqtt.host.is_empty() {
+            context.set_mqtt_state(index, crate::app::mqtt::ConnectionState::Disabled);
+            wait_mqtt_retry_or_restart(context, index, generation, 30).await;
+            continue;
+        }
+        context.set_mqtt_state(index, crate::app::mqtt::ConnectionState::Connecting);
+        let Ok(addresses) = stack
+            .dns_query(&mqtt.host, embassy_net::dns::DnsQueryType::A)
+            .await
+        else {
+            context.set_mqtt_state(index, crate::app::mqtt::ConnectionState::Disconnected);
+            crate::platform::log_fmt(format_args!("MQTT {}: broker DNS lookup failed", index + 1));
+            wait_mqtt_retry_or_restart(context, index, generation, 10).await;
+            continue;
+        };
+        let Some(address) = addresses.first().copied() else {
+            context.set_mqtt_state(index, crate::app::mqtt::ConnectionState::Disconnected);
+            continue;
+        };
+        let mut rx = [0u8; 2048];
+        let mut tx = [0u8; 2048];
+        let mut socket = embassy_net::tcp::TcpSocket::new(stack, &mut rx, &mut tx);
+        if socket.connect((address, mqtt.port)).await.is_err() {
+            context.set_mqtt_state(index, crate::app::mqtt::ConnectionState::Disconnected);
+            continue;
+        }
+        let public_key = context.public_key().await;
+        let topic = crate::app::mqtt::packets_topic(&mqtt, &public_key);
+        let status = crate::app::mqtt::status_topic(&topic);
+        let client_id = format!(
+            "mcrs-{:02x}{:02x}{:02x}-{}",
+            public_key[0],
+            public_key[1],
+            public_key[2],
+            index + 1
+        );
+        let offline = format!("{{\"status\":\"offline\",\"origin_id\":\"{}\"}}", client_id);
+        if socket
+            .write_all(&crate::app::mqtt::connect_packet(
+                &mqtt, &client_id, &status, &offline,
+            ))
+            .await
+            .is_err()
+        {
+            context.set_mqtt_state(index, crate::app::mqtt::ConnectionState::Disconnected);
+            continue;
+        }
+        let mut connack = [0u8; 4];
+        if socket.read_exact(&mut connack).await.is_err() || connack != [0x20, 0x02, 0x00, 0x00] {
+            context.set_mqtt_state(index, crate::app::mqtt::ConnectionState::Disconnected);
+            continue;
+        }
+        let online = format!("{{\"status\":\"online\",\"origin_id\":\"{}\"}}", client_id);
+        if socket
+            .write_all(&crate::app::mqtt::publish_packet(&status, &online, true))
+            .await
+            .is_err()
+        {
+            context.set_mqtt_state(index, crate::app::mqtt::ConnectionState::Disconnected);
+            continue;
+        }
+        context.set_mqtt_state(index, crate::app::mqtt::ConnectionState::Connected);
+        crate::platform::log_fmt(format_args!("MQTT {}: connected", index + 1));
+        loop {
+            let mut event = pin!(context.receive_mqtt_packet(index));
+            let mut ping = pin!(embassy_time::Timer::after_secs(30));
+            let packet = poll_fn(|cx| {
+                if context.mqtt_generation() != generation {
+                    return Poll::Ready(None);
+                }
+                context.register_mqtt_waker(index, cx.waker());
+                if let Poll::Ready(event) = event.as_mut().poll(cx) {
+                    return Poll::Ready(Some(event));
+                }
+                if ping.as_mut().poll(cx).is_ready() {
+                    return Poll::Ready(None);
+                }
+                Poll::Pending
+            })
+            .await;
+            let write = match packet {
+                Some(event) => {
+                    socket
+                        .write_all(&crate::app::mqtt::publish_packet(
+                            &topic,
+                            &crate::app::mqtt::packet_json(&event),
+                            false,
+                        ))
+                        .await
+                }
+                None => socket.write_all(&[0xc0, 0x00]).await,
+            };
+            if context.mqtt_generation() != generation || write.is_err() {
+                context.set_mqtt_state(index, crate::app::mqtt::ConnectionState::Disconnected);
+                break;
+            }
+        }
+    }
+}
+
+#[cfg(feature = "mqtt")]
+async fn wait_mqtt_retry_or_restart(
+    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    index: usize,
+    generation: u32,
+    seconds: u64,
+) {
+    let mut timer = pin!(embassy_time::Timer::after_secs(seconds));
+    poll_fn(|cx| {
+        if context.mqtt_generation() != generation {
+            return Poll::Ready(());
+        }
+        context.register_mqtt_waker(index, cx.waker());
+        if timer.as_mut().poll(cx).is_ready() {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
         }
     })
     .await

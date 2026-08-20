@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
+mqtt = []
 board-heltec-v3 = ["esp32s3"]
 board-heltec-v4 = ["esp32s3"]
 board-heltec-wsl3 = ["esp32s3"]
