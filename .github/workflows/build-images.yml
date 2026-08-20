@@ -19,7 +19,7 @@ env:
 
 jobs:
   build:
-    name: ${{ matrix.board.name }}
+    name: ${{ matrix.board.name }}${{ matrix.variant.name_suffix }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -32,6 +32,8 @@ jobs:
             artifact_paths: |
               dist/mcrs-heltec-v3-merged.bin
               dist/mcrs-heltec-v3-app.bin
+              dist/mcrs-heltec-v3-mqtt-merged.bin
+              dist/mcrs-heltec-v3-mqtt-app.bin
           - id: heltec-v4
             name: Heltec V4
             build_target: esp32s3
@@ -39,6 +41,8 @@ jobs:
             artifact_paths: |
               dist/mcrs-heltec-v4-merged.bin
               dist/mcrs-heltec-v4-app.bin
+              dist/mcrs-heltec-v4-mqtt-merged.bin
+              dist/mcrs-heltec-v4-mqtt-app.bin
           - id: heltec-wsl3
             name: Heltec WSL3
             build_target: esp32s3
@@ -46,6 +50,17 @@ jobs:
             artifact_paths: |
               dist/mcrs-heltec-wsl3-merged.bin
               dist/mcrs-heltec-wsl3-app.bin
+              dist/mcrs-heltec-wsl3-mqtt-merged.bin
+              dist/mcrs-heltec-wsl3-mqtt-app.bin
+        variant:
+          - id: standard
+            name_suffix: ""
+            artifact_suffix: ""
+            mqtt: 0
+          - id: mqtt
+            name_suffix: " MQTT"
+            artifact_suffix: -mqtt
+            mqtt: 1
 
     steps:
       - name: Check out repository
@@ -73,11 +88,11 @@ jobs:
         run: cargo install espflash --version 4.4.0 --locked
 
       - name: Build images
-        run: make ${{ matrix.board.make_target }}
+        run: make MQTT=${{ matrix.variant.mqtt }} ${{ matrix.board.make_target }}
 
       - name: Upload images
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.board.id }}-firmware-${{ github.sha }}
+          name: ${{ matrix.board.id }}${{ matrix.variant.artifact_suffix }}-firmware-${{ github.sha }}
           path: ${{ matrix.board.artifact_paths }}
           if-no-files-found: error
