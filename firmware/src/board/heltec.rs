@@ -739,8 +739,10 @@ async fn mqtt_loop(
             context.set_mqtt_state(index, crate::app::mqtt::ConnectionState::Disconnected);
             continue;
         };
-        let mut rx = [0u8; 2048];
-        let mut tx = [0u8; 2048];
+        // MQTT reports are streamed through TCP, so large buffers only bloat
+        // the single Embassy task future when three brokers are enabled.
+        let mut rx = [0u8; 512];
+        let mut tx = [0u8; 512];
         let mut socket = embassy_net::tcp::TcpSocket::new(stack, &mut rx, &mut tx);
         if socket.connect((address, mqtt.port)).await.is_err() {
             context.set_mqtt_state(index, crate::app::mqtt::ConnectionState::Disconnected);
