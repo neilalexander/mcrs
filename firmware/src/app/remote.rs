@@ -53,15 +53,13 @@ impl RemoteLoginTable {
     ) {
         self.prune(now_ms);
 
-        let entries = self.entries_mut(privilege);
-        if let Some(login) = find_login_mut(entries, public_key) {
-            login.shared_secret = *shared_secret;
-            login.last_seen_ms = now_ms;
-            login.last_timestamp = last_timestamp;
-            login.reply_path = reply_path.clone();
-            return;
-        }
+        // A public key represents one logical session. Remove any prior entry
+        // from both privilege tables so reauthentication upgrades or
+        // downgrades the session instead of leaving contradictory copies.
+        remove_login(&mut self.admin_entries, public_key);
+        remove_login(&mut self.guest_entries, public_key);
 
+        let entries = self.entries_mut(privilege);
         let index = first_empty_index(entries).unwrap_or_else(|| oldest_index(entries));
         entries[index] = Some(RemoteLogin {
             public_key: *public_key,
@@ -175,6 +173,16 @@ fn find_login_mut<'a>(
         .find(|login| &login.public_key == public_key)
 }
 
+fn remove_login(entries: &mut RemoteLoginEntries, public_key: &[u8; PUB_KEY_SIZE]) {
+    if let Some(entry) = entries.iter_mut().find(|entry| {
+        entry
+            .as_ref()
+            .is_some_and(|login| &login.public_key == public_key)
+    }) {
+        *entry = None;
+    }
+}
+
 fn append_matching_sessions(
     out: &mut [Option<RemoteSession>; MAX_REMOTE_SESSIONS],
     out_index: &mut usize,
@@ -217,4 +225,58 @@ fn oldest_index(entries: &RemoteLoginEntries) -> usize {
     }
 
     oldest_index
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reauthentication_moves_session_between_privilege_tables() {
+        let mut table = RemoteLoginTable::new();
+        let public_key = [7; PUB_KEY_SIZE];
+        let shared_secret = [9; 32];
+
+        table.authenticate(
+            &public_key,
+            &shared_secret,
+            RemotePrivilege::Guest,
+            10,
+            100,
+            &Path::empty(),
+        );
+        table.authenticate(
+            &public_key,
+            &shared_secret,
+            RemotePrivilege::Admin,
+            20,
+            200,
+            &Path::empty(),
+        );
+
+        assert_eq!(
+            table.privilege_for(&public_key, 201),
+            Some(RemotePrivilege::Admin)
+        );
+        assert_eq!(table.guest_entries.iter().flatten().count(), 0);
+        assert_eq!(table.admin_entries.iter().flatten().count(), 1);
+        assert!(!table.accept_newer_timestamp(&public_key, RemotePrivilege::Guest, 21, 202));
+        assert!(!table.accept_newer_timestamp(&public_key, RemotePrivilege::Admin, 20, 202));
+        assert!(table.accept_newer_timestamp(&public_key, RemotePrivilege::Admin, 21, 202));
+
+        table.authenticate(
+            &public_key,
+            &shared_secret,
+            RemotePrivilege::Guest,
+            30,
+            300,
+            &Path::empty(),
+        );
+        assert_eq!(
+            table.privilege_for(&public_key, 301),
+            Some(RemotePrivilege::Guest)
+        );
+        assert_eq!(table.admin_entries.iter().flatten().count(), 0);
+        assert_eq!(table.guest_entries.iter().flatten().count(), 1);
+    }
 }
