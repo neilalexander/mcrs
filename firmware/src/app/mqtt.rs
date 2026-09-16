@@ -151,3 +151,128 @@ fn hex(bytes: &[u8]) -> String {
     }
     out
 }
+
+// Fixed-size responses are sufficient for this clean-session, QoS 0 publisher.
+// read_exact handles TCP fragmentation without consuming the next MQTT packet.
+pub async fn read_connack(reader: &mut impl embedded_io_async::Read) -> Result<(), ()> {
+    let mut packet = [0; 4];
+    reader.read_exact(&mut packet).await.map_err(|_| ())?;
+    (packet == [0x20, 0x02, 0x00, 0x00]).then_some(()).ok_or(())
+}
+
+pub async fn read_pingresp(reader: &mut impl embedded_io_async::Read) -> Result<(), ()> {
+    let mut packet = [0; 2];
+    reader.read_exact(&mut packet).await.map_err(|_| ())?;
+    (packet == [0xd0, 0x00]).then_some(()).ok_or(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::{
+        future::Future,
+        pin::pin,
+        task::{Context, Poll, Waker},
+    };
+
+    struct Reader<'a> {
+        bytes: &'a [u8],
+        chunk_size: usize,
+    }
+
+    impl embedded_io_async::ErrorType for Reader<'_> {
+        type Error = core::convert::Infallible;
+    }
+
+    impl embedded_io_async::Read for Reader<'_> {
+        async fn read(&mut self, out: &mut [u8]) -> Result<usize, Self::Error> {
+            // Simulate a scheduler boundary between TCP fragments.
+            let mut pending = true;
+            core::future::poll_fn(|cx| {
+                if pending {
+                    pending = false;
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                } else {
+                    Poll::Ready(())
+                }
+            })
+            .await;
+            let len = out.len().min(self.bytes.len()).min(self.chunk_size);
+            out[..len].copy_from_slice(&self.bytes[..len]);
+            self.bytes = &self.bytes[len..];
+            Ok(len)
+        }
+    }
+
+    fn run<T>(future: impl Future<Output = T>) -> T {
+        let mut future = pin!(future);
+        let mut cx = Context::from_waker(Waker::noop());
+        for _ in 0..10000 {
+            if let Poll::Ready(result) = future.as_mut().poll(&mut cx) {
+                return result;
+            }
+        }
+        panic!("response reader did not finish");
+    }
+
+    #[test]
+    fn fragmented_and_coalesced_responses_preserve_packet_boundaries() {
+        for chunk_size in [1, 2, 8] {
+            let mut reader = Reader {
+                bytes: &[0x20, 2, 0, 0, 0xd0, 0, 0xd0, 0],
+                chunk_size,
+            };
+            assert_eq!(run(read_connack(&mut reader)), Ok(()));
+            assert_eq!(run(read_pingresp(&mut reader)), Ok(()));
+            assert_eq!(run(read_pingresp(&mut reader)), Ok(()));
+            assert!(reader.bytes.is_empty());
+        }
+    }
+
+    #[test]
+    fn drains_more_than_a_receive_buffer_of_ping_responses() {
+        let bytes = [0xd0, 0].repeat(1024);
+        let mut reader = Reader {
+            bytes: &bytes,
+            chunk_size: 512,
+        };
+        for _ in 0..1024 {
+            assert_eq!(run(read_pingresp(&mut reader)), Ok(()));
+        }
+        assert!(reader.bytes.is_empty());
+    }
+
+    #[test]
+    fn rejects_failed_or_invalid_connack() {
+        for bytes in [
+            &[0x20, 2, 0, 5][..],
+            &[0x20, 2, 1, 0],
+            &[0x21, 2, 0, 0],
+            &[0x20, 3, 0, 0],
+            &[0x20, 2, 0],
+            &[],
+        ] {
+            assert_eq!(
+                run(read_connack(&mut Reader {
+                    bytes,
+                    chunk_size: 1
+                })),
+                Err(())
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_unexpected_or_truncated_responses() {
+        for bytes in [&[0xd1, 0][..], &[0xd0, 1], &[0x20, 2], &[0xd0], &[]] {
+            assert_eq!(
+                run(read_pingresp(&mut Reader {
+                    bytes,
+                    chunk_size: 1
+                })),
+                Err(())
+            );
+        }
+    }
+}

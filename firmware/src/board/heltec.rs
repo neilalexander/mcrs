@@ -716,140 +716,135 @@ async fn mqtt_loop(
     context: &crate::app::AppContext<crate::platform::EspStorage>,
     index: usize,
 ) -> ! {
-    use embedded_io_async::{Read, Write};
+    use crate::app::mqtt::ConnectionState;
+
     loop {
         let generation = context.mqtt_generation();
-        let Some(mqtt) = context
+        let mqtt = context
             .with_config(|config| config.mqtt(index).cloned())
-            .await
-        else {
-            core::future::pending::<()>().await;
-            unreachable!();
-        };
-        if mqtt.host.is_empty() {
-            context.set_mqtt_state(index, crate::app::mqtt::ConnectionState::Disabled);
+            .await;
+        let Some(mqtt) = mqtt.filter(|mqtt| !mqtt.host.is_empty()) else {
+            context.set_mqtt_state(index, ConnectionState::Disabled);
             wait_mqtt_retry_or_restart(context, index, generation, 30).await;
             continue;
-        }
-        context.set_mqtt_state(index, crate::app::mqtt::ConnectionState::Connecting);
-        let Ok(addresses) = mqtt_io(context, index, generation, async {
-            stack
-                .dns_query(&mqtt.host, embassy_net::dns::DnsQueryType::A)
-                .await
-        })
-        .await
-        else {
-            context.set_mqtt_state(index, crate::app::mqtt::ConnectionState::Disconnected);
-            crate::platform::log_fmt(format_args!("MQTT {}: broker DNS lookup failed", index + 1));
-            wait_mqtt_retry_or_restart(context, index, generation, 10).await;
-            continue;
         };
-        let Some(address) = addresses.first().copied() else {
-            context.set_mqtt_state(index, crate::app::mqtt::ConnectionState::Disconnected);
-            continue;
-        };
-        // MQTT reports are streamed through TCP, so large buffers only bloat
-        // the single Embassy task future when three brokers are enabled.
-        let mut rx = [0u8; 512];
-        let mut tx = [0u8; 512];
-        let mut socket = embassy_net::tcp::TcpSocket::new(stack, &mut rx, &mut tx);
-        if mqtt_io(
-            context,
-            index,
-            generation,
-            socket.connect((address, mqtt.port)),
-        )
-        .await
-        .is_err()
-        {
-            context.set_mqtt_state(index, crate::app::mqtt::ConnectionState::Disconnected);
-            continue;
-        }
-        let public_key = context.public_key().await;
-        let topic = crate::app::mqtt::packets_topic(&mqtt, &public_key);
-        let status = crate::app::mqtt::status_topic(&topic);
-        let client_id = format!(
-            "mcrs-{:02x}{:02x}{:02x}-{}",
-            public_key[0],
-            public_key[1],
-            public_key[2],
-            index + 1
-        );
-        let offline = format!("{{\"status\":\"offline\",\"origin_id\":\"{}\"}}", client_id);
-        if mqtt_io(context, index, generation, async {
-            socket
-                .write_all(&crate::app::mqtt::connect_packet(
-                    &mqtt, &client_id, &status, &offline,
-                ))
-                .await
-        })
-        .await
-        .is_err()
-        {
-            context.set_mqtt_state(index, crate::app::mqtt::ConnectionState::Disconnected);
-            continue;
-        }
-        let mut connack = [0u8; 4];
-        if mqtt_io(context, index, generation, socket.read_exact(&mut connack))
+        context.set_mqtt_state(index, ConnectionState::Connecting);
+        let _ = mqtt_session(stack, context, index, generation, &mqtt).await;
+        context.set_mqtt_state(index, ConnectionState::Disconnected);
+        wait_mqtt_retry_or_restart(context, index, generation, 10).await;
+    }
+}
+
+#[cfg(feature = "mqtt")]
+async fn mqtt_session(
+    stack: embassy_net::Stack<'_>,
+    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    index: usize,
+    generation: u32,
+    config: &crate::app::config::MqttConfig,
+) -> Result<(), ()> {
+    use crate::app::mqtt;
+    use embassy_sync::{blocking_mutex::raw::NoopRawMutex, signal::Signal};
+    use embedded_io_async::Write;
+
+    let public_key = context.public_key().await;
+    let topic = mqtt::packets_topic(config, &public_key);
+    let status = mqtt::status_topic(&topic);
+    let client_id = format!(
+        "mcrs-{:02x}{:02x}{:02x}-{}",
+        public_key[0],
+        public_key[1],
+        public_key[2],
+        index + 1
+    );
+    let offline = format!("{{\"status\":\"offline\",\"origin_id\":\"{}\"}}", client_id);
+    let online = format!("{{\"status\":\"online\",\"origin_id\":\"{}\"}}", client_id);
+    let mut rx = [0u8; 512];
+    let mut tx = [0u8; 512];
+    let mut socket = embassy_net::tcp::TcpSocket::new(stack, &mut rx, &mut tx);
+
+    mqtt_io(context, index, generation, async {
+        let addresses = stack
+            .dns_query(&config.host, embassy_net::dns::DnsQueryType::A)
             .await
-            .is_err()
-            || connack != [0x20, 0x02, 0x00, 0x00]
-        {
-            context.set_mqtt_state(index, crate::app::mqtt::ConnectionState::Disconnected);
-            continue;
+            .map_err(|_| ())?;
+        let address = addresses.first().copied().ok_or(())?;
+        socket
+            .connect((address, config.port))
+            .await
+            .map_err(|_| ())?;
+        socket
+            .write_all(&mqtt::connect_packet(config, &client_id, &status, &offline))
+            .await
+            .map_err(|_| ())?;
+        mqtt::read_connack(&mut socket).await?;
+        socket
+            .write_all(&mqtt::publish_packet(&status, &online, true))
+            .await
+            .map_err(|_| ())
+    })
+    .await?;
+
+    context.set_mqtt_state(index, mqtt::ConnectionState::Connected);
+    crate::platform::log_fmt(format_args!("MQTT {}: connected", index + 1));
+    let (mut reader, mut writer) = socket.split();
+    let pong = Signal::<NoopRawMutex, ()>::new();
+    let mut receive = pin!(async {
+        // A QoS 0 publisher with no subscriptions only receives PINGRESP.
+        while mqtt::read_pingresp(&mut reader).await.is_ok() {
+            pong.signal(());
         }
-        let online = format!("{{\"status\":\"online\",\"origin_id\":\"{}\"}}", client_id);
-        if mqtt_io(context, index, generation, async {
-            socket
-                .write_all(&crate::app::mqtt::publish_packet(&status, &online, true))
-                .await
-        })
-        .await
-        .is_err()
-        {
-            context.set_mqtt_state(index, crate::app::mqtt::ConnectionState::Disconnected);
-            continue;
-        }
-        context.set_mqtt_state(index, crate::app::mqtt::ConnectionState::Connected);
-        crate::platform::log_fmt(format_args!("MQTT {}: connected", index + 1));
+    });
+    let mut send = pin!(async {
         loop {
             let mut event = pin!(context.receive_mqtt_packet(index));
-            let mut ping = pin!(embassy_time::Timer::after_secs(30));
+            let mut idle = pin!(embassy_time::Timer::after_secs(30));
             let packet = poll_fn(|cx| {
+                context.register_mqtt_waker(index, cx.waker());
                 if context.mqtt_generation() != generation {
                     return Poll::Ready(None);
                 }
-                context.register_mqtt_waker(index, cx.waker());
                 if let Poll::Ready(event) = event.as_mut().poll(cx) {
                     return Poll::Ready(Some(event));
                 }
-                if ping.as_mut().poll(cx).is_ready() {
+                if idle.as_mut().poll(cx).is_ready() {
                     return Poll::Ready(None);
                 }
                 Poll::Pending
             })
             .await;
-            let write = mqtt_io(context, index, generation, async {
-                match packet {
-                    Some(event) => {
-                        socket
-                            .write_all(&crate::app::mqtt::publish_packet(
-                                &topic,
-                                &crate::app::mqtt::packet_json(&event),
-                                false,
-                            ))
-                            .await
-                    }
-                    None => socket.write_all(&[0xc0, 0x00]).await,
+            let result = mqtt_io(context, index, generation, async {
+                if let Some(event) = packet {
+                    writer
+                        .write_all(&mqtt::publish_packet(
+                            &topic,
+                            &mqtt::packet_json(&event),
+                            false,
+                        ))
+                        .await
+                        .map_err(|_| ())?;
+                } else {
+                    pong.reset();
+                    writer.write_all(&[0xc0, 0x00]).await.map_err(|_| ())?;
+                    pong.wait().await;
                 }
+                Ok::<(), ()>(())
             })
             .await;
-            if context.mqtt_generation() != generation || write.is_err() {
-                context.set_mqtt_state(index, crate::app::mqtt::ConnectionState::Disconnected);
+            if result.is_err() {
                 break;
             }
         }
-    }
+    });
+    poll_fn(|cx| {
+        if receive.as_mut().poll(cx).is_ready() || send.as_mut().poll(cx).is_ready() {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    })
+    .await;
+    Ok(())
 }
 
 // Dropping a cancelled or timed-out operation may leave a partial MQTT frame.
