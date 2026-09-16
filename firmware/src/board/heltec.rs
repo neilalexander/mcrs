@@ -576,7 +576,12 @@ async fn run_ota_station_mode<'a>(
     device: esp_wifi::wifi::WifiDevice<'a>,
     context: &crate::app::AppContext<crate::platform::EspStorage>,
 ) -> ! {
-    static STACK_RESOURCES: StaticCell<embassy_net::StackResources<4>> = StaticCell::new();
+    // DHCP, DNS, NTP, Telnet and OTA can each hold a socket concurrently.
+    #[cfg(not(feature = "mqtt"))]
+    const SOCKET_COUNT: usize = 5;
+    #[cfg(feature = "mqtt")]
+    const SOCKET_COUNT: usize = 5 + crate::app::config::MQTT_SERVER_COUNT;
+    static STACK_RESOURCES: StaticCell<embassy_net::StackResources<SOCKET_COUNT>> = StaticCell::new();
     let stack_resources = STACK_RESOURCES.init(embassy_net::StackResources::new());
     let (stack, mut runner) = embassy_net::new(
         device,
