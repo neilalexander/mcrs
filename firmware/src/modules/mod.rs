@@ -5,7 +5,7 @@ pub mod sx1262;
 pub struct ReceivedPacket {
     pub len: usize,
     pub rssi: i16,
-    pub snr: i16,
+    pub snr_quarters: i16,
 }
 
 pub trait Receiver {

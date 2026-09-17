@@ -9,3 +9,5 @@ pub mod mqtt_transport;
 #[cfg(feature = "mqtt")]
 #[path = "app/mqtt.rs"]
 pub mod mqtt;
+
+pub mod radio_metrics;

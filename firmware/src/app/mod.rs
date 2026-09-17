@@ -83,7 +83,7 @@ where
     battery_level_percent: AtomicU8,
     battery_millivolts: AtomicU16,
     last_rssi: AtomicI16,
-    last_snr: AtomicI16,
+    last_snr_quarters: AtomicI16,
 }
 
 impl<S> AppContext<S>
@@ -133,7 +133,7 @@ where
             battery_level_percent: AtomicU8::new(BATTERY_LEVEL_UNKNOWN),
             battery_millivolts: AtomicU16::new(BATTERY_MILLIVOLTS_UNKNOWN),
             last_rssi: AtomicI16::new(0),
-            last_snr: AtomicI16::new(0),
+            last_snr_quarters: AtomicI16::new(0),
         }
     }
 
@@ -177,28 +177,31 @@ where
         &self,
         packet: &Packet,
         rssi: i16,
-        snr: i16,
+        snr_quarters: i16,
         now_ms: u64,
     ) {
         let node_hash = self.node_hash().await;
         self.neighbours
             .lock()
             .await
-            .observe_packet(packet, rssi, snr, now_ms, &node_hash);
+            .observe_packet(packet, rssi, snr_quarters, now_ms, &node_hash);
     }
 
     pub async fn observe_neighbour_public_key(
         &self,
         public_key: [u8; mcrs_protocol::PUB_KEY_SIZE],
         rssi: i16,
-        snr: i16,
+        snr_quarters: i16,
         now_ms: u64,
     ) {
         let node_hash = self.node_hash().await;
-        self.neighbours
-            .lock()
-            .await
-            .observe_public_key(public_key, rssi, snr, now_ms, &node_hash);
+        self.neighbours.lock().await.observe_public_key(
+            public_key,
+            rssi,
+            snr_quarters,
+            now_ms,
+            &node_hash,
+        );
     }
 
     pub async fn encode_neighbours_binary_response(
@@ -292,7 +295,7 @@ where
             )
             .or_else(crate::platform::battery_millivolts),
             last_rssi: self.last_rssi.load(Ordering::Relaxed),
-            last_snr: self.last_snr.load(Ordering::Relaxed),
+            last_snr_quarters: self.last_snr_quarters.load(Ordering::Relaxed),
         }
     }
 
@@ -333,14 +336,15 @@ where
         );
     }
 
-    fn record_packet_received(&self, rssi: i16, snr: i16) {
+    fn record_packet_received(&self, rssi: i16, snr_quarters: i16) {
         self.packets_received
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
                 Some(count.saturating_add(1))
             })
             .ok();
         self.last_rssi.store(rssi, Ordering::Relaxed);
-        self.last_snr.store(snr, Ordering::Relaxed);
+        self.last_snr_quarters
+            .store(snr_quarters, Ordering::Relaxed);
     }
 
     fn record_packet_sent(&self) {
@@ -368,9 +372,20 @@ where
     }
 
     #[cfg(feature = "mqtt")]
-    fn report_mqtt_packet(&self, direction: mqtt::Direction, payload: &[u8], rssi: i16, snr: i16) {
+    fn report_mqtt_packet(
+        &self,
+        direction: mqtt::Direction,
+        payload: &[u8],
+        rssi: i16,
+        snr_quarters: i16,
+    ) {
         for channel in &self.mqtt {
-            let _ = channel.try_send(mqtt::PacketEvent::new(direction, payload, rssi, snr));
+            let _ = channel.try_send(mqtt::PacketEvent::new(
+                direction,
+                payload,
+                rssi,
+                snr_quarters,
+            ));
         }
     }
 
@@ -379,7 +394,12 @@ where
         self.mqtt[index].receive().await
     }
 
-    fn enqueue_inbound(&self, payload: &[u8], rssi: i16, snr: i16) -> Result<(), InboundError> {
+    fn enqueue_inbound(
+        &self,
+        payload: &[u8],
+        rssi: i16,
+        snr_quarters: i16,
+    ) -> Result<(), InboundError> {
         if self.inbound.len() >= self.memory.inbound_queue_len {
             return Err(InboundError::QueueFull);
         }
@@ -390,7 +410,7 @@ where
             .try_send(RxEvent {
                 payload: packet,
                 rssi,
-                snr,
+                snr_quarters,
                 received_at_ms: crate::platform::now_millis(),
             })
             .map_err(|_| InboundError::QueueFull)
@@ -654,7 +674,7 @@ pub struct Status {
     pub battery_level_percent: Option<u8>,
     pub battery_millivolts: Option<u16>,
     pub last_rssi: i16,
-    pub last_snr: i16,
+    pub last_snr_quarters: i16,
 }
 
 #[derive(Clone, Copy)]
@@ -824,7 +844,7 @@ fn duty_cycle_max_budget_ms(duty_cycle_percent: u8) -> u64 {
 struct RxEvent {
     payload: Vec<u8>,
     rssi: i16,
-    snr: i16,
+    snr_quarters: i16,
     received_at_ms: u64,
 }
 
@@ -861,7 +881,7 @@ where
             RadioWait::OutboundDue => continue,
             RadioWait::OutboundChanged => continue,
             RadioWait::Packet(Ok(packet)) => {
-                context.record_packet_received(packet.rssi, packet.snr);
+                context.record_packet_received(packet.rssi, packet.snr_quarters);
                 if packet.len > receive_buffer.len() {
                     context.record_packet_error();
                     crate::platform::log_fmt(format_args!(
@@ -875,14 +895,19 @@ where
                 crate::platform::log_radio_packet_received(
                     packet.len,
                     packet.rssi,
-                    packet.snr,
+                    packet.snr_quarters,
                     payload,
                 );
                 #[cfg(feature = "mqtt")]
-                context.report_mqtt_packet(mqtt::Direction::Rx, payload, packet.rssi, packet.snr);
+                context.report_mqtt_packet(
+                    mqtt::Direction::Rx,
+                    payload,
+                    packet.rssi,
+                    packet.snr_quarters,
+                );
 
                 if context
-                    .enqueue_inbound(payload, packet.rssi, packet.snr)
+                    .enqueue_inbound(payload, packet.rssi, packet.snr_quarters)
                     .is_err()
                 {
                     context.record_packet_error();
@@ -921,7 +946,7 @@ where
                 .observe_neighbour_packet(
                     &protocol_packet,
                     event.rssi,
-                    event.snr,
+                    event.snr_quarters,
                     event.received_at_ms,
                 )
                 .await;
@@ -943,7 +968,7 @@ where
                 &protocol_packet,
                 context,
                 event.rssi,
-                event.snr,
+                event.snr_quarters,
                 event.received_at_ms,
             )
             .await
@@ -958,7 +983,7 @@ where
                     ));
                 }
             }
-            apply_repeater_rules(context, protocol_packet, event.snr, &node_hash).await;
+            apply_repeater_rules(context, protocol_packet, event.snr_quarters, &node_hash).await;
         }
         Err(error) => {
             context.record_packet_error();

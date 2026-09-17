@@ -73,16 +73,16 @@ pub struct PacketEvent {
     pub direction: Direction,
     pub payload: Vec<u8>,
     pub rssi: i16,
-    pub snr: i16,
+    pub snr_quarters: i16,
 }
 
 impl PacketEvent {
-    pub fn new(direction: Direction, payload: &[u8], rssi: i16, snr: i16) -> Self {
+    pub fn new(direction: Direction, payload: &[u8], rssi: i16, snr_quarters: i16) -> Self {
         Self {
             direction,
             payload: payload.into(),
             rssi,
-            snr,
+            snr_quarters,
         }
     }
 }
@@ -114,7 +114,7 @@ pub fn packet_json(event: &PacketEvent, public_key: &[u8; 32]) -> String {
         hex(public_key),
         hex(&event.payload),
         event.rssi,
-        event.snr
+        crate::radio_metrics::SnrDb(event.snr_quarters)
     )
 }
 
@@ -281,11 +281,11 @@ mod tests {
             packets_topic(&config, &public_key)
         );
         for (direction, label) in [(Direction::Rx, "rx"), (Direction::Tx, "tx")] {
-            let event = PacketEvent::new(direction, &[0x12, 0xab, 0xff], -93, 4);
+            let event = PacketEvent::new(direction, &[0x12, 0xab, 0xff], -93, 16);
             assert_eq!(
                 packet_json(&event, &public_key),
                 format!(
-                    "{{\"origin_id\":\"{key}\",\"type\":\"PACKET\",\"direction\":\"{label}\",\"raw\":\"12ABFF\",\"RSSI\":-93,\"SNR\":4}}"
+                    "{{\"origin_id\":\"{key}\",\"type\":\"PACKET\",\"direction\":\"{label}\",\"raw\":\"12ABFF\",\"RSSI\":-93,\"SNR\":4.00}}"
                 )
             );
         }
@@ -297,6 +297,18 @@ mod tests {
             status_json(&public_key, false),
             format!("{{\"status\":\"offline\",\"origin_id\":\"{key}\"}}")
         );
+    }
+
+    #[test]
+    fn mqtt_snr_is_decimal_db_not_the_internal_quarter_db_value() {
+        for (quarters, db) in [(33, "8.25"), (-33, "-8.25"), (-1, "-0.25"), (0, "0.00")] {
+            let event = PacketEvent::new(Direction::Rx, &[0], -93, quarters);
+            let json = packet_json(&event, &[0; 32]);
+            assert!(
+                json.ends_with(&format!("\"RSSI\":-93,\"SNR\":{db}}}")),
+                "{json}"
+            );
+        }
     }
 
     fn publish_contents(packet: &[u8]) -> (&str, &str) {

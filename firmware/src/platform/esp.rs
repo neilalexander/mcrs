@@ -1039,10 +1039,12 @@ pub fn log_radio_init_failed() {
     println!("Failed to initialize SX1262");
 }
 
-pub fn log_radio_packet_received(len: usize, rssi: i16, snr: i16, _payload: &[u8]) {
+pub fn log_radio_packet_received(len: usize, rssi: i16, snr_quarters: i16, _payload: &[u8]) {
     println!(
         "SX1262 received packet: {} bytes, RSSI {}, SNR {}",
-        len, rssi, snr
+        len,
+        rssi,
+        mcrs_firmware::radio_metrics::SnrDb(snr_quarters)
     );
 }
 

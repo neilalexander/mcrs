@@ -558,7 +558,7 @@ fn encode_status_binary_response(status: super::Status, out: &mut Vec<u8>) {
     write_i16(
         stats,
         &mut offset,
-        status.last_snr.clamp(i16::MIN, i16::MAX),
+        status.last_snr_quarters.clamp(i16::MIN, i16::MAX),
     );
     write_u16(stats, &mut offset, 0);
     write_u16(stats, &mut offset, 0);

@@ -12,7 +12,7 @@ pub struct Neighbour {
     public_key: [u8; PUB_KEY_SIZE],
     last_seen_ms: u64,
     last_rssi: i16,
-    last_snr: i16,
+    last_snr_quarters: i16,
     packet_count: u32,
 }
 
@@ -33,7 +33,7 @@ impl NeighbourTable {
         &mut self,
         packet: &Packet,
         rssi: i16,
-        snr: i16,
+        snr_quarters: i16,
         now_ms: u64,
         local_node_hash: &[u8],
     ) {
@@ -45,14 +45,20 @@ impl NeighbourTable {
             return;
         }
 
-        self.observe_public_key(observation.public_key, rssi, snr, now_ms, local_node_hash);
+        self.observe_public_key(
+            observation.public_key,
+            rssi,
+            snr_quarters,
+            now_ms,
+            local_node_hash,
+        );
     }
 
     pub fn observe_public_key(
         &mut self,
         public_key: [u8; PUB_KEY_SIZE],
         rssi: i16,
-        snr: i16,
+        snr_quarters: i16,
         now_ms: u64,
         local_node_hash: &[u8],
     ) {
@@ -65,7 +71,7 @@ impl NeighbourTable {
                 let neighbour = &mut self.entries[index];
                 neighbour.last_seen_ms = now_ms;
                 neighbour.last_rssi = rssi;
-                neighbour.last_snr = snr;
+                neighbour.last_snr_quarters = snr_quarters;
                 neighbour.packet_count = neighbour.packet_count.saturating_add(1);
             }
             None => {
@@ -77,7 +83,7 @@ impl NeighbourTable {
                     public_key,
                     last_seen_ms: now_ms,
                     last_rssi: rssi,
-                    last_snr: snr,
+                    last_snr_quarters: snr_quarters,
                     packet_count: 1,
                 };
 
@@ -127,7 +133,11 @@ impl NeighbourTable {
             out.extend_from_slice(&neighbour.public_key[..public_key_prefix_len]);
             let heard_seconds_ago = now_ms.saturating_sub(neighbour.last_seen_ms) / 1000;
             out.extend_from_slice(&(heard_seconds_ago.min(u32::MAX as u64) as u32).to_le_bytes());
-            out.push(neighbour.last_snr.clamp(i8::MIN as i16, i8::MAX as i16) as u8);
+            out.push(
+                neighbour
+                    .last_snr_quarters
+                    .clamp(i8::MIN as i16, i8::MAX as i16) as u8,
+            );
             results_count = results_count.saturating_add(1);
             results_bytes += entry_len;
         }
@@ -149,7 +159,9 @@ impl NeighbourTable {
             let _ = writeln!(
                 output,
                 " rssi={} snr={} packets={}",
-                neighbour.last_rssi, neighbour.last_snr, neighbour.packet_count
+                neighbour.last_rssi,
+                mcrs_firmware::radio_metrics::SnrDb(neighbour.last_snr_quarters),
+                neighbour.packet_count
             );
         }
     }
@@ -253,8 +265,8 @@ fn sort_neighbours(neighbours: &mut [Neighbour], order_by: u8) {
 fn neighbour_precedes(left: Neighbour, right: Neighbour, order_by: u8) -> bool {
     match order_by {
         1 => left.last_seen_ms < right.last_seen_ms,
-        2 => left.last_snr > right.last_snr,
-        3 => left.last_snr < right.last_snr,
+        2 => left.last_snr_quarters > right.last_snr_quarters,
+        3 => left.last_snr_quarters < right.last_snr_quarters,
         _ => left.last_seen_ms > right.last_seen_ms,
     }
 }
@@ -262,7 +274,8 @@ fn neighbour_precedes(left: Neighbour, right: Neighbour, order_by: u8) -> bool {
 fn log_discovered(neighbour: Neighbour) {
     crate::platform::log_fmt(format_args!(
         "Neighbour discovered: RSSI={} SNR={}",
-        neighbour.last_rssi, neighbour.last_snr
+        neighbour.last_rssi,
+        mcrs_firmware::radio_metrics::SnrDb(neighbour.last_snr_quarters)
     ));
     crate::platform::log_hex_line("Neighbour hash:", &neighbour.hash(), MAX_NEIGHBOUR_HASH_LEN);
     crate::platform::log_hex_line("Neighbour pubkey:", &neighbour.public_key, 8);

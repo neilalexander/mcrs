@@ -8,6 +8,7 @@ use lora_phy::{
     },
     sx126x::{Config, Sx126x, Sx1262, TcxoCtrlVoltage},
 };
+use mcrs_firmware::radio_metrics::{PacketStatus, StatusSpi};
 
 pub const ENABLE_PUBLIC_NETWORK: bool = false;
 pub const RECEIVE_PREAMBLE_LENGTH: u16 = 8;
@@ -62,7 +63,8 @@ where
     WAIT: Wait,
     DLY: DelayNs,
 {
-    radio: Radio<SPI, CTRL, WAIT, DLY>,
+    radio: Radio<StatusSpi<SPI>, CTRL, WAIT, DLY>,
+    packet_status: PacketStatus,
     modulation_params: ModulationParams,
     rx_packet_params: PacketParams,
     tx_packet_params: PacketParams,
@@ -113,6 +115,8 @@ where
     WAIT: Wait,
     DLY: DelayNs,
 {
+    let packet_status = PacketStatus::default();
+    let spi = StatusSpi::new(spi, packet_status.clone());
     let mut radio = init(spi, reset, dio1, busy, delay, board).await?;
     let modulation_params = radio.create_modulation_params(
         receive.spreading_factor,
@@ -138,6 +142,7 @@ where
 
     Ok(Receiver {
         radio,
+        packet_status,
         modulation_params,
         rx_packet_params,
         tx_packet_params,
@@ -167,7 +172,8 @@ where
                 crate::platform::log_radio_receive_error("prepare", radio_error_name(&error));
             })?;
 
-        let (len, status) = self
+        self.packet_status.take();
+        let (len, _rounded_status) = self
             .radio
             .rx(&self.rx_packet_params, buffer)
             .await
@@ -175,10 +181,11 @@ where
                 crate::platform::log_radio_receive_error("rx", radio_error_name(&error));
             })?;
 
+        let status = self.packet_status.take().ok_or(())?;
         Ok(crate::modules::ReceivedPacket {
             len: len as usize,
-            rssi: status.rssi,
-            snr: status.snr,
+            rssi: status.rssi_dbm,
+            snr_quarters: status.snr_quarters,
         })
     }
 
