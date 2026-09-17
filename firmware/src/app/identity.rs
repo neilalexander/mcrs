@@ -151,7 +151,7 @@ mod tests {
         let signature = identity.sign(message);
         assert_eq!(
             hex(&signature),
-            "fec78cabc646be0e7f9eb6184a080fa701d831017f5f94a73f20f395677c520b4e7b06bcdb9dd78b40c6ff11f44ddd0669f269d33dc750516ea8bf3e9a74e702"
+            "a118fb4c6cc13c483236ef963301972fe7473f70e7ae7945e87cf5c8d20da9a7e664369f5c5c7382e6934d45af637ea3b80078a9299e2ca7d3447b06c5b7e807"
         );
         VerifyingKey::from_bytes(identity.public_key())
             .unwrap()

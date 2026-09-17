@@ -1,5 +1,7 @@
 //! Minimal MQTT 3.1.1 packet reporter, modelled on MeshCore-MQTT.
 
+pub use mcrs_firmware::mqtt_transport as transport;
+
 use alloc::{format, string::String, vec, vec::Vec};
 use core::fmt::Write as _;
 

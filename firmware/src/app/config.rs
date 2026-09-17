@@ -238,7 +238,14 @@ impl AppConfig {
             .get_mut(index)
             .ok_or(ConfigError::InvalidMqttConfig)?;
         match key {
-            "host" => mqtt.host = value.into(),
+            "host" => {
+                if !value.is_empty()
+                    && super::mqtt::transport::Endpoint::parse(value, mqtt.port).is_err()
+                {
+                    return Err(ConfigError::InvalidMqttConfig);
+                }
+                mqtt.host = value.into();
+            }
             "port" => mqtt.port = value.parse().map_err(|_| ConfigError::InvalidMqttConfig)?,
             "username" => mqtt.username = value.into(),
             "password" => mqtt.password = value.into(),
@@ -1550,5 +1557,27 @@ mod tests {
             .unwrap()
             .replace("identity.seed=", "identity.expanded=");
         assert!(decode_config_text(wrong.as_bytes(), &defaults()).is_none());
+    }
+    #[test]
+    fn replacing_private_key_only_persists_the_selected_format() {
+        let mut config = AppConfig::generated_defaults([9; 32]);
+        for key in [expanded_key(), PrivateKey::Seed([7; 32])] {
+            config.set_private_key(key);
+            let encoded = encode_config_text(&StoredAppConfig::from_app_config(&config));
+            let text = core::str::from_utf8(&encoded).unwrap();
+            assert_eq!(
+                text.lines()
+                    .filter(|line| line.starts_with("identity.seed=")
+                        || line.starts_with("identity.expanded="))
+                    .count(),
+                1
+            );
+            assert_eq!(
+                decode_config_text(&encoded, &defaults())
+                    .unwrap()
+                    .private_key,
+                key
+            );
+        }
     }
 }

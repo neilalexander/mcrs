@@ -115,11 +115,35 @@ mqtt restart
 ```
 
 Repeat with `mqtt.2.*` and `mqtt.3.*` for additional brokers. Empty hosts disable
-unused entries. Use `get mqtt.<number>.<key>` to inspect settings. TLS and
-WebSocket broker transports are not currently supported. Use `unset mqtt.1`
+unused entries. Use `get mqtt.<number>.<key>` to inspect settings. Use `unset mqtt.1`
 (or `.2`/`.3`) to clear all settings for one broker and restart MQTT. Use
 `mqtt status` to show whether each broker is disabled, disconnected, connecting,
 or connected.
+
+The host setting also accepts broker URLs:
+
+| Host value | Transport | Default port |
+| --- | --- | --- |
+| `mqtt.example.net` | MQTT over TCP, using `mqtt.N.port` | 1883 |
+| `mqtt://mqtt.example.net` | MQTT over TCP | 1883 |
+| `mqtts://mqtt.example.net` | MQTT over TLS | 8883 |
+| `ws://mqtt.example.net/mqtt` | MQTT over WebSocket | 80 |
+| `wss://mqtt.example.net/mqtt` | MQTT over secure WebSocket | 443 |
+
+`http://` and `https://` are aliases for `ws://` and `wss://`. URLs can include
+a custom port and path, such as `wss://mqtt.example.net:8443/custom/path`.
+WebSocket paths default to `/mqtt`. The separate `mqtt.N.port` setting applies
+only to bare hostnames.
+
+For example:
+
+```text
+set mqtt.1.host https://mqtt.example.net/mqtt
+mqtt restart
+```
+
+Secure connections require TLS 1.3. Certificates are not verified, so traffic is
+encrypted but the broker is not authenticated. No certificate setup is needed.
 
 ### Importing an existing identity
 

@@ -41,3 +41,28 @@ jobs:
 
       - name: Run unit tests
         run: cargo test --locked -p mcrs-protocol
+
+  mqtt:
+    name: MQTT transport
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo
+            target
+          key: mqtt-tests-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            mqtt-tests-${{ runner.os }}-
+
+      - name: Run unit tests
+        run: cargo test --locked -p mcrs-firmware --lib --features mqtt
