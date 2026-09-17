@@ -899,8 +899,8 @@ async fn handle_get_command(
         }
         "prv.key" if request.origin.is_local() => {
             let mut output = String::from("> ");
-            let seed = context.with_config(|config| *config.identity_seed()).await;
-            append_hex(&mut output, &seed);
+            let key = context.with_config(|config| *config.private_key()).await;
+            append_hex(&mut output, key.as_bytes());
             output
         }
         "prv.key" => denied_text(),
@@ -1072,19 +1072,19 @@ async fn handle_set_command(
     }
 
     if let Some(hex) = config.strip_prefix("prv.key ").map(str::trim) {
-        let Some(seed) = parse_hex_seed(hex) else {
+        let Some(key) = super::identity::PrivateKey::from_hex(hex) else {
             return String::from("Error, bad key");
         };
 
         return match context
             .update_config(|config| {
-                config.set_identity_seed(seed);
+                config.set_private_key(key);
                 Ok(())
             })
             .await
         {
             Ok(()) => {
-                let new_identity = super::identity::Identity::from_private_key_seed(&seed);
+                let new_identity = super::identity::Identity::from_private_key(key);
                 let mut output = String::from("OK, reboot to apply! New pubkey: ");
                 append_hex(&mut output, new_identity.public_key());
                 output
@@ -1520,31 +1520,6 @@ fn parse_decimal_scaled(input: &str, scale: u32) -> Option<u32> {
         0
     };
     u32::try_from(scaled_whole.checked_add(scaled_fraction)?).ok()
-}
-
-fn parse_hex_seed(input: &str) -> Option<[u8; 32]> {
-    let input = input.trim();
-    if input.len() != 64 {
-        return None;
-    }
-
-    let mut seed = [0u8; 32];
-    let input = input.as_bytes();
-    for index in 0..seed.len() {
-        let high = hex_value(input[index * 2])?;
-        let low = hex_value(input[index * 2 + 1])?;
-        seed[index] = (high << 4) | low;
-    }
-    Some(seed)
-}
-
-fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
 }
 
 fn format_scaled(value: u32, scale: u32, decimals: usize) -> String {

@@ -75,7 +75,7 @@ fn advert_packet(config: &AppConfig, route_type: RouteType) -> Option<Packet> {
         payload: Payload::Advert(AdvertPayload {
             public_key,
             timestamp,
-            signature: super::identity::sign_with_seed(config.identity_seed(), &signed_message),
+            signature: config.identity().sign(&signed_message),
             app_data: Some(app_data),
         }),
     })

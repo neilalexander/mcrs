@@ -121,6 +121,17 @@ WebSocket broker transports are not currently supported. Use `unset mqtt.1`
 `mqtt status` to show whether each broker is disabled, disconnected, connecting,
 or connected.
 
+### Importing an existing identity
+
+To keep an existing MeshCore identity, copy the output of its local `get prv.key`
+command and use `set prv.key <hex>` on MCRS, then reboot. The command accepts
+both 64-character seeds and 128-character MeshCore expanded private keys.
+It reports the new public key so you can compare it before rebooting.
+
+Setting a key replaces the previous stored key. `get prv.key` returns the stored
+format; configuration files use `identity.seed` or `identity.expanded`, respectively.
+The running identity changes on reboot.
+
 ### Configuration
 
 Remote management can be used to configure various settings as normal. Additionally,

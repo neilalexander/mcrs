@@ -6,7 +6,7 @@ use alloc::{string::String, vec::Vec};
 use core::fmt::{self, Write};
 
 use super::{
-    identity::{self, Identity},
+    identity::{self, Identity, PrivateKey},
     regions::{RegionError, RegionMap},
 };
 
@@ -35,7 +35,7 @@ const MAX_LONGITUDE_MICRODEGREES: i32 = 180 * COORDINATE_SCALE;
 
 pub struct AppConfig {
     identity: Identity,
-    identity_seed: [u8; 32],
+    private_key: PrivateKey,
     identity_label: &'static str,
     latitude_microdegrees: Option<i32>,
     longitude_microdegrees: Option<i32>,
@@ -140,8 +140,8 @@ impl AppConfig {
 
     fn from_stored(stored: StoredAppConfig, identity_label: &'static str) -> Self {
         Self {
-            identity: Identity::from_private_key_seed(&stored.identity_seed),
-            identity_seed: stored.identity_seed,
+            identity: Identity::from_private_key(stored.private_key),
+            private_key: stored.private_key,
             identity_label,
             latitude_microdegrees: stored.latitude_microdegrees,
             longitude_microdegrees: stored.longitude_microdegrees,
@@ -168,8 +168,8 @@ impl AppConfig {
         self.identity_label
     }
 
-    pub fn identity_seed(&self) -> &[u8; 32] {
-        &self.identity_seed
+    pub fn private_key(&self) -> &PrivateKey {
+        &self.private_key
     }
 
     pub fn latitude_microdegrees(&self) -> Option<i32> {
@@ -250,7 +250,10 @@ impl AppConfig {
     }
 
     pub fn unset(&mut self, setting: &str) -> Result<(), ConfigError> {
-        let defaults = Self::generated_defaults(self.identity_seed);
+        let defaults = Self::from_stored(
+            StoredAppConfig::default_with_private_key(self.private_key),
+            "generated",
+        );
         #[cfg(feature = "mqtt")]
         if let Some(number) = setting.strip_prefix("mqtt.")
             && !number.contains('.')
@@ -321,8 +324,8 @@ impl AppConfig {
         self.remote_cli_password = fit_password(password);
     }
 
-    pub fn set_identity_seed(&mut self, identity_seed: [u8; 32]) {
-        self.identity_seed = identity_seed;
+    pub fn set_private_key(&mut self, private_key: PrivateKey) {
+        self.private_key = private_key;
     }
 
     pub fn set_latitude_microdegrees(
@@ -527,8 +530,8 @@ fn div_ceil_u64(numerator: u64, denominator: u64) -> u64 {
     numerator / denominator + u64::from(!numerator.is_multiple_of(denominator))
 }
 
-fn generated_node_name(identity_seed: &[u8; 32]) -> String {
-    let identity = Identity::from_private_key_seed(identity_seed);
+fn generated_node_name(private_key: PrivateKey) -> String {
+    let identity = Identity::from_private_key(private_key);
     let mut node_name = String::from("Repeater-");
     for byte in &identity.public_key()[..3] {
         push_hex_byte(&mut node_name, *byte);
@@ -538,7 +541,7 @@ fn generated_node_name(identity_seed: &[u8; 32]) -> String {
 
 #[derive(Clone)]
 struct StoredAppConfig {
-    identity_seed: [u8; 32],
+    private_key: PrivateKey,
     latitude_microdegrees: Option<i32>,
     longitude_microdegrees: Option<i32>,
     node_name: String,
@@ -567,11 +570,15 @@ fn default_mqtt_servers() -> [MqttConfig; MQTT_SERVER_COUNT] {
 
 impl StoredAppConfig {
     fn default_with_identity_seed(identity_seed: [u8; 32]) -> Self {
+        Self::default_with_private_key(PrivateKey::Seed(identity_seed))
+    }
+
+    fn default_with_private_key(private_key: PrivateKey) -> Self {
         Self {
-            identity_seed,
+            private_key,
             latitude_microdegrees: None,
             longitude_microdegrees: None,
-            node_name: fit_node_name(&generated_node_name(&identity_seed))
+            node_name: fit_node_name(&generated_node_name(private_key))
                 .unwrap_or_else(|_| String::from("Repeater")),
             remote_cli_password: fit_password(identity::REMOTE_CLI_PASSWORD),
             wifi: WifiConfig::default(),
@@ -595,7 +602,7 @@ impl StoredAppConfig {
 
     fn from_app_config(config: &AppConfig) -> Self {
         Self {
-            identity_seed: config.identity_seed,
+            private_key: config.private_key,
             latitude_microdegrees: config.latitude_microdegrees,
             longitude_microdegrees: config.longitude_microdegrees,
             node_name: fit_node_name(config.node_name())
@@ -662,8 +669,12 @@ fn decode_config_text(data: &[u8], defaults: &StoredAppConfig) -> Option<StoredA
             "version" => {
                 let _ = value.parse::<u8>().ok()?;
             }
-            "identity.seed" => {
-                config.identity_seed = parse_identity_seed_hex(&value)?;
+            "identity.seed" | "identity.expanded" => {
+                let private_key = PrivateKey::from_hex(&value)?;
+                if private_key.config_key() != key {
+                    return None;
+                }
+                config.private_key = private_key;
             }
             "identity.lat" => {
                 config.latitude_microdegrees = parse_optional_coordinate(
@@ -750,7 +761,7 @@ fn decode_config_text(data: &[u8], defaults: &StoredAppConfig) -> Option<StoredA
         return None;
     }
     if !saw_node_name {
-        config.node_name = fit_node_name(&generated_node_name(&config.identity_seed)).ok()?;
+        config.node_name = fit_node_name(&generated_node_name(config.private_key)).ok()?;
     }
     config.radio.validate().ok()?;
     if !(1..=100).contains(&config.duty_cycle_percent) {
@@ -774,7 +785,7 @@ fn validate_wifi_config(wifi: &WifiConfig) -> Result<(), ConfigError> {
 }
 
 fn encode_config_text(config: &StoredAppConfig) -> Vec<u8> {
-    let defaults = StoredAppConfig::default_with_identity_seed(config.identity_seed);
+    let defaults = StoredAppConfig::default_with_private_key(config.private_key);
     encode_sparse_config_text(config, &defaults)
 }
 
@@ -783,9 +794,10 @@ fn encode_sparse_config_text(config: &StoredAppConfig, defaults: &StoredAppConfi
     let _ = writeln!(&mut out, "# MCRS app.conf");
     let _ = writeln!(&mut out, "version={}", APP_CONFIG_TEXT_VERSION);
 
-    out.push_str("identity.seed=");
-    for byte in config.identity_seed {
-        push_hex_byte(&mut out, byte);
+    out.push_str(config.private_key.config_key());
+    out.push('=');
+    for byte in config.private_key.as_bytes() {
+        push_hex_byte(&mut out, *byte);
     }
     out.push('\n');
 
@@ -905,12 +917,13 @@ fn encode_full_config_text_redacted(config: &StoredAppConfig, redact_secrets: bo
     let _ = writeln!(&mut out, "# MCRS app.conf");
     let _ = writeln!(&mut out, "version={}", APP_CONFIG_TEXT_VERSION);
 
+    out.push_str(config.private_key.config_key());
+    out.push('=');
     if redact_secrets {
-        out.push_str("identity.seed=<redacted>");
+        out.push_str("<redacted>");
     } else {
-        out.push_str("identity.seed=");
-        for byte in config.identity_seed {
-            push_hex_byte(&mut out, byte);
+        for byte in config.private_key.as_bytes() {
+            push_hex_byte(&mut out, *byte);
         }
     }
     out.push('\n');
@@ -1188,34 +1201,10 @@ fn unescape_value(input: &str) -> Result<String, ()> {
     if escaped { Err(()) } else { Ok(output) }
 }
 
-fn parse_identity_seed_hex(input: &str) -> Option<[u8; 32]> {
-    let bytes = input.as_bytes();
-    if bytes.len() != 64 {
-        return None;
-    }
-
-    let mut seed = [0u8; 32];
-    for index in 0..seed.len() {
-        let high = hex_nibble(bytes[index * 2])?;
-        let low = hex_nibble(bytes[index * 2 + 1])?;
-        seed[index] = high << 4 | low;
-    }
-    Some(seed)
-}
-
 fn push_hex_byte(out: &mut String, byte: u8) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     out.push(HEX[(byte >> 4) as usize] as char);
     out.push(HEX[(byte & 0x0f) as usize] as char);
-}
-
-fn hex_nibble(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
 }
 
 fn parse_bool(input: &str) -> Option<bool> {
@@ -1500,5 +1489,66 @@ mod tests {
         );
         assert!(config.unset("mqtt.0").is_err());
         assert!(config.unset("mqtt.4").is_err());
+    }
+    fn expanded_key() -> PrivateKey {
+        PrivateKey::from_hex("28ad39fefd7fa3e200a9c626eef599e61a2d055c48a8288a4e7e4c4bca3928789c7d6db3506d65dbac7c052aaee4857425210c9bc54030c826e54055983452a5").unwrap()
+    }
+
+    #[test]
+    fn private_key_formats_round_trip_and_redact() {
+        for key in [PrivateKey::Seed([7; 32]), expanded_key()] {
+            let stored = StoredAppConfig::default_with_private_key(key);
+            let encoded = encode_config_text(&stored);
+            let text = core::str::from_utf8(&encoded).unwrap();
+            assert!(text.contains(key.config_key()));
+            let decoded = decode_config_text(&encoded, &defaults()).unwrap();
+            assert_eq!(decoded.private_key, key);
+            assert_eq!(decoded.node_name, stored.node_name);
+            let redacted = encode_full_config_text_redacted(&stored, true);
+            let redacted = core::str::from_utf8(&redacted).unwrap();
+            assert!(redacted.contains(&alloc::format!("{}=<redacted>", key.config_key())));
+            let secret_line = text
+                .lines()
+                .find(|line| line.starts_with(key.config_key()))
+                .unwrap();
+            assert!(!redacted.contains(secret_line));
+        }
+    }
+
+    #[test]
+    fn importing_key_keeps_active_identity_until_reload() {
+        let mut config = AppConfig::generated_defaults([9; 32]);
+        let original_public = *config.identity().public_key();
+        let original_signature = config.identity().sign(b"advert");
+        config.set_private_key(expanded_key());
+        assert_eq!(config.identity().public_key(), &original_public);
+        assert_eq!(config.identity().sign(b"advert"), original_signature);
+        config.unset("name").unwrap();
+        assert_eq!(*config.private_key(), expanded_key());
+        let encoded = encode_config_text(&StoredAppConfig::from_app_config(&config));
+        let reloaded = AppConfig::from_stored(
+            decode_config_text(&encoded, &defaults()).unwrap(),
+            "storage",
+        );
+        assert_eq!(
+            reloaded.identity().public_key(),
+            Identity::from_private_key(expanded_key()).public_key()
+        );
+        assert_eq!(reloaded.node_name(), "Repeater-ea4a6c");
+    }
+
+    #[test]
+    fn rejects_keys_with_wrong_config_format() {
+        let expanded =
+            encode_config_text(&StoredAppConfig::default_with_private_key(expanded_key()));
+        let wrong = core::str::from_utf8(&expanded)
+            .unwrap()
+            .replace("identity.expanded=", "identity.seed=");
+        assert!(decode_config_text(wrong.as_bytes(), &defaults()).is_none());
+        let seed = encode_config_text(&defaults());
+        let wrong = core::str::from_utf8(&seed)
+            .unwrap()
+            .replace("identity.seed=", "identity.expanded=");
+        assert!(decode_config_text(wrong.as_bytes(), &defaults()).is_none());
     }
 }
