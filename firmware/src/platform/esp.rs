@@ -1018,6 +1018,7 @@ pub fn log_display_i2c_config_failed() {
     println!("Failed to configure OLED I2C bus");
 }
 
+#[cfg(not(feature = "board-heltec-v4"))]
 pub fn log_cli_uart_config_failed() {
     println!("Failed to configure CLI UART");
 }

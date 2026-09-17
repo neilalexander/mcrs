@@ -1,12 +1,11 @@
 use esp_hal::{
-    Async, Blocking,
+    Blocking,
     analog::adc::{Adc, AdcCalCurve, AdcPin},
     gpio::{Flex, Input, Level, Output},
     peripherals::{ADC1, GPIO1, WIFI},
     rng::Rng,
     spi::master::Spi,
     timer::timg::Timer as TimgTimer,
-    uart::Uart,
 };
 
 use alloc::{format, string::String};
@@ -24,7 +23,10 @@ use static_cell::StaticCell;
 pub type RadioSpi = Spi<'static, Blocking>;
 pub type RadioOutput = Output<'static>;
 pub type RadioInput = Input<'static>;
-pub type CliUart = Uart<'static, Async>;
+#[cfg(not(feature = "board-heltec-v4"))]
+pub type CliSerial = esp_hal::uart::Uart<'static, esp_hal::Async>;
+#[cfg(feature = "board-heltec-v4")]
+pub type CliSerial = esp_hal::usb_serial_jtag::UsbSerialJtag<'static, esp_hal::Async>;
 pub type ButtonInput = Input<'static>;
 pub type WifiTimer = TimgTimer<'static>;
 pub type BatteryAdc = Adc<'static, ADC1<'static>, Blocking>;
@@ -377,7 +379,7 @@ pub async fn run_board_tasks<I2C, RESET, POWER, FRONTEND>(
     prg_button: ButtonInput,
     battery: BatteryMonitor,
     radio: RadioResources<FRONTEND>,
-    mut cli_serial: Option<CliUart>,
+    mut cli_serial: Option<CliSerial>,
     wifi: WifiResources,
     context: crate::app::AppContext<crate::platform::EspStorage>,
 ) -> !
@@ -743,108 +745,154 @@ async fn mqtt_session(
     generation: u32,
     config: &crate::app::config::MqttConfig,
 ) -> Result<(), ()> {
-    use crate::app::mqtt;
+    use crate::app::mqtt::transport::{self, Endpoint};
+    use super::mqtt_transport::{SharedSocket, WifiRng};
+    use embedded_tls::{Aes128GcmSha256, TlsConfig, TlsConnection, TlsContext, UnsecureProvider};
+
+    let endpoint = Endpoint::parse(&config.host, config.port)?;
+    let mut rx = [0u8; 512];
+    let mut tx = [0u8; 512];
+    let mut socket = embassy_net::tcp::TcpSocket::new(stack, &mut rx, &mut tx);
+    mqtt_io(context, index, generation, async {
+        let addresses = stack.dns_query(endpoint.host, embassy_net::dns::DnsQueryType::A)
+            .await.map_err(|_| ())?;
+        socket.connect((addresses.first().copied().ok_or(())?, endpoint.port))
+            .await.map_err(|_| ())
+    }).await?;
+
+    if endpoint.tls {
+        // Allocate TLS records only for secure connections, outside the task arena.
+        // A full receive record accommodates servers that don't negotiate MFL.
+        let mut read_record = alloc::vec![0; 16640];
+        let mut write_record = alloc::vec![0; 2048];
+        let shared = core::cell::RefCell::new(socket);
+        let mut tls = TlsConnection::<_, Aes128GcmSha256>::new(
+            SharedSocket(&shared), &mut read_record, &mut write_record,
+        );
+        let tls_config = TlsConfig::new().enable_rsa_signatures().with_server_name(endpoint.host);
+        mqtt_io(context, index, generation, async {
+            // Deliberately accept all certificates, including automatically rotated
+            // certificates. This encrypts traffic but does not authenticate peers.
+            tls.open(TlsContext::new(&tls_config,
+                UnsecureProvider::new::<Aes128GcmSha256>(WifiRng::new())))
+                .await.map_err(|_| ())?;
+            if endpoint.websocket {
+                transport::upgrade(&mut tls, &endpoint, WifiRng::new().bytes()).await?;
+            }
+            Ok::<(), ()>(())
+        }).await?;
+        let (reader, writer) = tls.split();
+        mqtt_connected(context, index, generation, config, endpoint.websocket, reader, writer).await
+    } else {
+        if endpoint.websocket {
+            mqtt_io(context, index, generation,
+                transport::upgrade(&mut socket, &endpoint, WifiRng::new().bytes())).await?;
+        }
+        let (reader, writer) = socket.split();
+        mqtt_connected(context, index, generation, config, endpoint.websocket, reader, writer).await
+    }
+}
+
+#[cfg(feature = "mqtt")]
+async fn mqtt_connected<R: embedded_io_async::Read, W: embedded_io_async::Write>(
+    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    index: usize,
+    generation: u32,
+    config: &crate::app::config::MqttConfig,
+    websocket: bool,
+    reader: R,
+    mut writer: W,
+) -> Result<(), ()> {
+    use crate::app::mqtt::{self, transport};
+    use super::mqtt_transport::WifiRng;
     use embassy_sync::{blocking_mutex::raw::NoopRawMutex, signal::Signal};
-    use embedded_io_async::Write;
 
     let public_key = context.public_key().await;
     let topic = mqtt::packets_topic(config, &public_key);
     let status = mqtt::status_topic(&topic);
-    let client_id = format!(
-        "mcrs-{:02x}{:02x}{:02x}-{}",
-        public_key[0],
-        public_key[1],
-        public_key[2],
-        index + 1
-    );
+    let client_id = format!("mcrs-{:02x}{:02x}{:02x}-{}",
+        public_key[0], public_key[1], public_key[2], index + 1);
     let offline = format!("{{\"status\":\"offline\",\"origin_id\":\"{}\"}}", client_id);
     let online = format!("{{\"status\":\"online\",\"origin_id\":\"{}\"}}", client_id);
-    let mut rx = [0u8; 512];
-    let mut tx = [0u8; 512];
-    let mut socket = embassy_net::tcp::TcpSocket::new(stack, &mut rx, &mut tx);
-
-    mqtt_io(context, index, generation, async {
-        let addresses = stack
-            .dns_query(&config.host, embassy_net::dns::DnsQueryType::A)
-            .await
-            .map_err(|_| ())?;
-        let address = addresses.first().copied().ok_or(())?;
-        socket
-            .connect((address, config.port))
-            .await
-            .map_err(|_| ())?;
-        socket
-            .write_all(&mqtt::connect_packet(config, &client_id, &status, &offline))
-            .await
-            .map_err(|_| ())?;
-        mqtt::read_connack(&mut socket).await?;
-        socket
-            .write_all(&mqtt::publish_packet(&status, &online, true))
-            .await
-            .map_err(|_| ())
-    })
-    .await?;
-
-    context.set_mqtt_state(index, mqtt::ConnectionState::Connected);
-    crate::platform::log_fmt(format_args!("MQTT {}: connected", index + 1));
-    let (mut reader, mut writer) = socket.split();
-    let pong = Signal::<NoopRawMutex, ()>::new();
+    let pong = transport::Pong::new();
+    let ack = Signal::<NoopRawMutex, ()>::new();
+    let mut reader = transport::Reader::new(reader, websocket, &pong);
     let mut receive = pin!(async {
-        // A QoS 0 publisher with no subscriptions only receives PINGRESP.
-        while mqtt::read_pingresp(&mut reader).await.is_ok() {
-            pong.signal(());
-        }
+        if mqtt::read_connack(&mut reader).await.is_err() { return; }
+        ack.signal(());
+        while mqtt::read_pingresp(&mut reader).await.is_ok() { ack.signal(()); }
     });
     let mut send = pin!(async {
+        let mut rng = WifiRng::new();
+        mqtt_io(context, index, generation, async {
+            transport::write(&mut writer, websocket, 2,
+                &mqtt::connect_packet(config, &client_id, &status, &offline), rng.bytes()).await?;
+            mqtt_wait_ack(&mut writer, websocket, &ack, &pong, &mut rng).await?;
+            transport::write(&mut writer, websocket, 2,
+                &mqtt::publish_packet(&status, &online, true), rng.bytes()).await
+        }).await?;
+        context.set_mqtt_state(index, mqtt::ConnectionState::Connected);
+        crate::platform::log_fmt(format_args!("MQTT {}: connected", index + 1));
+        let mut keepalive = embassy_time::Instant::now() + embassy_time::Duration::from_secs(30);
         loop {
             let mut event = pin!(context.receive_mqtt_packet(index));
-            let mut idle = pin!(embassy_time::Timer::after_secs(30));
-            let packet = poll_fn(|cx| {
+            let mut idle = pin!(embassy_time::Timer::at(keepalive));
+            let mut control = pin!(pong.wait());
+            let (packet, control) = poll_fn(|cx| {
                 context.register_mqtt_waker(index, cx.waker());
-                if context.mqtt_generation() != generation {
-                    return Poll::Ready(None);
-                }
-                if let Poll::Ready(event) = event.as_mut().poll(cx) {
-                    return Poll::Ready(Some(event));
-                }
-                if idle.as_mut().poll(cx).is_ready() {
-                    return Poll::Ready(None);
-                }
+                if context.mqtt_generation() != generation { return Poll::Ready((None, None)); }
+                if let Poll::Ready(data) = control.as_mut().poll(cx) { return Poll::Ready((None, Some(data))); }
+                if let Poll::Ready(event) = event.as_mut().poll(cx) { return Poll::Ready((Some(event), None)); }
+                if idle.as_mut().poll(cx).is_ready() { return Poll::Ready((None, None)); }
                 Poll::Pending
-            })
-            .await;
-            let result = mqtt_io(context, index, generation, async {
-                if let Some(event) = packet {
-                    writer
-                        .write_all(&mqtt::publish_packet(
-                            &topic,
-                            &mqtt::packet_json(&event),
-                            false,
-                        ))
-                        .await
-                        .map_err(|_| ())?;
+            }).await;
+            mqtt_io(context, index, generation, async {
+                if let Some(data) = control {
+                    transport::write(&mut writer, websocket, 10, &data, rng.bytes()).await?;
                 } else {
-                    pong.reset();
-                    writer.write_all(&[0xc0, 0x00]).await.map_err(|_| ())?;
-                    pong.wait().await;
+                    if let Some(event) = packet {
+                        transport::write(&mut writer, websocket, 2,
+                            &mqtt::publish_packet(&topic, &mqtt::packet_json(&event), false), rng.bytes()).await?;
+                    } else {
+                        ack.reset();
+                        transport::write(&mut writer, websocket, 2, &[0xc0, 0], rng.bytes()).await?;
+                        mqtt_wait_ack(&mut writer, websocket, &ack, &pong, &mut rng).await?;
+                    }
+                    keepalive = embassy_time::Instant::now() + embassy_time::Duration::from_secs(30);
                 }
                 Ok::<(), ()>(())
-            })
-            .await;
-            if result.is_err() {
-                break;
-            }
+            }).await?;
         }
+        #[allow(unreachable_code)]
+        Ok::<(), ()>(())
     });
     poll_fn(|cx| {
         if receive.as_mut().poll(cx).is_ready() || send.as_mut().poll(cx).is_ready() {
-            Poll::Ready(())
-        } else {
+            Poll::Ready(Err(()))
+        } else { Poll::Pending }
+    }).await
+}
+
+// Continue servicing WebSocket pings even while waiting for MQTT acknowledgements.
+#[cfg(feature = "mqtt")]
+async fn mqtt_wait_ack<W: embedded_io_async::Write>(
+    writer: &mut W,
+    websocket: bool,
+    ack: &embassy_sync::signal::Signal<embassy_sync::blocking_mutex::raw::NoopRawMutex, ()>,
+    pong: &crate::app::mqtt::transport::Pong,
+    rng: &mut super::mqtt_transport::WifiRng,
+) -> Result<(), ()> {
+    loop {
+        let mut response = pin!(ack.wait());
+        let mut control = pin!(pong.wait());
+        let data = poll_fn(|cx| {
+            if response.as_mut().poll(cx).is_ready() { return Poll::Ready(None); }
+            if let Poll::Ready(data) = control.as_mut().poll(cx) { return Poll::Ready(Some(data)); }
             Poll::Pending
-        }
-    })
-    .await;
-    Ok(())
+        }).await;
+        let Some(data) = data else { return Ok(()); };
+        crate::app::mqtt::transport::write(writer, websocket, 10, &data, rng.bytes()).await?;
+    }
 }
 
 // Dropping a cancelled or timed-out operation may leave a partial MQTT frame.
@@ -1345,7 +1393,7 @@ where
 }
 
 async fn cli_task(
-    serial: &mut Option<CliUart>,
+    serial: &mut Option<CliSerial>,
     cli: &mut crate::app::cli::Cli,
     context: &crate::app::AppContext<crate::platform::EspStorage>,
 ) -> ! {
@@ -1356,16 +1404,20 @@ async fn cli_task(
         };
 
         let mut byte = [0];
-        match serial.read_async(&mut byte).await {
+        #[cfg(feature = "board-heltec-v4")]
+        let read = embedded_io_async_06::Read::read(serial, &mut byte).await;
+        #[cfg(not(feature = "board-heltec-v4"))]
+        let read = serial.read_async(&mut byte).await;
+        match read {
             Ok(count) if count > 0 => {
                 let echo = cli.echo_for_byte(byte[0]);
                 match echo {
                     crate::app::cli::SerialEcho::None => {}
                     crate::app::cli::SerialEcho::Byte => {
-                        let _ = serial.write_async(&byte).await;
+                        esp_println::print!("{}", byte[0] as char);
                     }
                     crate::app::cli::SerialEcho::Bytes(bytes) => {
-                        let _ = serial.write_async(bytes).await;
+                        esp_println::print!("{}", core::str::from_utf8(bytes).unwrap_or(""));
                     }
                 }
                 cli.accept_byte(byte[0], context).await;
