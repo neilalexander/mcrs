@@ -36,6 +36,8 @@ MCRS supports the following features:
   * Automatic NTP clock sync in STA mode every hour, avoiding the need for manual clock sync.
   * Telnet CLI access with `wifi.telnet = true` in STA mode, for easier remote management on trusted networks.
 * Hardware shortcut for sending zero-hop adverts by pressing-and-holding the `PRG`/`USER` button.
+* Optional MQTT packet reporting to up to three brokers over Wi-Fi. This is only
+  present in firmware compiled with the Cargo feature `mqtt`.
 
 Note: The storage format is different to the official MeshCore firmware, so a repeater that is switched to this firmware will come up with a fresh configuration and will need to be reconfigured. The default admin password is `meshcore`. 
 
@@ -72,12 +74,87 @@ Useful build commands for e.g. the Heltec v3:
 ```sh
 cargo test -p mcrs-protocol
 cargo +esp check-heltec-v3
+cargo +esp check-heltec-v3-mqtt
 make heltec-v3-build
 make heltec-v3-flash
 make heltec-v3-bins
 ```
 
 For Heltec v4 and WSL3, use the corresponding `heltec-v4-*` and `heltec-wsl3-*` Make targets.
+
+The standard `make *-build`, `make *-flash`, and `make *-bins` targets build
+firmware without MQTT. Set `MQTT=1` to include it in any board build, flash, or
+binary target; for example:
+
+```sh
+make MQTT=1 heltec-v3-build
+make MQTT=1 heltec-v3-flash
+make MQTT=1 heltec-v3-bins
+```
+
+MQTT binary artifacts include `-mqtt` in their filenames so they are not
+confused with or overwritten by standard images.
+
+### Optional MQTT
+
+MQTT support, including all `mqtt.*` settings and commands, only exists in a
+firmware image built with the `mqtt` feature. On other builds those settings and
+commands are unavailable. MQTT also requires Wi-Fi station mode to be configured.
+
+On an MQTT-enabled build, configure brokers 1–3 on the local CLI, then restart
+MQTT:
+
+```text
+set mqtt.1.host mqtt.example.net
+set mqtt.1.port 1883
+set mqtt.1.username repeater
+set mqtt.1.password secret
+set mqtt.1.iata XXX
+set mqtt.1.topic.root meshcore/{IATA}/{PUBLIC_KEY}/packets
+mqtt restart
+```
+
+Repeat with `mqtt.2.*` and `mqtt.3.*` for additional brokers. Empty hosts disable
+unused entries. Use `get mqtt.<number>.<key>` to inspect settings. Use `unset mqtt.1`
+(or `.2`/`.3`) to clear all settings for one broker and restart MQTT. Use
+`mqtt status` to show whether each broker is disabled, disconnected, connecting,
+or connected.
+
+The host setting also accepts broker URLs:
+
+| Host value | Transport | Default port |
+| --- | --- | --- |
+| `mqtt.example.net` | MQTT over TCP, using `mqtt.N.port` | 1883 |
+| `mqtt://mqtt.example.net` | MQTT over TCP | 1883 |
+| `mqtts://mqtt.example.net` | MQTT over TLS | 8883 |
+| `ws://mqtt.example.net/mqtt` | MQTT over WebSocket | 80 |
+| `wss://mqtt.example.net/mqtt` | MQTT over secure WebSocket | 443 |
+
+`http://` and `https://` are aliases for `ws://` and `wss://`. URLs can include
+a custom port and path, such as `wss://mqtt.example.net:8443/custom/path`.
+WebSocket paths default to `/mqtt`. The separate `mqtt.N.port` setting applies
+only to bare hostnames.
+
+For example:
+
+```text
+set mqtt.1.host https://mqtt.example.net/mqtt
+mqtt restart
+```
+
+Secure connections require TLS 1.3. Certificates are not verified, so traffic is
+encrypted but the broker is not authenticated. No certificate setup is needed.
+
+### Importing an existing identity
+
+To keep an existing MeshCore identity, copy the output of its local `get prv.key`
+command and use `set prv.key <hex>` on MCRS, then reboot. The command accepts
+both 64-character seeds and 128-character MeshCore expanded private keys.
+It reports the new public key so you can compare it before rebooting.
+
+Setting a key replaces the previous stored key. `get prv.key` returns the stored
+format; configuration files use `identity.seed` or `identity.expanded`, respectively.
+The running identity changes on reboot.
 
 ### Configuration
 

@@ -1,4 +1,4 @@
-.PHONY: heltec-v3-build heltec-v3-flash heltec-v3-bins heltec-v3-merged-bin heltec-v3-ota-bin heltec-v4-build heltec-v4-flash heltec-v4-bins heltec-v4-merged-bin heltec-v4-ota-bin heltec-wsl3-build heltec-wsl3-flash heltec-wsl3-bins heltec-wsl3-merged-bin heltec-wsl3-ota-bin clean-dist
+.PHONY: heltec-v3-build heltec-v3-run heltec-v3-flash heltec-v3-bins heltec-v3-merged-bin heltec-v3-ota-bin heltec-v4-build heltec-v4-run heltec-v4-flash heltec-v4-bins heltec-v4-merged-bin heltec-v4-ota-bin heltec-wsl3-build heltec-wsl3-run heltec-wsl3-flash heltec-wsl3-bins heltec-wsl3-merged-bin heltec-wsl3-ota-bin clean-dist
 
 HELTEC_V3_CHIP := esp32s3
 HELTEC_V3_FLASH_SIZE := 8mb
@@ -19,12 +19,18 @@ HELTEC_WSL3_FLASH_FREQ := 40mhz
 HELTEC_WSL3_PARTITIONS := firmware/partitions_heltec_v3.csv
 HELTEC_WSL3_ELF := target/xtensa-esp32s3-none-elf/release/mcrs-firmware
 DIST_DIR := dist
+MQTT ?= 0
+
+ifeq ($(MQTT),1)
+MQTT_FEATURE := --features mqtt
+MQTT_SUFFIX := -mqtt
+endif
 
 heltec-v3-build:
-	cargo +esp build-heltec-v3
+	cargo +esp build-heltec-v3 $(MQTT_FEATURE)
 
-heltec-v3-flash:
-	cargo +esp run-heltec-v3
+heltec-v3-run heltec-v3-flash:
+	cargo +esp run-heltec-v3 $(MQTT_FEATURE)
 
 heltec-v3-bins: heltec-v3-merged-bin heltec-v3-ota-bin
 
@@ -37,7 +43,7 @@ heltec-v3-merged-bin: heltec-v3-build | $(DIST_DIR)
 		--partition-table $(HELTEC_V3_PARTITIONS) \
 		--merge \
 		$(HELTEC_V3_ELF) \
-		$(DIST_DIR)/mcrs-heltec-v3-merged.bin
+		$(DIST_DIR)/mcrs-heltec-v3$(MQTT_SUFFIX)-merged.bin
 
 heltec-v3-ota-bin: heltec-v3-build | $(DIST_DIR)
 	espflash save-image \
@@ -48,13 +54,13 @@ heltec-v3-ota-bin: heltec-v3-build | $(DIST_DIR)
 		--partition-table $(HELTEC_V3_PARTITIONS) \
 		--target-app-partition ota_0 \
 		$(HELTEC_V3_ELF) \
-		$(DIST_DIR)/mcrs-heltec-v3-app.bin
+		$(DIST_DIR)/mcrs-heltec-v3$(MQTT_SUFFIX)-app.bin
 
 heltec-v4-build:
-	cargo +esp build-heltec-v4
+	cargo +esp build-heltec-v4 $(MQTT_FEATURE)
 
-heltec-v4-flash:
-	cargo +esp run-heltec-v4
+heltec-v4-run heltec-v4-flash:
+	cargo +esp run-heltec-v4 $(MQTT_FEATURE)
 
 heltec-v4-bins: heltec-v4-merged-bin heltec-v4-ota-bin
 
@@ -67,7 +73,7 @@ heltec-v4-merged-bin: heltec-v4-build | $(DIST_DIR)
 		--partition-table $(HELTEC_V4_PARTITIONS) \
 		--merge \
 		$(HELTEC_V4_ELF) \
-		$(DIST_DIR)/mcrs-heltec-v4-merged.bin
+		$(DIST_DIR)/mcrs-heltec-v4$(MQTT_SUFFIX)-merged.bin
 
 heltec-v4-ota-bin: heltec-v4-build | $(DIST_DIR)
 	espflash save-image \
@@ -78,13 +84,13 @@ heltec-v4-ota-bin: heltec-v4-build | $(DIST_DIR)
 		--partition-table $(HELTEC_V4_PARTITIONS) \
 		--target-app-partition ota_0 \
 		$(HELTEC_V4_ELF) \
-		$(DIST_DIR)/mcrs-heltec-v4-app.bin
+		$(DIST_DIR)/mcrs-heltec-v4$(MQTT_SUFFIX)-app.bin
 
 heltec-wsl3-build:
-	cargo +esp build-heltec-wsl3
+	cargo +esp build-heltec-wsl3 $(MQTT_FEATURE)
 
-heltec-wsl3-flash:
-	cargo +esp run-heltec-wsl3
+heltec-wsl3-run heltec-wsl3-flash:
+	cargo +esp run-heltec-wsl3 $(MQTT_FEATURE)
 
 heltec-wsl3-bins: heltec-wsl3-merged-bin heltec-wsl3-ota-bin
 
@@ -97,7 +103,7 @@ heltec-wsl3-merged-bin: heltec-wsl3-build | $(DIST_DIR)
 		--partition-table $(HELTEC_WSL3_PARTITIONS) \
 		--merge \
 		$(HELTEC_WSL3_ELF) \
-		$(DIST_DIR)/mcrs-heltec-wsl3-merged.bin
+		$(DIST_DIR)/mcrs-heltec-wsl3$(MQTT_SUFFIX)-merged.bin
 
 heltec-wsl3-ota-bin: heltec-wsl3-build | $(DIST_DIR)
 	espflash save-image \
@@ -108,7 +114,7 @@ heltec-wsl3-ota-bin: heltec-wsl3-build | $(DIST_DIR)
 		--partition-table $(HELTEC_WSL3_PARTITIONS) \
 		--target-app-partition ota_0 \
 		$(HELTEC_WSL3_ELF) \
-		$(DIST_DIR)/mcrs-heltec-wsl3-app.bin
+		$(DIST_DIR)/mcrs-heltec-wsl3$(MQTT_SUFFIX)-app.bin
 
 $(DIST_DIR):
 	mkdir -p $(DIST_DIR)

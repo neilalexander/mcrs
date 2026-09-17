@@ -5,3 +5,6 @@ mod heltec_v3;
 mod heltec_v4;
 
 pub(crate) use heltec::{MEMORY_PROFILE, STORAGE_LAYOUT};
+
+#[cfg(feature = "mqtt")]
+mod mqtt_transport;

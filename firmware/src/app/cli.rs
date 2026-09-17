@@ -606,6 +606,32 @@ async fn handle_command(
         return Some(command_response(request, output));
     }
 
+    #[cfg(feature = "mqtt")]
+    if command == "mqtt status" {
+        let output = if request.origin.is_local() {
+            let mut output = String::new();
+            for index in 0..super::config::MQTT_SERVER_COUNT {
+                let state = context.mqtt_state(index);
+                let _ = writeln!(&mut output, "MQTT {}: {}", index + 1, state.as_str());
+            }
+            output
+        } else {
+            denied_text()
+        };
+        return Some(command_response(request, output));
+    }
+
+    #[cfg(feature = "mqtt")]
+    if command == "mqtt restart" {
+        let output = if request.origin.is_local() && request.privilege.is_passworded() {
+            context.request_mqtt_restart();
+            String::from("OK - MQTT restarting")
+        } else {
+            denied_text()
+        };
+        return Some(command_response(request, output));
+    }
+
     if let Some(password) = command.strip_prefix("password ").map(str::trim) {
         let output = if request.privilege.is_passworded() {
             match context
@@ -782,6 +808,21 @@ async fn handle_get_command(
     context: &AppContext<impl crate::platform::storage::Storage>,
     request: CliRequest,
 ) -> String {
+    #[cfg(feature = "mqtt")]
+    if let Some((index, key)) = parse_mqtt_setting(config) {
+        if !request.origin.is_local() {
+            return denied_text();
+        }
+        return context
+            .with_config(|app_config| {
+                app_config
+                    .mqtt(index)
+                    .and_then(|mqtt| mqtt.value(key))
+                    .map(|value| format!("> {value}"))
+                    .unwrap_or_else(|| format!("Unknown config: {config}"))
+            })
+            .await;
+    }
     if let Some(key) = config.strip_prefix("wifi.") {
         if !request.origin.is_local() {
             return denied_text();
@@ -858,8 +899,8 @@ async fn handle_get_command(
         }
         "prv.key" if request.origin.is_local() => {
             let mut output = String::from("> ");
-            let seed = context.with_config(|config| *config.identity_seed()).await;
-            append_hex(&mut output, &seed);
+            let key = context.with_config(|config| *config.private_key()).await;
+            append_hex(&mut output, key.as_bytes());
             output
         }
         "prv.key" => denied_text(),
@@ -896,6 +937,27 @@ async fn handle_set_command(
 ) -> String {
     if !request.privilege.is_passworded() {
         return denied_text();
+    }
+
+    #[cfg(feature = "mqtt")]
+    if let Some(setting) = config.strip_prefix("mqtt.") {
+        if !request.origin.is_local() {
+            return denied_text();
+        }
+        let Some((key, value)) = setting.split_once(' ') else {
+            return String::from("Error, missing MQTT value");
+        };
+        let full_key = format!("mqtt.{}", key.trim());
+        let Some((index, field)) = parse_mqtt_setting(&full_key) else {
+            return String::from("Error, invalid MQTT setting (use mqtt.1 through mqtt.3)");
+        };
+        return match context
+            .update_config(|config| config.set_mqtt_value(index, field, value.trim()))
+            .await
+        {
+            Ok(()) => String::from("OK - run 'mqtt restart' to apply"),
+            Err(error) => format!("Error: {error}"),
+        };
     }
 
     if let Some(setting) = config.strip_prefix("wifi.") {
@@ -1010,19 +1072,19 @@ async fn handle_set_command(
     }
 
     if let Some(hex) = config.strip_prefix("prv.key ").map(str::trim) {
-        let Some(seed) = parse_hex_seed(hex) else {
+        let Some(key) = super::identity::PrivateKey::from_hex(hex) else {
             return String::from("Error, bad key");
         };
 
         return match context
             .update_config(|config| {
-                config.set_identity_seed(seed);
+                config.set_private_key(key);
                 Ok(())
             })
             .await
         {
             Ok(()) => {
-                let new_identity = super::identity::Identity::from_private_key_seed(&seed);
+                let new_identity = super::identity::Identity::from_private_key(key);
                 let mut output = String::from("OK, reboot to apply! New pubkey: ");
                 append_hex(&mut output, new_identity.public_key());
                 output
@@ -1131,6 +1193,14 @@ async fn handle_set_command(
     format!("Unknown config: {}", config)
 }
 
+#[cfg(feature = "mqtt")]
+fn parse_mqtt_setting(setting: &str) -> Option<(usize, &str)> {
+    let setting = setting.strip_prefix("mqtt.")?;
+    let (number, key) = setting.split_once('.')?;
+    let index = number.parse::<usize>().ok()?.checked_sub(1)?;
+    (index < super::config::MQTT_SERVER_COUNT).then_some((index, key))
+}
+
 async fn handle_unset_command(
     setting: &str,
     context: &AppContext<impl crate::platform::storage::Storage>,
@@ -1142,11 +1212,18 @@ async fn handle_unset_command(
     if setting.is_empty() {
         return String::from("Error, missing config name");
     }
-    if (setting.starts_with("wifi.") || setting == "freq") && !request.origin.is_local() {
+    if (setting.starts_with("wifi.") || setting.starts_with("mqtt.") || setting == "freq")
+        && !request.origin.is_local()
+    {
         return denied_text();
     }
 
     match context.update_config(|config| config.unset(setting)).await {
+        #[cfg(feature = "mqtt")]
+        Ok(()) if matches!(setting, "mqtt.1" | "mqtt.2" | "mqtt.3") => {
+            context.request_mqtt_restart();
+            String::from("OK - MQTT server reset to defaults; MQTT restarting")
+        }
         Ok(())
             if matches!(
                 setting,
@@ -1443,31 +1520,6 @@ fn parse_decimal_scaled(input: &str, scale: u32) -> Option<u32> {
         0
     };
     u32::try_from(scaled_whole.checked_add(scaled_fraction)?).ok()
-}
-
-fn parse_hex_seed(input: &str) -> Option<[u8; 32]> {
-    let input = input.trim();
-    if input.len() != 64 {
-        return None;
-    }
-
-    let mut seed = [0u8; 32];
-    let input = input.as_bytes();
-    for index in 0..seed.len() {
-        let high = hex_value(input[index * 2])?;
-        let low = hex_value(input[index * 2 + 1])?;
-        seed[index] = (high << 4) | low;
-    }
-    Some(seed)
-}
-
-fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
 }
 
 fn format_scaled(value: u32, scale: u32, decimals: usize) -> String {

@@ -9,7 +9,7 @@ use esp_hal::{
     },
     time::Rate,
     timer::timg::TimerGroup,
-    uart::{Config as UartConfig, Uart},
+    usb_serial_jtag::UsbSerialJtag,
 };
 
 use embedded_hal_async::delay::DelayNs as _;
@@ -220,17 +220,7 @@ async fn init(platform: crate::platform::Platform) -> ! {
         frontend: radio_frontend,
     };
 
-    let cli_serial = match Uart::new(platform.peripherals.UART0, UartConfig::default()) {
-        Ok(uart) => Some(
-            uart.with_rx(platform.peripherals.GPIO44)
-                .with_tx(platform.peripherals.GPIO43)
-                .into_async(),
-        ),
-        Err(_) => {
-            crate::platform::log_cli_uart_config_failed();
-            None
-        }
-    };
+    let cli_serial = Some(UsbSerialJtag::new(platform.peripherals.USB_DEVICE).into_async());
 
     let mut rng = Rng::new(platform.peripherals.RNG);
     let identity_seed = heltec::generate_identity_seed(&mut rng);

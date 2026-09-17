@@ -1,5 +1,6 @@
 [alias]
 check-heltec-v3 = "check -p mcrs-firmware --target xtensa-esp32s3-none-elf --features board-heltec-v3"
+check-heltec-v3-mqtt = "check -p mcrs-firmware --target xtensa-esp32s3-none-elf --features board-heltec-v3,mqtt"
 build-heltec-v3 = "build -p mcrs-firmware --release --target xtensa-esp32s3-none-elf --features board-heltec-v3"
 run-heltec-v3 = [
     "run",
