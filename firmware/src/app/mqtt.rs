@@ -1,9 +1,38 @@
 //! Minimal MQTT 3.1.1 packet reporter, modelled on MeshCore-MQTT.
 
-pub use mcrs_firmware::mqtt_transport as transport;
+pub use crate::mqtt_transport as transport;
 
-use alloc::{format, string::String, vec, vec::Vec};
+use alloc::{
+    format,
+    string::{String, ToString},
+    vec,
+    vec::Vec,
+};
 use core::fmt::Write as _;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MqttConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub topic_root: String,
+    pub iata: String,
+}
+
+impl MqttConfig {
+    pub fn value(&self, key: &str) -> Option<String> {
+        Some(match key {
+            "host" => self.host.clone(),
+            "port" => self.port.to_string(),
+            "username" => self.username.clone(),
+            "password" => self.password.clone(),
+            "topic.root" => self.topic_root.clone(),
+            "iata" => self.iata.clone(),
+            _ => return None,
+        })
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -58,7 +87,7 @@ impl PacketEvent {
     }
 }
 
-pub fn packets_topic(config: &super::config::MqttConfig, public_key: &[u8; 32]) -> String {
+pub fn packets_topic(config: &MqttConfig, public_key: &[u8; 32]) -> String {
     let key = hex(public_key);
     config
         .topic_root
@@ -75,21 +104,30 @@ pub fn status_topic(packets: &str) -> String {
         .unwrap_or_else(|| packets.into())
 }
 
-pub fn packet_json(event: &PacketEvent) -> String {
+pub fn packet_json(event: &PacketEvent, public_key: &[u8; 32]) -> String {
     let direction = match event.direction {
         Direction::Rx => "rx",
         Direction::Tx => "tx",
     };
     format!(
-        "{{\"direction\":\"{direction}\",\"raw\":\"{}\",\"rssi\":{},\"snr\":{}}}",
+        "{{\"origin_id\":\"{}\",\"type\":\"PACKET\",\"direction\":\"{direction}\",\"raw\":\"{}\",\"RSSI\":{},\"SNR\":{}}}",
+        hex(public_key),
         hex(&event.payload),
         event.rssi,
         event.snr
     )
 }
 
+pub fn status_json(public_key: &[u8; 32], online: bool) -> String {
+    let status = if online { "online" } else { "offline" };
+    format!(
+        "{{\"status\":\"{status}\",\"origin_id\":\"{}\"}}",
+        hex(public_key)
+    )
+}
+
 pub fn connect_packet(
-    config: &super::config::MqttConfig,
+    config: &MqttConfig,
     client_id: &str,
     will_topic: &str,
     will_payload: &str,
@@ -149,7 +187,7 @@ fn field(out: &mut Vec<u8>, value: &[u8]) {
 fn hex(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for b in bytes {
-        let _ = write!(out, "{b:02x}");
+        let _ = write!(out, "{b:02X}");
     }
     out
 }
@@ -216,6 +254,111 @@ mod tests {
             }
         }
         panic!("response reader did not finish");
+    }
+
+    // The broker authorizes publications by the full observer key in both the
+    // topic and JSON origin_id. MQTT client IDs are not observer identities.
+    // https://github.com/michaelhart/meshcore-mqtt-broker#topics
+    #[test]
+    fn reports_use_the_full_uppercase_observer_key() {
+        let public_key = [0xab; 32];
+        let key = "AB".repeat(32);
+        let config = MqttConfig {
+            topic_root: "meshcore/{IATA}/{PUBLIC_KEY}/packets".into(),
+            iata: "LHR".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            packets_topic(&config, &public_key),
+            format!("meshcore/LHR/{key}/packets")
+        );
+        let legacy_template = MqttConfig {
+            topic_root: "meshcore/<IATA>/<PUBLIC_KEY>/packets".into(),
+            ..config.clone()
+        };
+        assert_eq!(
+            packets_topic(&legacy_template, &public_key),
+            packets_topic(&config, &public_key)
+        );
+        for (direction, label) in [(Direction::Rx, "rx"), (Direction::Tx, "tx")] {
+            let event = PacketEvent::new(direction, &[0x12, 0xab, 0xff], -93, 4);
+            assert_eq!(
+                packet_json(&event, &public_key),
+                format!(
+                    "{{\"origin_id\":\"{key}\",\"type\":\"PACKET\",\"direction\":\"{label}\",\"raw\":\"12ABFF\",\"RSSI\":-93,\"SNR\":4}}"
+                )
+            );
+        }
+        assert_eq!(
+            status_json(&public_key, true),
+            format!("{{\"status\":\"online\",\"origin_id\":\"{key}\"}}")
+        );
+        assert_eq!(
+            status_json(&public_key, false),
+            format!("{{\"status\":\"offline\",\"origin_id\":\"{key}\"}}")
+        );
+    }
+
+    fn publish_contents(packet: &[u8]) -> (&str, &str) {
+        assert_eq!(packet[0] & 0xfe, 0x30);
+        let mut offset = 1;
+        let mut length = 0usize;
+        let mut multiplier = 1;
+        loop {
+            let byte = packet[offset];
+            offset += 1;
+            length += usize::from(byte & 0x7f) * multiplier;
+            if byte & 0x80 == 0 {
+                break;
+            }
+            multiplier *= 128;
+            assert!(multiplier <= 128 * 128 * 128);
+        }
+        assert_eq!(packet.len() - offset, length);
+        let topic_len = usize::from(u16::from_be_bytes([packet[offset], packet[offset + 1]]));
+        offset += 2;
+        let topic = core::str::from_utf8(&packet[offset..offset + topic_len]).unwrap();
+        let json = core::str::from_utf8(&packet[offset + topic_len..]).unwrap();
+        (topic, json)
+    }
+
+    #[test]
+    fn packet_and_status_publish_wire_payloads_match_broker_identity() {
+        let key = [0xcd; 32];
+        let config = MqttConfig {
+            topic_root: "meshcore/LHR/{PUBLIC_KEY}/packets".into(),
+            ..Default::default()
+        };
+        let topic = packets_topic(&config, &key);
+        // Exercise multi-byte Remaining Length and a packet larger than TCP's
+        // 512-byte send buffer, using the same encoder as the firmware loop.
+        let event = PacketEvent::new(Direction::Rx, &[0xab; 255], -90, 7);
+        let json = packet_json(&event, &key);
+        let publish = publish_packet(&topic, &json, false);
+        assert!(publish.len() > 512);
+        assert_eq!(publish_contents(&publish), (topic.as_str(), json.as_str()));
+        let identity = format!("\"origin_id\":\"{}\"", "CD".repeat(32));
+        assert!(json.contains(&identity));
+        let status = status_topic(&topic);
+        for online in [false, true] {
+            let json = status_json(&key, online);
+            let publish = publish_packet(&status, &json, true);
+            assert_eq!(publish[0], 0x31);
+            assert_eq!(publish_contents(&publish), (status.as_str(), json.as_str()));
+            assert!(json.contains(&identity));
+        }
+        let offline = status_json(&key, false);
+        let connect = connect_packet(&config, "mcrs-cdcdcd-1", &status, &offline);
+        assert!(
+            connect
+                .windows(offline.len())
+                .any(|bytes| bytes == offline.as_bytes())
+        );
+        assert!(
+            connect
+                .windows(status.len())
+                .any(|bytes| bytes == status.as_bytes())
+        );
     }
 
     #[test]

@@ -5,7 +5,7 @@ pub(crate) mod discovery;
 pub mod identity;
 
 #[cfg(feature = "mqtt")]
-pub mod mqtt;
+pub use mcrs_firmware::mqtt;
 mod neighbours;
 pub mod ota;
 pub mod periodic;

@@ -1,7 +1,5 @@
 extern crate alloc;
 
-#[cfg(feature = "mqtt")]
-use alloc::string::ToString;
 use alloc::{string::String, vec::Vec};
 use core::fmt::{self, Write};
 
@@ -54,30 +52,7 @@ pub struct AppConfig {
 }
 
 #[cfg(feature = "mqtt")]
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct MqttConfig {
-    pub host: String,
-    pub port: u16,
-    pub username: String,
-    pub password: String,
-    pub topic_root: String,
-    pub iata: String,
-}
-
-#[cfg(feature = "mqtt")]
-impl MqttConfig {
-    pub fn value(&self, key: &str) -> Option<String> {
-        Some(match key {
-            "host" => self.host.clone(),
-            "port" => self.port.to_string(),
-            "username" => self.username.clone(),
-            "password" => self.password.clone(),
-            "topic.root" => self.topic_root.clone(),
-            "iata" => self.iata.clone(),
-            _ => return None,
-        })
-    }
-}
+pub use super::mqtt::MqttConfig;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WifiConfig {

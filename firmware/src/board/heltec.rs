@@ -860,8 +860,8 @@ async fn mqtt_connected<R: embedded_io_async::Read, W: embedded_io_async::Write>
         public_key[2],
         index + 1
     );
-    let offline = format!("{{\"status\":\"offline\",\"origin_id\":\"{}\"}}", client_id);
-    let online = format!("{{\"status\":\"online\",\"origin_id\":\"{}\"}}", client_id);
+    let offline = mqtt::status_json(&public_key, false);
+    let online = mqtt::status_json(&public_key, true);
     let pong = transport::Pong::new();
     let ack = Signal::<NoopRawMutex, ()>::new();
     let mut reader = transport::Reader::new(reader, websocket, &pong);
@@ -929,7 +929,11 @@ async fn mqtt_connected<R: embedded_io_async::Read, W: embedded_io_async::Write>
                             &mut writer,
                             websocket,
                             2,
-                            &mqtt::publish_packet(&topic, &mqtt::packet_json(&event), false),
+                            &mqtt::publish_packet(
+                                &topic,
+                                &mqtt::packet_json(&event, &public_key),
+                                false,
+                            ),
                             rng.bytes(),
                         )
                         .await?;
