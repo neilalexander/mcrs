@@ -11,3 +11,8 @@ pub mod mqtt_transport;
 pub mod mqtt;
 
 pub mod radio_metrics;
+
+#[cfg(test)]
+mod crypto_tests;
+#[cfg(test)]
+use crypto_tests::platform;

@@ -1,4 +1,4 @@
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 
 use crate::{CIPHER_KEY_SIZE, PUB_KEY_SIZE, PayloadKind};

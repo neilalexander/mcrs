@@ -2,7 +2,7 @@ extern crate alloc;
 
 use aes::{
     Aes128,
-    cipher::{BlockDecrypt, BlockEncrypt, KeyInit, generic_array::GenericArray},
+    cipher::{Block, BlockCipherDecrypt, BlockCipherEncrypt, KeyInit},
 };
 use alloc::vec::Vec;
 use hmac::{Hmac, Mac};
@@ -48,10 +48,10 @@ pub fn decrypt_anonymous_request(
     }
 
     let mut plaintext = payload.ciphertext.clone();
-    let cipher = Aes128::new(GenericArray::from_slice(&shared_secret[..16]));
+    let cipher = Aes128::new_from_slice(&shared_secret[..16]).ok()?;
 
     for block in plaintext.chunks_exact_mut(16) {
-        cipher.decrypt_block(GenericArray::from_mut_slice(block));
+        cipher.decrypt_block(<&mut Block<Aes128>>::try_from(block).ok()?);
     }
 
     while plaintext.last().copied() == Some(0) {
@@ -241,7 +241,7 @@ fn response_nonce(
     requester_public_key: &[u8; 32],
     responder_public_key: &[u8; 32],
 ) -> [u8; 4] {
-    let Ok(mut mac) = <HmacSha256 as Mac>::new_from_slice(shared_secret) else {
+    let Ok(mut mac) = <HmacSha256 as KeyInit>::new_from_slice(shared_secret) else {
         return crate::platform::now_seconds().to_le_bytes();
     };
 
@@ -259,9 +259,9 @@ fn encrypt_payload(shared_secret: &[u8; 32], plaintext: &[u8]) -> Option<([u8; 2
     ciphertext.extend_from_slice(plaintext);
     ciphertext.resize(padded_len, 0);
 
-    let cipher = Aes128::new(GenericArray::from_slice(&shared_secret[..16]));
+    let cipher = Aes128::new_from_slice(&shared_secret[..16]).ok()?;
     for block in ciphertext.chunks_exact_mut(16) {
-        cipher.encrypt_block(GenericArray::from_mut_slice(block));
+        cipher.encrypt_block(<&mut Block<Aes128>>::try_from(block).ok()?);
     }
 
     Some((mac_for_ciphertext(shared_secret, &ciphertext)?, ciphertext))
@@ -269,10 +269,10 @@ fn encrypt_payload(shared_secret: &[u8; 32], plaintext: &[u8]) -> Option<([u8; 2
 
 fn decrypt_payload(shared_secret: &[u8; 32], ciphertext: &[u8]) -> Option<Vec<u8>> {
     let mut plaintext = ciphertext.to_vec();
-    let cipher = Aes128::new(GenericArray::from_slice(&shared_secret[..16]));
+    let cipher = Aes128::new_from_slice(&shared_secret[..16]).ok()?;
 
     for block in plaintext.chunks_exact_mut(16) {
-        cipher.decrypt_block(GenericArray::from_mut_slice(block));
+        cipher.decrypt_block(<&mut Block<Aes128>>::try_from(block).ok()?);
     }
 
     while plaintext.last().copied() == Some(0) {
@@ -291,7 +291,7 @@ fn verify_direct_mac(shared_secret: &[u8; 32], payload: &DirectEncryptedPayload)
 }
 
 fn mac_for_ciphertext(shared_secret: &[u8; 32], ciphertext: &[u8]) -> Option<[u8; 2]> {
-    let Ok(mut mac) = <HmacSha256 as Mac>::new_from_slice(shared_secret) else {
+    let Ok(mut mac) = <HmacSha256 as KeyInit>::new_from_slice(shared_secret) else {
         return None;
     };
     mac.update(ciphertext);
@@ -303,11 +303,44 @@ fn mac_for_ciphertext(shared_secret: &[u8; 32], ciphertext: &[u8]) -> Option<[u8
 mod tests {
     use alloc::vec;
 
+    use super::super::identity::PrivateKey;
     use super::*;
 
     #[test]
+    fn encrypted_payload_matches_aes_and_hmac_vectors() {
+        let shared_secret = core::array::from_fn(|i| i as u8);
+        let plaintext = [
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+            0xee, 0xff,
+        ];
+        // First ciphertext is the FIPS 197 AES-128 example. The padded case
+        // was checked with OpenSSL; MACs with Python's hmac/sha256.
+        for (plain, expected_ciphertext, expected_mac) in [
+            (
+                plaintext.as_slice(),
+                "69c4e0d86a7b0430d8cdb78070b4c55a",
+                [0xb7, 0x18],
+            ),
+            (
+                b"abc".as_slice(),
+                "7516b2e97d7ecdc3ffd9c47b69c29174",
+                [0xc7, 0xc2],
+            ),
+        ] {
+            let (mac, ciphertext) = encrypt_payload(&shared_secret, plain).unwrap();
+            let hex: alloc::string::String = ciphertext
+                .iter()
+                .map(|byte| alloc::format!("{byte:02x}"))
+                .collect();
+            assert_eq!(hex, expected_ciphertext);
+            assert_eq!(mac, expected_mac);
+            assert_eq!(decrypt_payload(&shared_secret, &ciphertext).unwrap(), plain);
+        }
+    }
+
+    #[test]
     fn authenticated_direct_decrypt_rejects_unaligned_ciphertext_before_aes() {
-        let identity = Identity::from_private_key_seed(&[1; 32]);
+        let identity = Identity::from_private_key(PrivateKey::Seed([1; 32]));
         let payload = DirectEncryptedPayload {
             destination_hash: identity.public_key()[0],
             source_hash: 0,
@@ -320,7 +353,7 @@ mod tests {
 
     #[test]
     fn anonymous_decrypt_rejects_unaligned_ciphertext_before_aes() {
-        let identity = Identity::from_private_key_seed(&[1; 32]);
+        let identity = Identity::from_private_key(PrivateKey::Seed([1; 32]));
         let payload = AnonymousRequestPayload {
             destination_hash: identity.public_key()[0],
             sender_pubkey: [2; 32],

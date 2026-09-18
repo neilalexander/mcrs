@@ -73,6 +73,7 @@ Useful build commands for e.g. the Heltec v3:
 
 ```sh
 cargo test -p mcrs-protocol
+cargo test -p mcrs-firmware --lib --features mqtt
 cargo +esp check-heltec-v3
 cargo +esp check-heltec-v3-mqtt
 make heltec-v3-build
