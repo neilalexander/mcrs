@@ -546,10 +546,10 @@ fn encode_status_binary_response(status: super::Status, out: &mut Vec<u8>) {
         &mut offset,
         status.uptime_seconds.min(u32::MAX as u64) as u32,
     );
-    write_u32(stats, &mut offset, 0);
-    write_u32(stats, &mut offset, 0);
-    write_u32(stats, &mut offset, 0);
-    write_u32(stats, &mut offset, 0);
+    write_u32(stats, &mut offset, status.sent_flood);
+    write_u32(stats, &mut offset, status.sent_direct);
+    write_u32(stats, &mut offset, status.received_flood);
+    write_u32(stats, &mut offset, status.received_direct);
     write_u16(
         stats,
         &mut offset,
@@ -560,8 +560,9 @@ fn encode_status_binary_response(status: super::Status, out: &mut Vec<u8>) {
         &mut offset,
         status.last_snr_quarters.clamp(i16::MIN, i16::MAX),
     );
-    write_u16(stats, &mut offset, 0);
-    write_u16(stats, &mut offset, 0);
+    // MeshCore exposes the low 16 bits of each duplicate counter on the wire.
+    write_u16(stats, &mut offset, status.duplicates_direct as u16);
+    write_u16(stats, &mut offset, status.duplicates_flood as u16);
     write_u32(stats, &mut offset, 0);
     write_u32(stats, &mut offset, status.packet_errors);
 }
@@ -1687,6 +1688,18 @@ fn status_text(context: &AppContext<impl crate::platform::storage::Storage>) -> 
     let _ = writeln!(output, "Uptime: {}s", status.uptime_seconds);
     let _ = writeln!(output, "Packets received: {}", status.packets_received);
     let _ = writeln!(output, "Packets sent: {}", status.packets_sent);
+    let _ = writeln!(output, "Sent (Direct): {}", status.sent_direct);
+    let _ = writeln!(output, "Sent (Flood): {}", status.sent_flood);
+    let _ = writeln!(output, "Received (Direct): {}", status.received_direct);
+    let _ = writeln!(output, "Received (Flood): {}", status.received_flood);
+    let _ = writeln!(
+        output,
+        "Duplicates: {} (Direct: {}, Flood: {})",
+        u64::from(status.duplicates_direct) + u64::from(status.duplicates_flood),
+        status.duplicates_direct,
+        status.duplicates_flood
+    );
+
     let _ = writeln!(output, "TX airtime: {}ms", status.tx_airtime_ms);
     let airtime_percent_x100 = if status.uptime_seconds == 0 {
         0
@@ -1866,6 +1879,43 @@ impl CliPrivilege {
 #[cfg(test)]
 mod tests {
     use super::split_cli_correlation_prefix;
+
+    #[test]
+    fn status_counters_match_meshcore_wire_layout() {
+        let status = super::super::Status {
+            uptime_seconds: 0,
+            sent_direct: 0x11223344,
+            sent_flood: 0x55667788,
+            received_direct: 0x99aabbcc,
+            received_flood: 0xddeeff00,
+            duplicates_direct: 0x12345,
+            duplicates_flood: 0x6789a,
+            packets_received: 0,
+            packets_sent: 0,
+            tx_airtime_ms: 0,
+            packet_errors: 0,
+            outbound_queue_len: 0,
+            battery_level_percent: None,
+            battery_millivolts: None,
+            last_rssi: 0,
+            last_snr_quarters: 0,
+        };
+        let mut response = alloc::vec![0xaa, 0xbb];
+        super::encode_status_binary_response(status, &mut response);
+        assert_eq!(response.len(), 2 + 56);
+        assert_eq!(&response[..2], &[0xaa, 0xbb]);
+        let stats = &response[2..];
+        assert_eq!(
+            &stats[24..40],
+            &[
+                0x88, 0x77, 0x66, 0x55, // sent flood
+                0x44, 0x33, 0x22, 0x11, // sent direct
+                0x00, 0xff, 0xee, 0xdd, // received flood
+                0xcc, 0xbb, 0xaa, 0x99, // received direct
+            ]
+        );
+        assert_eq!(&stats[44..48], &[0x45, 0x23, 0x9a, 0x78]);
+    }
 
     #[test]
     fn splits_cli_correlation_prefix() {

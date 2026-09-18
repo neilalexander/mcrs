@@ -76,6 +76,12 @@ where
     pending_forwards: RefCell<Vec<[u8; 8]>>,
     pending_discover: RefCell<Option<PendingDiscover>>,
     started_at_ms: u64,
+    sent_direct: AtomicU32,
+    sent_flood: AtomicU32,
+    received_direct: AtomicU32,
+    received_flood: AtomicU32,
+    duplicates_direct: AtomicU32,
+    duplicates_flood: AtomicU32,
     packets_received: AtomicU32,
     packets_sent: AtomicU32,
     tx_airtime_ms: AtomicU32,
@@ -126,6 +132,12 @@ where
             )),
             pending_discover: RefCell::new(None),
             started_at_ms: crate::platform::now_millis(),
+            sent_direct: AtomicU32::new(0),
+            sent_flood: AtomicU32::new(0),
+            received_direct: AtomicU32::new(0),
+            received_flood: AtomicU32::new(0),
+            duplicates_direct: AtomicU32::new(0),
+            duplicates_flood: AtomicU32::new(0),
             packets_received: AtomicU32::new(0),
             packets_sent: AtomicU32::new(0),
             tx_airtime_ms: AtomicU32::new(0),
@@ -281,6 +293,12 @@ where
     pub fn status(&self) -> Status {
         Status {
             uptime_seconds: crate::platform::now_millis().saturating_sub(self.started_at_ms) / 1000,
+            sent_direct: self.sent_direct.load(Ordering::Relaxed),
+            sent_flood: self.sent_flood.load(Ordering::Relaxed),
+            received_direct: self.received_direct.load(Ordering::Relaxed),
+            received_flood: self.received_flood.load(Ordering::Relaxed),
+            duplicates_direct: self.duplicates_direct.load(Ordering::Relaxed),
+            duplicates_flood: self.duplicates_flood.load(Ordering::Relaxed),
             packets_received: self.packets_received.load(Ordering::Relaxed),
             packets_sent: self.packets_sent.load(Ordering::Relaxed),
             tx_airtime_ms: self.tx_airtime_ms.load(Ordering::Relaxed),
@@ -663,9 +681,21 @@ pub enum OutboundError {
     QueueFull,
 }
 
+fn increment_route_counter(route: RouteType, direct: &AtomicU32, flood: &AtomicU32) {
+    // Transport routes belong to the same categories as their unscoped forms.
+    let counter = if route.is_flood() { flood } else { direct };
+    counter.fetch_add(1, Ordering::Relaxed);
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Status {
     pub uptime_seconds: u64,
+    pub sent_direct: u32,
+    pub sent_flood: u32,
+    pub received_direct: u32,
+    pub received_flood: u32,
+    pub duplicates_direct: u32,
+    pub duplicates_flood: u32,
     pub packets_received: u32,
     pub packets_sent: u32,
     pub tx_airtime_ms: u32,
@@ -939,6 +969,11 @@ where
 {
     match mcrs_protocol::Packet::decode(&event.payload) {
         Ok(protocol_packet) => {
+            increment_route_counter(
+                protocol_packet.route_type,
+                &context.received_direct,
+                &context.received_flood,
+            );
             let region = context.packet_region_label(&protocol_packet).await;
             protocol_log::log_packet(&protocol_packet, region.as_deref());
             let node_hash = context.node_hash().await;
@@ -1036,6 +1071,9 @@ async fn transmit_eligible_outbound<R, S, D>(
     }
     context.finish_forward(queued.dedup_signature, true);
     context.record_packet_sent();
+    if let Ok(packet) = Packet::decode(&queued.packet) {
+        increment_route_counter(packet.route_type, &context.sent_direct, &context.sent_flood);
+    }
     #[cfg(feature = "mqtt")]
     context.report_mqtt_packet(mqtt::Direction::Tx, &queued.packet, 0, 0);
     let airtime_ms = radio_config.packet_airtime_ms(queued.packet.len());
@@ -1199,6 +1237,11 @@ async fn queue_repeater_packet<S>(
     match context.enqueue_forward(encoded, delay_ms, signature) {
         Ok(true) => {}
         Ok(false) => {
+            increment_route_counter(
+                packet.route_type,
+                &context.duplicates_direct,
+                &context.duplicates_flood,
+            );
             crate::platform::log_fmt(format_args!("Protocol repeater: drop: duplicate"));
             return;
         }
@@ -1454,6 +1497,22 @@ enum ForwardDecision {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn categorizes_transport_routes() {
+        let direct = AtomicU32::new(0);
+        let flood = AtomicU32::new(0);
+        for route in [RouteType::Direct, RouteType::TransportDirect] {
+            increment_route_counter(route, &direct, &flood);
+        }
+        assert_eq!(direct.load(Ordering::Relaxed), 2);
+        assert_eq!(flood.load(Ordering::Relaxed), 0);
+        for route in [RouteType::Flood, RouteType::TransportFlood] {
+            increment_route_counter(route, &direct, &flood);
+        }
+        assert_eq!(direct.load(Ordering::Relaxed), 2);
+        assert_eq!(flood.load(Ordering::Relaxed), 2);
+    }
 
     fn queued(eligible_at_ms: u64) -> QueuedTransmit {
         QueuedTransmit {
