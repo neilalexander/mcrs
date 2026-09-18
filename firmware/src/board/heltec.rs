@@ -2,10 +2,9 @@ use esp_hal::{
     Blocking,
     analog::adc::{Adc, AdcCalCurve, AdcPin},
     gpio::{Flex, Input, Level, Output},
-    peripherals::{ADC1, GPIO1, WIFI},
-    rng::Rng,
+    peripherals::{ADC1, GPIO1, RNG, WIFI},
+    rng::{Trng, TrngSource},
     spi::master::Spi,
-    timer::timg::Timer as TimgTimer,
 };
 
 use alloc::{format, string::String};
@@ -15,9 +14,7 @@ use core::{
     task::Poll,
 };
 use embedded_hal_async::delay::DelayNs as _;
-use esp_wifi::wifi::{
-    AccessPointConfiguration, AuthMethod, ClientConfiguration, Configuration, WifiEvent,
-};
+use esp_radio::wifi::{AuthenticationMethod, Config, ap::AccessPointConfig, sta::StationConfig};
 use static_cell::StaticCell;
 
 pub type RadioSpi = Spi<'static, Blocking>;
@@ -28,7 +25,6 @@ pub type CliSerial = esp_hal::uart::Uart<'static, esp_hal::Async>;
 #[cfg(feature = "board-heltec-v4")]
 pub type CliSerial = esp_hal::usb_serial_jtag::UsbSerialJtag<'static, esp_hal::Async>;
 pub type ButtonInput = Input<'static>;
-pub type WifiTimer = TimgTimer<'static>;
 pub type BatteryAdc = Adc<'static, ADC1<'static>, Blocking>;
 pub type BatterySensePin = AdcPin<GPIO1<'static>, ADC1<'static>, AdcCalCurve<ADC1<'static>>>;
 
@@ -78,8 +74,6 @@ pub struct RadioResources<F> {
 }
 
 pub struct WifiResources {
-    pub timer: WifiTimer,
-    pub rng: Rng,
     pub wifi: WIFI<'static>,
 }
 
@@ -104,7 +98,11 @@ impl RadioFrontend for NoRadioFrontend {
     fn set_tx_mode(&mut self) {}
 }
 
-pub fn generate_identity_seed(rng: &mut Rng) -> [u8; 32] {
+pub fn generate_identity_seed(rng: RNG<'_>, adc: ADC1<'_>) -> [u8; 32] {
+    // Enable entropy only while creating the identity, before ADC1 is used by
+    // the battery monitor. Drop the TRNG before disabling its source.
+    let _entropy = TrngSource::new(rng, adc);
+    let rng = Trng::try_new().expect("identity entropy source enabled");
     let mut seed = [0u8; 32];
     rng.read(&mut seed);
 
@@ -449,16 +447,7 @@ async fn wifi_task(
         run_ota_ap_mode(&mut wifi, context).await
     }
 
-    let WifiResources { timer, rng, wifi } = wifi;
-    let init = match esp_wifi::init(timer, rng) {
-        Ok(init) => init,
-        Err(error) => {
-            crate::platform::log_fmt(format_args!("Wi-Fi: init failed: {:?}", error));
-            core::future::pending::<()>().await;
-            unreachable!()
-        }
-    };
-    let (controller, interfaces) = match esp_wifi::wifi::new(&init, wifi) {
+    let (controller, interfaces) = match esp_radio::wifi::new(wifi.wifi, Default::default()) {
         Ok(wifi) => wifi,
         Err(error) => {
             crate::platform::log_fmt(format_args!("Wi-Fi: device init failed: {:?}", error));
@@ -466,56 +455,48 @@ async fn wifi_task(
             unreachable!()
         }
     };
-    run_ota_station_mode(controller, interfaces.sta, context).await
+    run_ota_station_mode(controller, interfaces.station, context).await
 }
 
 async fn run_ota_ap_mode(
     wifi: &mut WifiResources,
     context: &crate::app::AppContext<crate::platform::EspStorage>,
 ) -> ! {
-    // EspWifiController's Drop currently corrupts the esp-wifi 0.15.1 Xtensa
-    // scheduler task list after Wi-Fi has been used. Keep that small runtime
-    // alive after its first initialization; each session still gets its own
-    // WifiController, whose Drop fully deinitializes the Wi-Fi driver/radio.
-    let init = loop {
-        wait_for_ota_requested_idle(context, true).await;
-        match esp_wifi::init(wifi.timer.reborrow(), wifi.rng) {
-            Ok(init) => break init,
-            Err(error) => {
-                crate::platform::log_fmt(format_args!("Wi-Fi: init failed: {:?}", error));
-                context.request_ota_stop();
-            }
-        }
-    };
     let mut stack_resources = embassy_net::StackResources::<4>::new();
     loop {
         wait_for_ota_requested_idle(context, true).await;
 
         {
-            let (controller, interfaces) = match esp_wifi::wifi::new(&init, wifi.wifi.reborrow()) {
-                Ok(wifi) => wifi,
-                Err(error) => {
-                    crate::platform::log_fmt(format_args!(
-                        "Wi-Fi: device init failed: {:?}",
-                        error
-                    ));
-                    context.request_ota_stop();
-                    continue;
-                }
-            };
+            let (controller, interfaces) =
+                match esp_radio::wifi::new(wifi.wifi.reborrow(), Default::default()) {
+                    Ok(wifi) => wifi,
+                    Err(error) => {
+                        crate::platform::log_fmt(format_args!(
+                            "Wi-Fi: device init failed: {:?}",
+                            error
+                        ));
+                        context.request_ota_stop();
+                        continue;
+                    }
+                };
 
-            run_ota_ap_session(controller, interfaces.ap, &mut stack_resources, context).await;
-            // WifiDevice/Runner and WifiController are dropped here. The latter
-            // runs esp_wifi_stop(), esp_wifi_deinit_internal(), and
-            // esp_supplicant_deinit().
+            run_ota_ap_session(
+                controller,
+                interfaces.access_point,
+                &mut stack_resources,
+                context,
+            )
+            .await;
+            // The network runner and controller are dropped before the next
+            // session. Controller drop stops and deinitializes the Wi-Fi radio.
         }
         crate::platform::log_fmt(format_args!("OTA: Wi-Fi adapter shut down"));
     }
 }
 
 async fn run_ota_ap_session<'a>(
-    mut controller: esp_wifi::wifi::WifiController<'a>,
-    device: esp_wifi::wifi::WifiDevice<'a>,
+    mut controller: esp_radio::wifi::WifiController<'a>,
+    device: esp_radio::wifi::Interface<'a>,
     stack_resources: &mut embassy_net::StackResources<4>,
     context: &crate::app::AppContext<crate::platform::EspStorage>,
 ) {
@@ -568,14 +549,12 @@ async fn run_ota_ap_session<'a>(
         }
     })
     .await;
-    if let Err(error) = stop_ota_ap(&mut controller).await {
-        crate::platform::log_fmt(format_args!("OTA: AP stop failed: {:?}", error));
-    }
+    // Dropping the controller stops and deinitializes the AP.
 }
 
 async fn run_ota_station_mode<'a>(
-    mut controller: esp_wifi::wifi::WifiController<'a>,
-    device: esp_wifi::wifi::WifiDevice<'a>,
+    mut controller: esp_radio::wifi::WifiController<'a>,
+    device: esp_radio::wifi::Interface<'a>,
     context: &crate::app::AppContext<crate::platform::EspStorage>,
 ) -> ! {
     // DHCP, DNS, NTP, Telnet and OTA can each hold a socket concurrently.
@@ -603,23 +582,15 @@ async fn run_ota_station_mode<'a>(
                 embassy_time::Timer::after_secs(30).await;
                 continue;
             }
-            let config = ClientConfiguration {
-                ssid,
-                password: password.clone(),
-                auth_method: if password.is_empty() {
-                    AuthMethod::None
+            let config = StationConfig::default()
+                .with_ssid(ssid.as_str())
+                .with_password(password.clone())
+                .with_auth_method(if password.is_empty() {
+                    AuthenticationMethod::None
                 } else {
-                    AuthMethod::WPA2Personal
-                },
-                ..Default::default()
-            };
-            if matches!(controller.is_started(), Ok(true)) {
-                let _ = controller.stop_async().await;
-            }
-            if controller
-                .set_configuration(&Configuration::Client(config))
-                .is_err()
-                || controller.start_async().await.is_err()
+                    AuthenticationMethod::Wpa2Personal
+                });
+            if controller.set_config(&Config::Station(config)).is_err()
                 || controller.connect_async().await.is_err()
             {
                 crate::platform::log_fmt(format_args!("Wi-Fi: station connection failed"));
@@ -628,7 +599,7 @@ async fn run_ota_station_mode<'a>(
             }
             let configured = {
                 let mut wait_config = pin!(stack.wait_config_up());
-                let mut disconnected = pin!(controller.wait_for_event(WifiEvent::StaDisconnected));
+                let mut disconnected = pin!(controller.wait_for_disconnect_async());
                 poll_fn(|cx| {
                     if wait_config.as_mut().poll(cx).is_ready() {
                         Poll::Ready(true)
@@ -644,7 +615,7 @@ async fn run_ota_station_mode<'a>(
                 crate::platform::log_fmt(format_args!(
                     "Wi-Fi: disconnected before DHCP completed; reconnecting"
                 ));
-                let _ = controller.stop_async().await;
+                let _ = controller.disconnect_async().await;
                 embassy_time::Timer::after_secs(5).await;
                 continue;
             }
@@ -668,7 +639,7 @@ async fn run_ota_station_mode<'a>(
                 let mut mqtt2 = pin!(mqtt_loop(stack, context, 1));
                 #[cfg(feature = "mqtt")]
                 let mut mqtt3 = pin!(mqtt_loop(stack, context, 2));
-                let mut disconnected = pin!(controller.wait_for_event(WifiEvent::StaDisconnected));
+                let mut disconnected = pin!(controller.wait_for_disconnect_async());
                 poll_fn(|cx| {
                     if let Poll::Ready(never) = server.as_mut().poll(cx) {
                         match never {}
@@ -698,7 +669,7 @@ async fn run_ota_station_mode<'a>(
                 }
             }
             crate::platform::log_fmt(format_args!("Wi-Fi: station disconnected; reconnecting"));
-            let _ = controller.stop_async().await;
+            let _ = controller.disconnect_async().await;
             embassy_time::Timer::after_secs(5).await;
         }
     });
@@ -1190,30 +1161,17 @@ async fn handle_ota_connection<'a>(
 }
 
 async fn start_ota_ap(
-    controller: &mut esp_wifi::wifi::WifiController<'_>,
+    controller: &mut esp_radio::wifi::WifiController<'_>,
     ssid: &str,
-) -> Result<(), esp_wifi::wifi::WifiError> {
-    controller.set_configuration(&Configuration::AccessPoint(AccessPointConfiguration {
-        ssid: String::from(ssid),
-        ssid_hidden: false,
-        channel: 1,
-        auth_method: AuthMethod::None,
-        max_connections: 1,
-        ..Default::default()
-    }))?;
-    controller.start_async().await
-}
-
-async fn stop_ota_ap(
-    controller: &mut esp_wifi::wifi::WifiController<'_>,
-) -> Result<(), esp_wifi::wifi::WifiError> {
-    let stop_result = controller.stop_async().await;
-    let disable_result = controller.set_configuration(&Configuration::None);
-
-    match (stop_result, disable_result) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(error), _) | (Ok(()), Err(error)) => Err(error),
-    }
+) -> Result<(), esp_radio::wifi::WifiError> {
+    controller.set_config(&Config::AccessPoint(
+        AccessPointConfig::default()
+            .with_ssid(ssid)
+            .with_ssid_hidden(false)
+            .with_channel(1)
+            .with_auth_method(AuthenticationMethod::None)
+            .with_max_connections(1),
+    ))
 }
 
 async fn ota_ssid<S>(context: &crate::app::AppContext<S>) -> String

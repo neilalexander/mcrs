@@ -2,3 +2,7 @@
 members = ["protocol", "firmware"]
 exclude = ["fuzz"]
 resolver = "3"
+
+# The Wi-Fi driver requires optimization even in development builds.
+[profile.dev.package.esp-radio]
+opt-level = 3

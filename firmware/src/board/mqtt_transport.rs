@@ -41,13 +41,11 @@ impl Write for SharedSocket<'_, '_> {
     }
 }
 
-pub struct WifiRng(esp_hal::rng::Rng);
+pub struct WifiRng(esp_hal::rng::Trng);
 impl WifiRng {
     pub fn new() -> Self {
-        // Rng is a stateless read-only peripheral driver. Wi-Fi supplies entropy.
-        Self(esp_hal::rng::Rng::new(unsafe {
-            esp_hal::peripherals::RNG::steal()
-        }))
+        // MQTT only runs while the Wi-Fi controller supplies entropy.
+        Self(esp_hal::rng::Trng::try_new().expect("Wi-Fi entropy source enabled"))
     }
     pub fn bytes<const N: usize>(&mut self) -> [u8; N] {
         let mut bytes = [0; N];

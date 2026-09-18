@@ -51,8 +51,5 @@ rustflags = [
     "link-arg=-Tlinkall.x",
 ]
 
-[env]
-EMBASSY_EXECUTOR_TASK_ARENA_SIZE = "32768"
-
 [unstable]
 build-std = ["alloc", "core"]

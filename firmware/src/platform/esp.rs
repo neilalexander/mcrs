@@ -1,16 +1,12 @@
 use core::{
-    alloc::{GlobalAlloc, Layout},
     cell::{Cell, RefCell},
     fmt,
     hint::spin_loop,
-    mem::MaybeUninit,
-    ptr,
 };
 
 use alloc::vec;
 use critical_section::Mutex;
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use embedded_alloc::LlffHeap as Heap;
 use embedded_hal::delay::DelayNs as BlockingDelayNs;
 use embedded_hal_async::delay::DelayNs;
 use esp_bootloader_esp_idf::{
@@ -22,28 +18,20 @@ use esp_println::{print, println};
 
 use esp_backtrace as _;
 
-// esp-hal 1.0.0-rc.0's linker script keeps the ESP-IDF app descriptor in
-// .rodata_desc. esp-bootloader-esp-idf 0.5 emits .flash.appdesc by default,
-// which the bootloader can miss and then misread unrelated bytes as metadata.
-#[unsafe(export_name = "esp_app_desc")]
-#[unsafe(link_section = ".rodata_desc")]
-#[used]
-pub static ESP_APP_DESC: esp_bootloader_esp_idf::EspAppDesc =
-    esp_bootloader_esp_idf::EspAppDesc::new_internal(
-        env!("MESHCORE_FIRMWARE_VERSION"),
-        env!("CARGO_PKG_NAME"),
-        esp_bootloader_esp_idf::BUILD_TIME,
-        esp_bootloader_esp_idf::BUILD_DATE,
-        esp_bootloader_esp_idf::ESP_IDF_COMPATIBLE_VERSION,
-        0,
-        u16::MAX,
-        esp_bootloader_esp_idf::MMU_PAGE_SIZE,
-        esp_bootloader_esp_idf::SECURE_VERSION,
-    );
+// Use the HAL's supported descriptor section, preserving the git-derived version.
+esp_bootloader_esp_idf::esp_app_desc!(
+    env!("MESHCORE_FIRMWARE_VERSION"),
+    env!("CARGO_PKG_NAME"),
+    esp_bootloader_esp_idf::BUILD_TIME,
+    esp_bootloader_esp_idf::BUILD_DATE,
+    esp_bootloader_esp_idf::ESP_IDF_COMPATIBLE_VERSION,
+    esp_bootloader_esp_idf::MMU_PAGE_SIZE,
+    0,
+    u16::MAX,
+    esp_bootloader_esp_idf::SECURE_VERSION
+);
 
 const HEAP_SIZE: usize = crate::board::MEMORY_PROFILE.heap_size;
-const WIFI_ALLOC_HEADER_SIZE: usize = core::mem::size_of::<usize>();
-const WIFI_ALLOC_ALIGN: usize = core::mem::align_of::<usize>();
 const FLASH_SECTOR_SIZE: usize = 4096;
 const OTA_WRITE_WORDS: usize = 256;
 const ESP_IMAGE_MAGIC: u8 = 0xe9;
@@ -61,9 +49,6 @@ const WALL_CLOCK_RTC_CHECK: u32 = 0xa5a5_5a5a;
 
 static WALL_CLOCK_OFFSET_SECONDS: Mutex<Cell<u32>> = Mutex::new(Cell::new(0));
 static RTC_CLOCK: Mutex<RefCell<Option<Rtc<'static>>>> = Mutex::new(RefCell::new(None));
-
-#[global_allocator]
-static HEAP: Heap = Heap::empty();
 
 pub struct Platform {
     pub peripherals: Peripherals,
@@ -865,7 +850,7 @@ fn rtc_elapsed_seconds() -> Option<u32> {
     critical_section::with(|cs| {
         let rtc = RTC_CLOCK.borrow_ref(cs);
         let rtc = rtc.as_ref()?;
-        Some((rtc.time_since_boot().as_micros() / 1_000_000).min(u64::from(u32::MAX)) as u32)
+        Some((rtc.time_since_power_up().as_micros() / 1_000_000).min(u64::from(u32::MAX)) as u32)
     })
 }
 
@@ -925,55 +910,7 @@ pub fn battery_millivolts() -> Option<u16> {
 }
 
 fn init_heap() {
-    static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
-
-    // SAFETY: The heap backing storage is static and initialized exactly once
-    // before board initialization can allocate.
-    unsafe {
-        #[allow(static_mut_refs)]
-        HEAP.init(HEAP_MEM.as_ptr() as usize, HEAP_SIZE);
-    }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn esp_wifi_free_internal_heap() -> usize {
-    HEAP.free()
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn esp_wifi_allocate_from_internal_ram(size: usize) -> *mut u8 {
-    let Some(total_size) = size.checked_add(WIFI_ALLOC_HEADER_SIZE) else {
-        return ptr::null_mut();
-    };
-    let Ok(layout) = Layout::from_size_align(total_size, WIFI_ALLOC_ALIGN) else {
-        return ptr::null_mut();
-    };
-
-    let allocation = unsafe { GlobalAlloc::alloc(&HEAP, layout) };
-    if allocation.is_null() {
-        return allocation;
-    }
-
-    unsafe {
-        (allocation as *mut usize).write(total_size);
-        allocation.add(WIFI_ALLOC_HEADER_SIZE)
-    }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn esp_wifi_deallocate_internal_ram(ptr: *mut u8) {
-    if ptr.is_null() {
-        return;
-    }
-
-    unsafe {
-        let allocation = ptr.sub(WIFI_ALLOC_HEADER_SIZE);
-        let total_size = (allocation as *const usize).read();
-        let Ok(layout) = Layout::from_size_align(total_size, WIFI_ALLOC_ALIGN) else {
-            return;
-        };
-        GlobalAlloc::dealloc(&HEAP, allocation, layout);
-    }
+    esp_alloc::heap_allocator!(size: HEAP_SIZE);
 }
 
 pub fn log_starting() {

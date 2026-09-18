@@ -2,7 +2,7 @@ use esp_hal::{
     analog::adc::{Adc, AdcCalCurve, AdcConfig, Attenuation},
     gpio::{Flex, Input, InputConfig, Level, Output, OutputConfig, Pull},
     i2c::master::{Config as I2cConfig, I2c},
-    rng::Rng,
+    interrupt::software::SoftwareInterruptControl,
     spi::{
         Mode,
         master::{Config as SpiConfig, Spi},
@@ -112,17 +112,17 @@ impl heltec::RadioFrontend for HeltecV4Frontend {
     }
 }
 
-#[esp_hal_embassy::main]
+#[esp_rtos::main]
 async fn main(_spawner: embassy_executor::Spawner) -> ! {
     let platform = crate::platform::init();
 
     init(platform).await
 }
 
-async fn init(platform: crate::platform::Platform) -> ! {
+async fn init(mut platform: crate::platform::Platform) -> ! {
     let timg0 = TimerGroup::new(platform.peripherals.TIMG0);
-    let ota_timer = timg0.timer1;
-    esp_hal_embassy::init(timg0.timer0);
+    let software_interrupt = SoftwareInterruptControl::new(platform.peripherals.SW_INTERRUPT);
+    esp_rtos::start(timg0.timer0, software_interrupt.software_interrupt0);
 
     let spi = match Spi::new(
         platform.peripherals.SPI2,
@@ -171,6 +171,10 @@ async fn init(platform: crate::platform::Platform) -> ! {
     let prg_button = Input::new(
         platform.peripherals.GPIO0,
         InputConfig::default().with_pull(Pull::Up),
+    );
+    let identity_seed = heltec::generate_identity_seed(
+        platform.peripherals.RNG,
+        platform.peripherals.ADC1.reborrow(),
     );
     let mut battery = {
         let mut adc_config = AdcConfig::new();
@@ -222,11 +226,7 @@ async fn init(platform: crate::platform::Platform) -> ! {
 
     let cli_serial = Some(UsbSerialJtag::new(platform.peripherals.USB_DEVICE).into_async());
 
-    let mut rng = Rng::new(platform.peripherals.RNG);
-    let identity_seed = heltec::generate_identity_seed(&mut rng);
     let wifi = heltec::WifiResources {
-        timer: ota_timer,
-        rng,
         wifi: platform.peripherals.WIFI,
     };
 
