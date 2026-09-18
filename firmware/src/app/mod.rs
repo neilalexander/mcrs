@@ -71,6 +71,8 @@ where
     mqtt_wakers: [RefCell<Option<Waker>>; config::MQTT_SERVER_COUNT],
     #[cfg(feature = "mqtt")]
     mqtt_states: [AtomicU8; config::MQTT_SERVER_COUNT],
+    #[cfg(feature = "mqtt")]
+    mqtt_errors: [Cell<Option<mqtt::ConnectionError>>; config::MQTT_SERVER_COUNT],
     reboot_after_next_remote_reply: Cell<bool>,
     seen_packets: RefCell<SeenPacketCache>,
     pending_forwards: RefCell<Vec<[u8; 8]>>,
@@ -122,6 +124,8 @@ where
             mqtt_states: core::array::from_fn(|_| {
                 AtomicU8::new(mqtt::ConnectionState::Disconnected as u8)
             }),
+            #[cfg(feature = "mqtt")]
+            mqtt_errors: core::array::from_fn(|_| Cell::new(None)),
             reboot_after_next_remote_reply: Cell::new(false),
             seen_packets: RefCell::new(SeenPacketCache::new_with_capacity(
                 SEEN_PACKET_TTL_MS,
@@ -525,6 +529,9 @@ where
     pub fn request_mqtt_restart(&self) {
         self.mqtt_generation
             .set(self.mqtt_generation.get().wrapping_add(1));
+        for error in &self.mqtt_errors {
+            error.set(None);
+        }
         for waker in &self.mqtt_wakers {
             if let Some(waker) = waker.borrow_mut().take() {
                 waker.wake();
@@ -546,6 +553,12 @@ where
 
     #[cfg(feature = "mqtt")]
     pub fn set_mqtt_state(&self, index: usize, state: mqtt::ConnectionState) {
+        if matches!(
+            state,
+            mqtt::ConnectionState::Connected | mqtt::ConnectionState::Disabled
+        ) {
+            self.set_mqtt_error(index, None);
+        }
         if let Some(current) = self.mqtt_states.get(index) {
             current.store(state as u8, Ordering::Relaxed);
         }
@@ -557,6 +570,18 @@ where
             .get(index)
             .map(|state| mqtt::ConnectionState::from_u8(state.load(Ordering::Relaxed)))
             .unwrap_or(mqtt::ConnectionState::Disabled)
+    }
+
+    #[cfg(feature = "mqtt")]
+    pub fn set_mqtt_error(&self, index: usize, error: Option<mqtt::ConnectionError>) {
+        if let Some(slot) = self.mqtt_errors.get(index) {
+            slot.set(error);
+        }
+    }
+
+    #[cfg(feature = "mqtt")]
+    pub fn mqtt_error(&self, index: usize) -> Option<mqtt::ConnectionError> {
+        self.mqtt_errors.get(index).and_then(Cell::get)
     }
 
     fn wake_ota(&self) {

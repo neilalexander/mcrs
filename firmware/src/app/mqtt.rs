@@ -144,6 +144,38 @@ impl ConnectionState {
     }
 }
 
+/// Coarse failure reasons, safe to expose without credentials or tokens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConnectionError {
+    Unreachable,
+    Tls,
+    Auth,
+    Clock,
+    WebSocket,
+    Protocol,
+    Server,
+    Memory,
+    Connection,
+    Config,
+}
+
+impl ConnectionError {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unreachable => "unreachable",
+            Self::Tls => "TLS error",
+            Self::Auth => "auth error",
+            Self::Clock => "clock not set",
+            Self::WebSocket => "WebSocket error",
+            Self::Protocol => "protocol error",
+            Self::Server => "server unavailable",
+            Self::Memory => "out of memory",
+            Self::Connection => "connection lost or timed out",
+            Self::Config => "invalid config",
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub enum Direction {
     Rx,
@@ -276,10 +308,23 @@ fn hex(bytes: &[u8]) -> String {
 
 // Fixed-size responses are sufficient for this clean-session, QoS 0 publisher.
 // read_exact handles TCP fragmentation without consuming the next MQTT packet.
-pub async fn read_connack(reader: &mut impl embedded_io_async::Read) -> Result<(), ()> {
+pub async fn read_connack(
+    reader: &mut impl embedded_io_async::Read,
+) -> Result<(), ConnectionError> {
     let mut packet = [0; 4];
-    reader.read_exact(&mut packet).await.map_err(|_| ())?;
-    (packet == [0x20, 0x02, 0x00, 0x00]).then_some(()).ok_or(())
+    reader
+        .read_exact(&mut packet)
+        .await
+        .map_err(|_| ConnectionError::Connection)?;
+    if packet[..3] != [0x20, 0x02, 0x00] {
+        return Err(ConnectionError::Protocol);
+    }
+    match packet[3] {
+        0 => Ok(()),
+        4 | 5 => Err(ConnectionError::Auth),
+        3 => Err(ConnectionError::Server),
+        _ => Err(ConnectionError::Protocol),
+    }
 }
 
 pub async fn read_pingresp(reader: &mut impl embedded_io_async::Read) -> Result<(), ()> {
@@ -612,6 +657,34 @@ mod tests {
     }
 
     #[test]
+    fn connack_distinguishes_auth_server_protocol_and_transport_failures() {
+        for (code, expected) in [
+            (0, Ok(())),
+            (1, Err(ConnectionError::Protocol)),
+            (2, Err(ConnectionError::Protocol)),
+            (3, Err(ConnectionError::Server)),
+            (4, Err(ConnectionError::Auth)),
+            (5, Err(ConnectionError::Auth)),
+            (6, Err(ConnectionError::Protocol)),
+        ] {
+            assert_eq!(
+                run(read_connack(&mut Reader {
+                    bytes: &[0x20, 2, 0, code],
+                    chunk_size: 1,
+                })),
+                expected
+            );
+        }
+        assert_eq!(
+            run(read_connack(&mut Reader {
+                bytes: &[0x20, 2],
+                chunk_size: 1,
+            })),
+            Err(ConnectionError::Connection)
+        );
+    }
+
+    #[test]
     fn rejects_failed_or_invalid_connack() {
         for bytes in [
             &[0x20, 2, 0, 5][..],
@@ -621,12 +694,12 @@ mod tests {
             &[0x20, 2, 0],
             &[],
         ] {
-            assert_eq!(
+            assert!(
                 run(read_connack(&mut Reader {
                     bytes,
                     chunk_size: 1
-                })),
-                Err(())
+                }))
+                .is_err()
             );
         }
     }

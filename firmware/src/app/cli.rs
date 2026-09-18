@@ -625,7 +625,11 @@ async fn handle_command(
             let mut output = String::new();
             for index in 0..super::config::MQTT_SERVER_COUNT {
                 let state = context.mqtt_state(index);
-                let _ = writeln!(&mut output, "MQTT {}: {}", index + 1, state.as_str());
+                let _ = write!(&mut output, "MQTT {}: {}", index + 1, state.as_str());
+                if let Some(error) = context.mqtt_error(index) {
+                    let _ = write!(&mut output, " (last error: {})", error.as_str());
+                }
+                output.push('\n');
             }
             output
         } else {

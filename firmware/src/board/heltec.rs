@@ -665,7 +665,18 @@ async fn run_ota_station_mode<'a>(
                 .await;
                 #[cfg(feature = "mqtt")]
                 for index in 0..crate::app::config::MQTT_SERVER_COUNT {
-                    context.set_mqtt_state(index, crate::app::mqtt::ConnectionState::Disconnected);
+                    use crate::app::mqtt::{ConnectionError, ConnectionState};
+                    let enabled = context
+                        .with_config(|config| {
+                            config.mqtt(index).is_some_and(|mqtt| !mqtt.host.is_empty())
+                        })
+                        .await;
+                    if enabled {
+                        context.set_mqtt_error(index, Some(ConnectionError::Unreachable));
+                        context.set_mqtt_state(index, ConnectionState::Disconnected);
+                    } else {
+                        context.set_mqtt_state(index, ConnectionState::Disabled);
+                    }
                 }
             }
             crate::platform::log_fmt(format_args!("Wi-Fi: station disconnected; reconnecting"));
@@ -704,8 +715,15 @@ async fn mqtt_loop(
         context.set_mqtt_state(index, ConnectionState::Connecting);
         // Keep the three TLS-capable session futures out of the fixed 32 KiB
         // Embassy task arena. Disabled brokers allocate no session state.
-        let _ =
+        let result =
             alloc::boxed::Box::pin(mqtt_session(stack, context, index, generation, &mqtt)).await;
+        // Cancellation by an explicit restart is not a connection failure.
+        if context.mqtt_generation() == generation {
+            if let Err(error) = result {
+                context.set_mqtt_error(index, Some(error));
+                crate::platform::log_fmt(format_args!("MQTT {}: {}", index + 1, error.as_str()));
+            }
+        }
         context.set_mqtt_state(index, ConnectionState::Disconnected);
         wait_mqtt_retry_or_restart(context, index, generation, 10).await;
     }
@@ -718,12 +736,14 @@ async fn mqtt_session(
     index: usize,
     generation: u32,
     config: &crate::app::config::MqttConfig,
-) -> Result<(), ()> {
+) -> Result<(), crate::app::mqtt::ConnectionError> {
     use super::mqtt_transport::{SharedSocket, WifiRng};
+    use crate::app::mqtt::ConnectionError;
     use crate::app::mqtt::transport::{self, Endpoint};
     use embedded_tls::{Aes128GcmSha256, TlsConfig, TlsConnection, TlsContext, UnsecureProvider};
 
-    let endpoint = Endpoint::parse(&config.host, config.port)?;
+    let endpoint =
+        Endpoint::parse(&config.host, config.port).map_err(|_| ConnectionError::Config)?;
     let mut rx = [0u8; 512];
     let mut tx = [0u8; 512];
     let mut socket = embassy_net::tcp::TcpSocket::new(stack, &mut rx, &mut tx);
@@ -737,15 +757,20 @@ async fn mqtt_session(
             .await
             .map_err(|_| ())
     })
-    .await?;
+    .await
+    .map_err(|_| ConnectionError::Unreachable)?;
 
     if endpoint.tls {
         // Allocate TLS records only for secure connections, outside the task arena.
         // A full receive record accommodates servers that don't negotiate MFL.
         let mut read_record = alloc::vec::Vec::new();
         let mut write_record = alloc::vec::Vec::new();
-        read_record.try_reserve_exact(16640).map_err(|_| ())?;
-        write_record.try_reserve_exact(2048).map_err(|_| ())?;
+        read_record
+            .try_reserve_exact(16640)
+            .map_err(|_| ConnectionError::Memory)?;
+        write_record
+            .try_reserve_exact(2048)
+            .map_err(|_| ConnectionError::Memory)?;
         read_record.resize(16640, 0);
         write_record.resize(2048, 0);
         let shared = core::cell::RefCell::new(socket);
@@ -765,13 +790,20 @@ async fn mqtt_session(
                 UnsecureProvider::new::<Aes128GcmSha256>(WifiRng::new()),
             ))
             .await
-            .map_err(|_| ())?;
-            if endpoint.websocket {
-                transport::upgrade(&mut tls, &endpoint, WifiRng::new().bytes()).await?;
-            }
-            Ok::<(), ()>(())
+            .map_err(|_| ())
         })
-        .await?;
+        .await
+        .map_err(|_| ConnectionError::Tls)?;
+        if endpoint.websocket {
+            mqtt_io(
+                context,
+                index,
+                generation,
+                transport::upgrade(&mut tls, &endpoint, WifiRng::new().bytes()),
+            )
+            .await
+            .map_err(|_| ConnectionError::WebSocket)?;
+        }
         let (reader, writer) = tls.split();
         mqtt_connected(
             context,
@@ -791,7 +823,8 @@ async fn mqtt_session(
                 generation,
                 transport::upgrade(&mut socket, &endpoint, WifiRng::new().bytes()),
             )
-            .await?;
+            .await
+            .map_err(|_| ConnectionError::WebSocket)?;
         }
         let (reader, writer) = socket.split();
         mqtt_connected(
@@ -816,9 +849,9 @@ async fn mqtt_connected<R: embedded_io_async::Read, W: embedded_io_async::Write>
     websocket: bool,
     reader: R,
     mut writer: W,
-) -> Result<(), ()> {
+) -> Result<(), crate::app::mqtt::ConnectionError> {
     use super::mqtt_transport::WifiRng;
-    use crate::app::mqtt::{self, transport};
+    use crate::app::mqtt::{self, ConnectionError, transport};
     use embassy_sync::{blocking_mutex::raw::NoopRawMutex, signal::Signal};
 
     let (public_key, credentials) = context
@@ -831,7 +864,13 @@ async fn mqtt_connected<R: embedded_io_async::Read, W: embedded_io_async::Write>
             (public_key, credentials)
         })
         .await;
-    let (username, password) = credentials?;
+    let (username, password) = credentials.map_err(|_| {
+        if crate::platform::now_seconds() < 1_704_067_200 {
+            ConnectionError::Clock
+        } else {
+            ConnectionError::Config
+        }
+    })?;
     let topic = mqtt::packets_topic(config, &public_key);
     let status = mqtt::status_topic(&topic);
     let client_id = format!(
@@ -847,13 +886,12 @@ async fn mqtt_connected<R: embedded_io_async::Read, W: embedded_io_async::Write>
     let ack = Signal::<NoopRawMutex, ()>::new();
     let mut reader = transport::Reader::new(reader, websocket, &pong);
     let mut receive = pin!(async {
-        if mqtt::read_connack(&mut reader).await.is_err() {
-            return;
-        }
+        mqtt::read_connack(&mut reader).await?;
         ack.signal(());
         while mqtt::read_pingresp(&mut reader).await.is_ok() {
             ack.signal(());
         }
+        Err::<(), _>(ConnectionError::Connection)
     });
     let mut send = pin!(async {
         let mut rng = WifiRng::new();
@@ -935,11 +973,13 @@ async fn mqtt_connected<R: embedded_io_async::Read, W: embedded_io_async::Write>
         Ok::<(), ()>(())
     });
     poll_fn(|cx| {
-        if receive.as_mut().poll(cx).is_ready() || send.as_mut().poll(cx).is_ready() {
-            Poll::Ready(Err(()))
-        } else {
-            Poll::Pending
+        if let Poll::Ready(result) = receive.as_mut().poll(cx) {
+            return Poll::Ready(result);
         }
+        if send.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(Err(ConnectionError::Connection));
+        }
+        Poll::Pending
     })
     .await
 }
