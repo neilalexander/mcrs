@@ -83,6 +83,15 @@ make heltec-v3-bins
 
 For Heltec v4 and WSL3, use the corresponding `heltec-v4-*` and `heltec-wsl3-*` Make targets.
 
+The `*-bins` targets and GitHub Actions workflow produce two images:
+
+- `*-upgrade.bin`: application-only image to upload through the OTA update page.
+- `*-full.bin`: bootloader, partition table and application for initial USB/serial
+  installation at flash address `0x0`.
+
+Use `make heltec-v3-upgrade-bin` or `make heltec-v3-full-bin` to generate just one
+image type. Both are written to `dist/`.
+
 The standard `make *-build`, `make *-flash`, and `make *-bins` targets build
 firmware without MQTT. Set `MQTT=1` to include it in any board build, flash, or
 binary target; for example:
