@@ -16,6 +16,7 @@ const MAX_WIFI_SSID_LEN: usize = 32;
 const MIN_WIFI_PASSWORD_LEN: usize = 8;
 const MAX_WIFI_PASSWORD_LEN: usize = 63;
 const MAX_NODE_NAME_LEN: usize = 31;
+const MAX_OWNER_INFO_LEN: usize = 119;
 #[cfg(feature = "mqtt")]
 const MAX_MQTT_VALUE_LEN: usize = 255;
 #[cfg(feature = "mqtt")]
@@ -38,6 +39,7 @@ pub struct AppConfig {
     latitude_microdegrees: Option<i32>,
     longitude_microdegrees: Option<i32>,
     node_name: String,
+    owner_info: String,
     remote_cli_password: String,
     wifi: WifiConfig,
     radio: RadioConfig,
@@ -121,6 +123,7 @@ impl AppConfig {
             latitude_microdegrees: stored.latitude_microdegrees,
             longitude_microdegrees: stored.longitude_microdegrees,
             node_name: stored.node_name,
+            owner_info: stored.owner_info,
             remote_cli_password: stored.remote_cli_password,
             wifi: stored.wifi,
             radio: stored.radio,
@@ -161,6 +164,14 @@ impl AppConfig {
 
     pub fn node_name(&self) -> &str {
         &self.node_name
+    }
+
+    pub fn owner_info(&self) -> &str {
+        &self.owner_info
+    }
+
+    pub fn set_owner_info(&mut self, value: &str) {
+        self.owner_info = fit_owner_info(value);
     }
 
     pub fn remote_cli_password(&self) -> &str {
@@ -251,6 +262,7 @@ impl AppConfig {
         }
         match setting {
             "name" => self.node_name = defaults.node_name,
+            "owner.info" => self.owner_info = defaults.owner_info,
             "password" => self.remote_cli_password = defaults.remote_cli_password,
             "lat" => self.latitude_microdegrees = defaults.latitude_microdegrees,
             "lon" => self.longitude_microdegrees = defaults.longitude_microdegrees,
@@ -527,6 +539,7 @@ struct StoredAppConfig {
     latitude_microdegrees: Option<i32>,
     longitude_microdegrees: Option<i32>,
     node_name: String,
+    owner_info: String,
     remote_cli_password: String,
     wifi: WifiConfig,
     radio: RadioConfig,
@@ -562,6 +575,7 @@ impl StoredAppConfig {
             longitude_microdegrees: None,
             node_name: fit_node_name(&generated_node_name(private_key))
                 .unwrap_or_else(|_| String::from("Repeater")),
+            owner_info: String::new(),
             remote_cli_password: fit_password(identity::REMOTE_CLI_PASSWORD),
             wifi: WifiConfig::default(),
             radio: RadioConfig {
@@ -589,6 +603,7 @@ impl StoredAppConfig {
             longitude_microdegrees: config.longitude_microdegrees,
             node_name: fit_node_name(config.node_name())
                 .unwrap_or_else(|_| String::from("Repeater")),
+            owner_info: String::from(config.owner_info()),
             remote_cli_password: fit_password(config.remote_cli_password()),
             wifi: config.wifi.clone(),
             radio: config.radio,
@@ -672,6 +687,7 @@ fn decode_config_text(data: &[u8], defaults: &StoredAppConfig) -> Option<StoredA
                     MAX_LONGITUDE_MICRODEGREES,
                 )?;
             }
+            "owner.info" => config.owner_info = fit_owner_info(&value),
             "node.name" => {
                 config.node_name = fit_node_name(&value).ok()?;
                 saw_node_name = true;
@@ -798,6 +814,12 @@ fn encode_sparse_config_text(config: &StoredAppConfig, defaults: &StoredAppConfi
     if config.node_name != defaults.node_name {
         out.push_str("node.name=");
         write_escaped_value(&mut out, &config.node_name);
+        out.push('\n');
+    }
+
+    if config.owner_info != defaults.owner_info {
+        out.push_str("owner.info=");
+        write_escaped_value(&mut out, &config.owner_info);
         out.push('\n');
     }
 
@@ -932,6 +954,10 @@ fn encode_full_config_text_redacted(config: &StoredAppConfig, redact_secrets: bo
 
     out.push_str("node.name=");
     write_escaped_value(&mut out, &config.node_name);
+    out.push('\n');
+
+    out.push_str("owner.info=");
+    write_escaped_value(&mut out, &config.owner_info);
     out.push('\n');
 
     if redact_secrets {
@@ -1130,6 +1156,17 @@ fn fit_node_name(input: &str) -> Result<String, ConfigError> {
     } else {
         Ok(output)
     }
+}
+
+fn fit_owner_info(input: &str) -> String {
+    let mut output = String::new();
+    for character in input.chars() {
+        if character == '\0' || output.len() + character.len_utf8() > MAX_OWNER_INFO_LEN {
+            break;
+        }
+        output.push(if character == '|' { '\n' } else { character });
+    }
+    output
 }
 
 fn fit_password(input: &str) -> String {
@@ -1382,6 +1419,46 @@ mod tests {
 
     fn defaults() -> StoredAppConfig {
         StoredAppConfig::default_with_identity_seed([7; 32])
+    }
+
+    #[test]
+    fn owner_info_round_trips_and_clears() {
+        let mut config = AppConfig::generated_defaults([7; 32]);
+        assert_eq!(config.owner_info(), "");
+        config.set_owner_info("Alice|alice@example.org|Back\\yard");
+        let stored = StoredAppConfig::from_app_config(&config);
+        for encoded in [
+            encode_config_text(&stored),
+            encode_full_config_text_redacted(&stored, false),
+        ] {
+            let decoded = decode_config_text(&encoded, &defaults()).unwrap();
+            let reloaded = AppConfig::from_stored(decoded, "storage");
+            assert_eq!(
+                reloaded.owner_info(),
+                "Alice\nalice@example.org\nBack\\yard"
+            );
+        }
+        config.unset("owner.info").unwrap();
+        let encoded = encode_config_text(&StoredAppConfig::from_app_config(&config));
+        assert!(
+            !core::str::from_utf8(&encoded)
+                .unwrap()
+                .contains("owner.info=")
+        );
+        assert_eq!(
+            decode_config_text(&encoded, &defaults())
+                .unwrap()
+                .owner_info,
+            ""
+        );
+    }
+
+    #[test]
+    fn owner_info_limits_bytes_without_splitting_utf8() {
+        assert_eq!(fit_owner_info(&"x".repeat(120)).len(), 119);
+        assert_eq!(fit_owner_info(&("x".repeat(118) + "é")), "x".repeat(118));
+        assert_eq!(fit_owner_info(&("x".repeat(117) + "é")).len(), 119);
+        assert_eq!(fit_owner_info("Alice\0ignored"), "Alice");
     }
 
     #[test]

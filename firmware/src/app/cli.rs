@@ -22,7 +22,7 @@ const REQ_TYPE_GET_OWNER_INFO: u8 = 0x07;
 const LPP_CHANNEL_SELF: u8 = 1;
 const LPP_TYPE_VOLTAGE: u8 = 116;
 const REPEATER_STATS_LEN: usize = 56;
-const FIRMWARE_VERSION: &str = env!("MESHCORE_FIRMWARE_VERSION");
+const FIRMWARE_VERSION: &str = concat!("MCRS ", env!("MESHCORE_FIRMWARE_VERSION"));
 
 pub struct Cli {
     line: [u8; LINE_BUFFER_LEN],
@@ -434,18 +434,13 @@ async fn handle_binary_request(
             }
             Some(response)
         }
-        REQ_TYPE_GET_OWNER_INFO => {
-            let node_name = context
-                .with_config(|config| String::from(config.node_name()))
-                .await;
-            let mut response = Vec::new();
-            response.extend_from_slice(&request.timestamp.to_le_bytes());
-            response.extend_from_slice(FIRMWARE_VERSION.as_bytes());
-            response.push(b'\n');
-            response.extend_from_slice(node_name.as_bytes());
-            response.push(b'\n');
-            Some(response)
-        }
+        REQ_TYPE_GET_OWNER_INFO => Some(
+            context
+                .with_config(|config| {
+                    owner_info_response(request.timestamp, config.node_name(), config.owner_info())
+                })
+                .await,
+        ),
         request_type if privilege != super::remote::RemotePrivilege::Admin => {
             crate::platform::log_fmt(format_args!(
                 "Remote request denied: type=0x{:02x} privilege={}",
@@ -482,12 +477,17 @@ async fn handle_anonymous_subrequest(
             };
             Some(response.encode())
         }
-        ANON_REQ_TYPE_OWNER => {
-            let node_name = context
-                .with_config(|config| String::from(config.node_name()))
-                .await;
-            Some(anonymous_owner_response(request_timestamp, &node_name))
-        }
+        ANON_REQ_TYPE_OWNER => Some(
+            context
+                .with_config(|config| {
+                    anonymous_owner_response(
+                        request_timestamp,
+                        config.node_name(),
+                        config.owner_info(),
+                    )
+                })
+                .await,
+        ),
         request_type if request_type < b' ' => {
             crate::platform::log_fmt(format_args!(
                 "Anonymous request unsupported: type=0x{:02x}",
@@ -508,10 +508,22 @@ fn anonymous_basic_response(request_timestamp: u32) -> Vec<u8> {
     response.encode()
 }
 
-fn anonymous_owner_response(request_timestamp: u32, node_name: &str) -> Vec<u8> {
+fn owner_info_response(request_timestamp: u32, node_name: &str, owner_info: &str) -> Vec<u8> {
+    let mut response = Vec::new();
+    response.extend_from_slice(&request_timestamp.to_le_bytes());
+    response.extend_from_slice(FIRMWARE_VERSION.as_bytes());
+    response.push(b'\n');
+    response.extend_from_slice(node_name.as_bytes());
+    response.push(b'\n');
+    response.extend_from_slice(owner_info.as_bytes());
+    response
+}
+
+fn anonymous_owner_response(request_timestamp: u32, node_name: &str, owner_info: &str) -> Vec<u8> {
     let mut body = Vec::new();
     body.extend_from_slice(node_name.as_bytes());
     body.push(b'\n');
+    body.extend_from_slice(owner_info.as_bytes());
     let response = RepeaterResponsePlaintext {
         reflected_tag: request_timestamp,
         responder_time: crate::platform::now_seconds(),
@@ -838,6 +850,11 @@ async fn handle_get_command(
             .await;
     }
     match config {
+        "owner.info" => {
+            context
+                .with_config(|config| format!("> {}", config.owner_info().replace('\n', "|")))
+                .await
+        }
         "name" => {
             context
                 .with_config(|config| format!("> {}", config.node_name()))
@@ -997,6 +1014,22 @@ async fn handle_set_command(
         return match result {
             Ok(()) => String::from("OK - reboot to apply"),
             Err(error) => format!("Error: {error}"),
+        };
+    }
+
+    if let Some(owner_info) = config
+        .strip_prefix("owner.info ")
+        .or_else(|| (config == "owner.info").then_some(""))
+    {
+        return match context
+            .update_config(|config| {
+                config.set_owner_info(owner_info);
+                Ok(())
+            })
+            .await
+        {
+            Ok(()) => String::from("OK"),
+            Err(error) => format!("Error: {}", error),
         };
     }
 
@@ -1678,7 +1711,7 @@ fn denied_text() -> String {
 
 fn help_text() -> String {
     String::from(
-        "Commands: help, ver, status, identity, radio, clock, region, region list {allowed|denied}, ota status, get {name|lat|lon|radio|tx|dutycycle|freq|flood.max.unscoped|flood.max.advert|path.hash.mode|public.key|status}; Privileged: time, clock sync, set, unset, password, neighbours, advert, advert.zerohop, discover.neighbours, region {put|remove|allowf|denyf|default}, ota {start|stop}, erase config, reboot",
+        "Commands: help, ver, status, identity, radio, clock, region, region list {allowed|denied}, ota status, get {name|owner.info|lat|lon|radio|tx|dutycycle|freq|flood.max.unscoped|flood.max.advert|path.hash.mode|public.key|status}; Privileged: time, clock sync, set, unset, password, neighbours, advert, advert.zerohop, discover.neighbours, region {put|remove|allowf|denyf|default}, ota {start|stop}, erase config, reboot",
     )
 }
 
@@ -1879,6 +1912,24 @@ impl CliPrivilege {
 #[cfg(test)]
 mod tests {
     use super::split_cli_correlation_prefix;
+
+    #[test]
+    fn owner_info_responses_match_meshcore() {
+        for owner in ["", "Alice\nalice@example.org"] {
+            let authenticated = super::owner_info_response(0x12345678, "Repeater", owner);
+            assert_eq!(&authenticated[..4], &0x12345678u32.to_le_bytes());
+            assert_eq!(
+                &authenticated[4..],
+                alloc::format!("{}\nRepeater\n{}", super::FIRMWARE_VERSION, owner).as_bytes()
+            );
+            let anonymous = super::anonymous_owner_response(0x12345678, "Repeater", owner);
+            assert_eq!(&anonymous[..4], &0x12345678u32.to_le_bytes());
+            assert_eq!(
+                &anonymous[8..],
+                alloc::format!("Repeater\n{}", owner).as_bytes()
+            );
+        }
+    }
 
     #[test]
     fn status_counters_match_meshcore_wire_layout() {
