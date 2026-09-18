@@ -155,6 +155,14 @@ mqtt restart
 Secure connections require TLS 1.3. Certificates are not verified, so traffic is
 encrypted but the broker is not authenticated. No certificate setup is needed.
 
+For brokers using MeshCore device authentication (such as LetsMesh), enable
+it for that broker using its configured host:
+
+```text
+set mqtt.1.auth device
+mqtt restart
+```
+
 ### Importing an existing identity
 
 To keep an existing MeshCore identity, copy the output of its local `get prv.key`

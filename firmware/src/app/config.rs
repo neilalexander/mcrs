@@ -235,6 +235,11 @@ impl AppConfig {
             "port" => mqtt.port = value.parse().map_err(|_| ConfigError::InvalidMqttConfig)?,
             "username" => mqtt.username = value.into(),
             "password" => mqtt.password = value.into(),
+            "auth" => {
+                mqtt.auth =
+                    super::mqtt::AuthMode::parse(value).ok_or(ConfigError::InvalidMqttConfig)?
+            }
+            "auth.audience" | "audience" => mqtt.auth_audience = value.into(),
             "topic.root" => mqtt.topic_root = value.into(),
             "iata" => mqtt.iata = value.into(),
             _ => return Err(ConfigError::InvalidMqttConfig),
@@ -707,6 +712,8 @@ fn decode_config_text(data: &[u8], defaults: &StoredAppConfig) -> Option<StoredA
                     "port" => mqtt.port = value.parse().ok()?,
                     "username" => mqtt.username = value,
                     "password" => mqtt.password = value,
+                    "auth" => mqtt.auth = super::mqtt::AuthMode::parse(&value)?,
+                    "auth.audience" | "audience" => mqtt.auth_audience = value,
                     "topic.root" => mqtt.topic_root = value,
                     "iata" => mqtt.iata = value,
                     _ => {}
@@ -1054,6 +1061,18 @@ fn write_mqtt_config(
             mqtt.password.as_str(),
             defaults.map(|d| d.password.as_str()),
             true,
+        ),
+        (
+            "auth",
+            mqtt.auth.as_str(),
+            defaults.map(|d| d.auth.as_str()),
+            false,
+        ),
+        (
+            "auth.audience",
+            mqtt.auth_audience.as_str(),
+            defaults.map(|d| d.auth_audience.as_str()),
+            false,
         ),
         (
             "topic.root",

@@ -821,7 +821,17 @@ async fn mqtt_connected<R: embedded_io_async::Read, W: embedded_io_async::Write>
     use crate::app::mqtt::{self, transport};
     use embassy_sync::{blocking_mutex::raw::NoopRawMutex, signal::Signal};
 
-    let public_key = context.public_key().await;
+    let (public_key, credentials) = context
+        .with_identity(|identity| {
+            let public_key = *identity.public_key();
+            let credentials =
+                config.credentials(&public_key, crate::platform::now_seconds(), |message| {
+                    identity.sign(message)
+                });
+            (public_key, credentials)
+        })
+        .await;
+    let (username, password) = credentials?;
     let topic = mqtt::packets_topic(config, &public_key);
     let status = mqtt::status_topic(&topic);
     let client_id = format!(
@@ -852,7 +862,7 @@ async fn mqtt_connected<R: embedded_io_async::Read, W: embedded_io_async::Write>
                 &mut writer,
                 websocket,
                 2,
-                &mqtt::connect_packet(config, &client_id, &status, &offline),
+                &mqtt::connect_packet((&username, &password), &client_id, &status, &offline),
                 rng.bytes(),
             )
             .await?;

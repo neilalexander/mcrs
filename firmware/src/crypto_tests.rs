@@ -6,7 +6,7 @@ extern crate alloc;
 #[path = "app/crypto.rs"]
 mod crypto;
 #[path = "app/identity.rs"]
-mod identity;
+pub(crate) mod identity;
 #[path = "app/remote.rs"]
 mod remote;
 

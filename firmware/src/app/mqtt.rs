@@ -8,7 +8,34 @@ use alloc::{
     vec,
     vec::Vec,
 };
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use core::fmt::Write as _;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AuthMode {
+    #[default]
+    Password,
+    Device,
+}
+
+impl AuthMode {
+    pub fn parse(value: &str) -> Option<Self> {
+        if value.eq_ignore_ascii_case("password") {
+            Some(Self::Password)
+        } else if value.eq_ignore_ascii_case("device") {
+            Some(Self::Device)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Password => "password",
+            Self::Device => "device",
+        }
+    }
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MqttConfig {
@@ -16,6 +43,8 @@ pub struct MqttConfig {
     pub port: u16,
     pub username: String,
     pub password: String,
+    pub auth: AuthMode,
+    pub auth_audience: String,
     pub topic_root: String,
     pub iata: String,
 }
@@ -27,10 +56,62 @@ impl MqttConfig {
             "port" => self.port.to_string(),
             "username" => self.username.clone(),
             "password" => self.password.clone(),
+            "auth" => self.auth.as_str().into(),
+            "auth.audience" | "audience" => self.auth_audience.clone(),
             "topic.root" => self.topic_root.clone(),
             "iata" => self.iata.clone(),
             _ => return None,
         })
+    }
+
+    /// Resolve credentials for one CONNECT. Tokens are never persisted and must
+    /// be regenerated on reconnect. The broker uses a hex signature, not the
+    /// base64url signature of a standard JWT.
+    pub fn credentials(
+        &self,
+        public_key: &[u8; 32],
+        now: u32,
+        sign: impl FnOnce(&[u8]) -> [u8; 64],
+    ) -> Result<(String, String), ()> {
+        if self.auth == AuthMode::Password {
+            return Ok((self.username.clone(), self.password.clone()));
+        }
+        // Before clock synchronization, the platform returns uptime. Accept a
+        // retained or manually set wall clock too (2024-01-01 or later).
+        if now < 1_704_067_200 {
+            return Err(());
+        }
+        let expires = now.checked_add(3600).ok_or(())?;
+        let endpoint = transport::Endpoint::parse(&self.host, self.port)?;
+        let audience = if self.auth_audience.is_empty() {
+            endpoint.host
+        } else {
+            &self.auth_audience
+        };
+        let key = hex(public_key);
+        let mut escaped = String::new();
+        for c in audience.chars() {
+            match c {
+                '"' => escaped.push_str("\\\""),
+                '\\' => escaped.push_str("\\\\"),
+                c if c < ' ' => {
+                    let _ = write!(escaped, "\\u{:04x}", c as u32);
+                }
+                c => escaped.push(c),
+            }
+        }
+        let payload = format!(
+            "{{\"publicKey\":\"{key}\",\"aud\":\"{escaped}\",\"iat\":{now},\"exp\":{expires}}}"
+        );
+        let mut token = format!(
+            "{}.{}",
+            URL_SAFE_NO_PAD.encode(br#"{"alg":"Ed25519","typ":"JWT"}"#),
+            URL_SAFE_NO_PAD.encode(payload.as_bytes())
+        );
+        let signature = sign(token.as_bytes());
+        token.push('.');
+        token.push_str(&hex(&signature));
+        Ok((format!("v1_{key}"), token))
     }
 }
 
@@ -127,19 +208,20 @@ pub fn status_json(public_key: &[u8; 32], online: bool) -> String {
 }
 
 pub fn connect_packet(
-    config: &MqttConfig,
+    credentials: (&str, &str),
     client_id: &str,
     will_topic: &str,
     will_payload: &str,
 ) -> Vec<u8> {
+    let (username, password) = credentials;
     let mut body = Vec::new();
     field(&mut body, b"MQTT");
     body.push(4);
     let mut flags = 0x26; // clean session, retained QoS 0 last will
-    if !config.username.is_empty() {
+    if !username.is_empty() {
         flags |= 0x80;
     }
-    if !config.password.is_empty() {
+    if !password.is_empty() {
         flags |= 0x40;
     }
     body.push(flags);
@@ -147,11 +229,11 @@ pub fn connect_packet(
     field(&mut body, client_id.as_bytes());
     field(&mut body, will_topic.as_bytes());
     field(&mut body, will_payload.as_bytes());
-    if !config.username.is_empty() {
-        field(&mut body, config.username.as_bytes());
+    if !username.is_empty() {
+        field(&mut body, username.as_bytes());
     }
-    if !config.password.is_empty() {
-        field(&mut body, config.password.as_bytes());
+    if !password.is_empty() {
+        field(&mut body, password.as_bytes());
     }
     frame(0x10, &body)
 }
@@ -214,6 +296,130 @@ mod tests {
         pin::pin,
         task::{Context, Poll, Waker},
     };
+
+    #[test]
+    fn device_credentials_match_meshcore_format_and_verify_for_both_key_formats() {
+        use crate::crypto_tests::identity::{Identity, PrivateKey};
+        use ed25519_dalek::{Signature, VerifyingKey};
+        let expanded = PrivateKey::from_hex("28ad39fefd7fa3e200a9c626eef599e61a2d055c48a8288a4e7e4c4bca3928789c7d6db3506d65dbac7c052aaee4857425210c9bc54030c826e54055983452a5").unwrap();
+        let mut previous = None;
+        for private in [PrivateKey::Seed([7; 32]), expanded] {
+            let identity = Identity::from_private_key(private);
+            let config = MqttConfig {
+                host: "wss://mqtt.meshrank.net:443/mqtt".into(),
+                auth: AuthMode::Device,
+                username: "ignored".into(),
+                password: "ignored".into(),
+                ..Default::default()
+            };
+            let credentials = config
+                .credentials(identity.public_key(), 1_800_000_000, |m| identity.sign(m))
+                .unwrap();
+            let (username, token) = &credentials;
+            assert_eq!(
+                username,
+                "v1_EA4A6C63E29C520ABEF5507B132EC5F9954776AEBEBE7B92421EEA691446D22C"
+            );
+            let parts: Vec<_> = token.split('.').collect();
+            assert_eq!(parts.len(), 3);
+            assert_eq!(parts[0], "eyJhbGciOiJFZDI1NTE5IiwidHlwIjoiSldUIn0");
+            assert!(!parts[1].contains('='));
+            assert_eq!(URL_SAFE_NO_PAD.decode(parts[1]).unwrap(), br#"{"publicKey":"EA4A6C63E29C520ABEF5507B132EC5F9954776AEBEBE7B92421EEA691446D22C","aud":"mqtt.meshrank.net","iat":1800000000,"exp":1800003600}"#);
+            assert_eq!(parts[2].len(), 128);
+            let mut sig = [0; 64];
+            for (i, byte) in sig.iter_mut().enumerate() {
+                *byte = u8::from_str_radix(&parts[2][i * 2..i * 2 + 2], 16).unwrap();
+            }
+            VerifyingKey::from_bytes(identity.public_key())
+                .unwrap()
+                .verify_strict(
+                    token.rsplit_once('.').unwrap().0.as_bytes(),
+                    &Signature::from_bytes(&sig),
+                )
+                .unwrap();
+            let packet = connect_packet((username, token), "client", "status", "offline");
+            // Skip MQTT Remaining Length, then inspect CONNECT flags and fields.
+            let mut offset = 1;
+            while packet[offset] & 0x80 != 0 {
+                offset += 1;
+            }
+            offset += 1;
+            assert_eq!(packet[offset + 7], 0xe6);
+            offset += 10;
+            for expected in ["client", "status", "offline", username, token] {
+                let len = u16::from_be_bytes([packet[offset], packet[offset + 1]]) as usize;
+                offset += 2;
+                assert_eq!(&packet[offset..offset + len], expected.as_bytes());
+                offset += len;
+            }
+            assert_eq!(offset, packet.len());
+            assert_ne!(
+                config
+                    .credentials(identity.public_key(), 1_800_000_001, |m| identity.sign(m))
+                    .unwrap(),
+                credentials
+            );
+            if let Some(previous) = previous {
+                assert_eq!(credentials, previous);
+            }
+            previous = Some(credentials);
+        }
+    }
+
+    #[test]
+    fn auth_defaults_clock_guard_and_audience_override() {
+        let mut config = MqttConfig {
+            username: "user".into(),
+            password: "pass".into(),
+            ..Default::default()
+        };
+        assert_eq!(config.value("auth").as_deref(), Some("password"));
+        assert_eq!(
+            config.credentials(&[0; 32], 0, |_| panic!("password auth must not sign")),
+            Ok(("user".into(), "pass".into()))
+        );
+        assert_eq!(AuthMode::parse("DEVICE"), Some(AuthMode::Device));
+        assert_eq!(AuthMode::parse("invalid"), None);
+        config.auth = AuthMode::Device;
+        config.host = "mqtt://broker.example:1883".into();
+        for time in [0, 3600, u32::MAX] {
+            assert!(
+                config
+                    .credentials(&[0; 32], time, |_| panic!("invalid clock must not sign"))
+                    .is_err()
+            );
+        }
+        config.auth_audience = "custom\"\\\n".into();
+        let (_, token) = config
+            .credentials(&[0; 32], 1_800_000_000, |_| [0; 64])
+            .unwrap();
+        let payload = String::from_utf8(
+            URL_SAFE_NO_PAD
+                .decode(token.split('.').nth(1).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(payload.contains(r#""aud":"custom\"\\\u000a""#));
+        for host in [
+            "broker.example",
+            "mqtts://broker.example",
+            "https://broker.example/path",
+        ] {
+            config.host = host.into();
+            config.port = 1883;
+            config.auth_audience.clear();
+            let (_, token) = config
+                .credentials(&[0; 32], 1_800_000_000, |_| [0; 64])
+                .unwrap();
+            let payload = String::from_utf8(
+                URL_SAFE_NO_PAD
+                    .decode(token.split('.').nth(1).unwrap())
+                    .unwrap(),
+            )
+            .unwrap();
+            assert!(payload.contains(r#""aud":"broker.example""#));
+        }
+    }
 
     struct Reader<'a> {
         bytes: &'a [u8],
@@ -360,7 +566,12 @@ mod tests {
             assert!(json.contains(&identity));
         }
         let offline = status_json(&key, false);
-        let connect = connect_packet(&config, "mcrs-cdcdcd-1", &status, &offline);
+        let connect = connect_packet(
+            (&config.username, &config.password),
+            "mcrs-cdcdcd-1",
+            &status,
+            &offline,
+        );
         assert!(
             connect
                 .windows(offline.len())

@@ -969,8 +969,14 @@ async fn handle_set_command(
         let Some((index, field)) = parse_mqtt_setting(&full_key) else {
             return String::from("Error, invalid MQTT setting (use mqtt.1 through mqtt.3)");
         };
+        // The command line is trimmed before parsing, so an explicit empty
+        // string is needed to clear credentials or an audience override.
+        let value = match value.trim() {
+            "\"\"" => "",
+            value => value,
+        };
         return match context
-            .update_config(|config| config.set_mqtt_value(index, field, value.trim()))
+            .update_config(|config| config.set_mqtt_value(index, field, value))
             .await
         {
             Ok(()) => String::from("OK - run 'mqtt restart' to apply"),
