@@ -1,4 +1,4 @@
-.PHONY: heltec-v3-build heltec-v3-run heltec-v3-flash heltec-v3-bins heltec-v3-full-bin heltec-v3-upgrade-bin heltec-v4-build heltec-v4-run heltec-v4-flash heltec-v4-bins heltec-v4-full-bin heltec-v4-upgrade-bin heltec-wsl3-build heltec-wsl3-run heltec-wsl3-flash heltec-wsl3-bins heltec-wsl3-full-bin heltec-wsl3-upgrade-bin clean-dist
+.PHONY: heltec-v3-build heltec-v3-run heltec-v3-flash heltec-v3-bins heltec-v3-full-bin heltec-v3-upgrade-bin heltec-v4-build heltec-v4-run heltec-v4-flash heltec-v4-bins heltec-v4-full-bin heltec-v4-upgrade-bin heltec-wsl3-build heltec-wsl3-run heltec-wsl3-flash heltec-wsl3-bins heltec-wsl3-full-bin heltec-wsl3-upgrade-bin clean-dist print-version
 
 HELTEC_V3_CHIP := esp32s3
 HELTEC_V3_FLASH_SIZE := 8mb
@@ -20,6 +20,11 @@ HELTEC_WSL3_PARTITIONS := firmware/partitions_heltec_v3.csv
 HELTEC_WSL3_ELF := target/xtensa-esp32s3-none-elf/release/mcrs-firmware
 DIST_DIR := dist
 MQTT ?= 0
+# Command-line VERSION overrides this for reproducible packaging in CI.
+VERSION := $(shell git describe --tags --dirty --always --abbrev=8 --match 'v[0-9]*' 2>/dev/null | tr '/' '-')
+ifeq ($(strip $(VERSION)),)
+VERSION := unknown
+endif
 
 ifeq ($(MQTT),1)
 MQTT_FEATURE := --features mqtt
@@ -43,7 +48,7 @@ heltec-v3-full-bin: heltec-v3-build | $(DIST_DIR)
 		--partition-table $(HELTEC_V3_PARTITIONS) \
 		--merge \
 		$(HELTEC_V3_ELF) \
-		$(DIST_DIR)/mcrs-heltec-v3$(MQTT_SUFFIX)-full.bin
+		$(DIST_DIR)/mcrs-heltec-v3$(MQTT_SUFFIX)-$(VERSION)-full.bin
 
 heltec-v3-upgrade-bin: heltec-v3-build | $(DIST_DIR)
 	espflash save-image \
@@ -54,7 +59,7 @@ heltec-v3-upgrade-bin: heltec-v3-build | $(DIST_DIR)
 		--partition-table $(HELTEC_V3_PARTITIONS) \
 		--target-app-partition ota_0 \
 		$(HELTEC_V3_ELF) \
-		$(DIST_DIR)/mcrs-heltec-v3$(MQTT_SUFFIX)-upgrade.bin
+		$(DIST_DIR)/mcrs-heltec-v3$(MQTT_SUFFIX)-$(VERSION)-upgrade.bin
 
 heltec-v4-build:
 	cargo +esp build-heltec-v4 $(MQTT_FEATURE)
@@ -73,7 +78,7 @@ heltec-v4-full-bin: heltec-v4-build | $(DIST_DIR)
 		--partition-table $(HELTEC_V4_PARTITIONS) \
 		--merge \
 		$(HELTEC_V4_ELF) \
-		$(DIST_DIR)/mcrs-heltec-v4$(MQTT_SUFFIX)-full.bin
+		$(DIST_DIR)/mcrs-heltec-v4$(MQTT_SUFFIX)-$(VERSION)-full.bin
 
 heltec-v4-upgrade-bin: heltec-v4-build | $(DIST_DIR)
 	espflash save-image \
@@ -84,7 +89,7 @@ heltec-v4-upgrade-bin: heltec-v4-build | $(DIST_DIR)
 		--partition-table $(HELTEC_V4_PARTITIONS) \
 		--target-app-partition ota_0 \
 		$(HELTEC_V4_ELF) \
-		$(DIST_DIR)/mcrs-heltec-v4$(MQTT_SUFFIX)-upgrade.bin
+		$(DIST_DIR)/mcrs-heltec-v4$(MQTT_SUFFIX)-$(VERSION)-upgrade.bin
 
 heltec-wsl3-build:
 	cargo +esp build-heltec-wsl3 $(MQTT_FEATURE)
@@ -103,7 +108,7 @@ heltec-wsl3-full-bin: heltec-wsl3-build | $(DIST_DIR)
 		--partition-table $(HELTEC_WSL3_PARTITIONS) \
 		--merge \
 		$(HELTEC_WSL3_ELF) \
-		$(DIST_DIR)/mcrs-heltec-wsl3$(MQTT_SUFFIX)-full.bin
+		$(DIST_DIR)/mcrs-heltec-wsl3$(MQTT_SUFFIX)-$(VERSION)-full.bin
 
 heltec-wsl3-upgrade-bin: heltec-wsl3-build | $(DIST_DIR)
 	espflash save-image \
@@ -114,10 +119,13 @@ heltec-wsl3-upgrade-bin: heltec-wsl3-build | $(DIST_DIR)
 		--partition-table $(HELTEC_WSL3_PARTITIONS) \
 		--target-app-partition ota_0 \
 		$(HELTEC_WSL3_ELF) \
-		$(DIST_DIR)/mcrs-heltec-wsl3$(MQTT_SUFFIX)-upgrade.bin
+		$(DIST_DIR)/mcrs-heltec-wsl3$(MQTT_SUFFIX)-$(VERSION)-upgrade.bin
 
 $(DIST_DIR):
 	mkdir -p $(DIST_DIR)
 
 clean-dist:
 	rm -rf $(DIST_DIR)
+
+print-version:
+	@printf '%s\n' '$(VERSION)'

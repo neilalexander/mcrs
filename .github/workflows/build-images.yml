@@ -3,6 +3,7 @@ name: Build Images
 on:
   push:
     branches: [main]
+    tags: ["v[0-9]*"]
   pull_request:
   workflow_dispatch:
 
@@ -29,29 +30,14 @@ jobs:
             name: Heltec V3
             build_target: esp32s3
             make_target: heltec-v3-bins
-            artifact_paths: |
-              dist/mcrs-heltec-v3-full.bin
-              dist/mcrs-heltec-v3-upgrade.bin
-              dist/mcrs-heltec-v3-mqtt-full.bin
-              dist/mcrs-heltec-v3-mqtt-upgrade.bin
           - id: heltec-v4
             name: Heltec V4
             build_target: esp32s3
             make_target: heltec-v4-bins
-            artifact_paths: |
-              dist/mcrs-heltec-v4-full.bin
-              dist/mcrs-heltec-v4-upgrade.bin
-              dist/mcrs-heltec-v4-mqtt-full.bin
-              dist/mcrs-heltec-v4-mqtt-upgrade.bin
           - id: heltec-wsl3
             name: Heltec WSL3
             build_target: esp32s3
             make_target: heltec-wsl3-bins
-            artifact_paths: |
-              dist/mcrs-heltec-wsl3-full.bin
-              dist/mcrs-heltec-wsl3-upgrade.bin
-              dist/mcrs-heltec-wsl3-mqtt-full.bin
-              dist/mcrs-heltec-wsl3-mqtt-upgrade.bin
         variant:
           - id: standard
             name_suffix: ""
@@ -65,6 +51,12 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Determine image version
+        id: version
+        run: echo "version=$(make --no-print-directory -s print-version)" >> "$GITHUB_OUTPUT"
 
       - name: Install Rust for Xtensa
         uses: esp-rs/xtensa-toolchain@v1.7.0
@@ -88,11 +80,13 @@ jobs:
         run: cargo install espflash --version 4.4.0 --locked
 
       - name: Build images
-        run: make MQTT=${{ matrix.variant.mqtt }} ${{ matrix.board.make_target }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: make VERSION="$VERSION" MQTT=${{ matrix.variant.mqtt }} ${{ matrix.board.make_target }}
 
       - name: Upload images
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.board.id }}${{ matrix.variant.artifact_suffix }}-firmware-${{ github.sha }}
-          path: ${{ matrix.board.artifact_paths }}
+          name: ${{ matrix.board.id }}${{ matrix.variant.artifact_suffix }}-firmware-${{ steps.version.outputs.version }}
+          path: dist/*.bin
           if-no-files-found: error
