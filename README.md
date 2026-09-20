@@ -58,7 +58,7 @@ For Heltec, install the ESP Rust toolchain:
 ```sh
 cargo install espup --locked
 espup install --targets esp32s3
-. "$HOME/export-esp.sh"
+source "$HOME/export-esp.sh"
 ```
 
 Source `$HOME/export-esp.sh` in each new shell before using `cargo +esp ...`, or add it to your shell profile.
@@ -102,8 +102,57 @@ make MQTT=1 heltec-v3-flash
 make MQTT=1 heltec-v3-bins
 ```
 
-MQTT binary artifacts include `-mqtt` in their filenames so they are not
-confused with or overwritten by standard images.
+### Importing an existing identity
+
+To keep an existing MeshCore identity, copy the output of its local `get prv.key`
+command and use `set prv.key <hex>` on MCRS, then reboot. The command accepts
+both 64-character seeds and 128-character MeshCore expanded private keys.
+It reports the new public key so you can compare it before rebooting.
+
+Setting a key replaces the previous stored key. `get prv.key` returns the stored
+format; configuration files use `identity.seed` or `identity.expanded`, respectively.
+The running identity changes on reboot.
+
+### Configuration
+
+Standard MeshCore remote management can be used to configure various settings as normal.
+The default remote management password is `meshcore` and can be changed in the normal
+way.
+
+Additionally, the CLI can be accessed over the USB serial console (where available), as
+well as optionally via Telnet over Wi-Fi. Many of the remote management commands are
+the same as the official firmware.
+
+Many configuration options can be returned to their default value using `unset`
+instead of `set`.
+
+Wi-Fi can be configured from the serial CLI:
+
+```text
+set wifi.ssid MyWiFi
+set wifi.pass my-passphrase
+set wifi.telnet true/false
+reboot
+```
+
+When configured, the firmware joins that Wi-Fi network. When connected to Wi-Fi,
+clock sync using the `pool.ntp.org` NTP pool enabled automatically.
+
+When `wifi.telnet` is enabled, station mode exposes the privileged CLI on TCP
+port 23. This interface has the same authority as the serial CLI and has no
+additional authentication, so only enable it on a trusted network.
+
+### OTA updates
+
+OTA updates can be performed over Wi-Fi on supported boards with the `ota start`
+command on the management CLI, which serves the OTA upload page on port 80.
+
+Only `-upgrade.bin` images should be uploaded for OTA.
+
+If connected to an existing Wi-Fi network, the OTA page will become available
+over plain HTTP on port 80 on the connected Wi-Fi network. If Wi-Fi is not
+configured, the repeater will instead start its own Wi-Fi access point and assigns
+itself the IP address `192.168.4.1/24`.
 
 ### Optional MQTT
 
@@ -162,44 +211,6 @@ it for that broker using its configured host:
 set mqtt.1.auth device
 mqtt restart
 ```
-
-### Importing an existing identity
-
-To keep an existing MeshCore identity, copy the output of its local `get prv.key`
-command and use `set prv.key <hex>` on MCRS, then reboot. The command accepts
-both 64-character seeds and 128-character MeshCore expanded private keys.
-It reports the new public key so you can compare it before rebooting.
-
-Setting a key replaces the previous stored key. `get prv.key` returns the stored
-format; configuration files use `identity.seed` or `identity.expanded`, respectively.
-The running identity changes on reboot.
-
-### Configuration
-
-Remote management can be used to configure various settings as normal. Additionally,
-the CLI is accessible over remote management and the USB serial console (where available),
-supporting many of the same commands as the official firmware.
-
-Wi-Fi can be configured persistently from the serial CLI:
-
-```text
-set wifi.ssid MyWiFi
-set wifi.pass my-passphrase
-set wifi.telnet true/false
-reboot
-```
-
-When configured, the firmware joins that network in station mode and `ota start`
-serves the OTA page on port 80 of its assigned address. If `wifi.ssid` is empty,
-`ota start` instead creates the original open OTA access point at
-`192.168.4.1/24`.
-
-Station mode also synchronizes the retained wall clock from `pool.ntp.org`
-after DHCP completes and refreshes it periodically.
-
-When `wifi.telnet` is enabled, station mode exposes the privileged CLI on TCP
-port 23. This interface has the same authority as the serial CLI and has no
-additional authentication, so only enable it on a trusted network.
 
 ### Fuzzing
 
