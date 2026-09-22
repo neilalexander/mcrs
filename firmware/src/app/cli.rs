@@ -676,6 +676,15 @@ async fn handle_command(
     let output = match command {
         "" => return None,
         "help" | "?" => help_text(),
+        "export config" | "export config all" => {
+            if request.origin.is_local() && request.privilege.is_passworded() {
+                context
+                    .with_config(|config| config.export_config(command != "export config all"))
+                    .await
+            } else {
+                String::from("CLI: denied, export config requires privileged serial or telnet")
+            }
+        }
         "reboot" => {
             if !request.privilege.is_passworded() {
                 denied_text()
@@ -1482,7 +1491,10 @@ fn handle_ota_command(
                 denied_text()
             } else {
                 context.request_ota_start();
-                String::from("OTA: start requested")
+                match context.ota_address() {
+                    Some(address) => format!("OTA: start requested; http://{}/", address),
+                    None => String::from("OTA: start requested; waiting for Wi-Fi"),
+                }
             }
         }
         Some("stop") => {
@@ -1742,7 +1754,7 @@ fn denied_text() -> String {
 
 fn help_text() -> String {
     String::from(
-        "Commands: help, ver, status, identity, radio, clock, region, region list {allowed|denied}, ota status, get {name|owner.info|lat|lon|radio|tx|dutycycle|freq|flood.max.unscoped|flood.max.advert|path.hash.mode|loop.detect|public.key|status}; Privileged: time, clock sync, set, unset, password, neighbours, advert, advert.zerohop, discover.neighbours, region {put|remove|allowf|denyf|default}, ota {start|stop}, erase config, reboot",
+        "Commands: help, ver, status, identity, radio, clock, region, region list {allowed|denied}, ota status, get {name|owner.info|lat|lon|radio|tx|dutycycle|freq|flood.max.unscoped|flood.max.advert|path.hash.mode|loop.detect|public.key|status}; Privileged: time, clock sync, set, unset, password, neighbours, advert, advert.zerohop, discover.neighbours, region {put|remove|allowf|denyf|default}, ota {start|stop}, export config [all] (serial/telnet), erase config, reboot",
     )
 }
 

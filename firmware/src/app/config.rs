@@ -432,6 +432,14 @@ impl AppConfig {
         Ok(())
     }
 
+    pub fn export_config(&self, redact_secrets: bool) -> String {
+        String::from_utf8(encode_full_config_text_redacted(
+            &StoredAppConfig::from_app_config(self),
+            redact_secrets,
+        ))
+        .expect("UTF-8 config")
+    }
+
     pub fn save<S>(&self, storage: &mut S) -> Result<(), crate::platform::storage::Error>
     where
         S: crate::platform::storage::Storage,

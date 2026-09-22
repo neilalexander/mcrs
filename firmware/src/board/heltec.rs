@@ -463,6 +463,7 @@ async fn run_ota_ap_mode(
     context: &crate::app::AppContext<crate::platform::EspStorage>,
 ) -> ! {
     let mut stack_resources = embassy_net::StackResources::<4>::new();
+    context.set_ota_address(Some(core::net::SocketAddrV4::new(OTA_AP_IP, OTA_HTTP_PORT)));
     loop {
         wait_for_ota_requested_idle(context, true).await;
 
@@ -686,6 +687,11 @@ async fn run_ota_station_mode<'a>(
     });
     poll_fn(|cx| {
         let _ = runner.as_mut().poll(cx);
+        context.set_ota_address(
+            stack.config_v4().map(|config| {
+                core::net::SocketAddrV4::new(config.address.address(), OTA_HTTP_PORT)
+            }),
+        );
         match worker.as_mut().poll(cx) {
             Poll::Ready(never) => match never {},
             Poll::Pending => Poll::Pending,

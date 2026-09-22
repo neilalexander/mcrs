@@ -114,6 +114,7 @@ where
     #[cfg(feature = "mqtt")]
     mqtt: [Channel<CriticalSectionRawMutex, mqtt::PacketEvent, 8>; config::MQTT_SERVER_COUNT],
     ota_requested: Cell<bool>,
+    ota_address: Cell<Option<core::net::SocketAddrV4>>,
     ota_waker: RefCell<Option<Waker>>,
     ota_generation: Cell<u32>,
     #[cfg(feature = "mqtt")]
@@ -165,6 +166,7 @@ where
             #[cfg(feature = "mqtt")]
             mqtt: core::array::from_fn(|_| Channel::new()),
             ota_requested: Cell::new(false),
+            ota_address: Cell::new(None),
             ota_waker: RefCell::new(None),
             ota_generation: Cell::new(0),
             #[cfg(feature = "mqtt")]
@@ -566,6 +568,14 @@ where
 
     pub fn ota_requested(&self) -> bool {
         self.ota_requested.get()
+    }
+
+    pub fn ota_address(&self) -> Option<core::net::SocketAddrV4> {
+        self.ota_address.get()
+    }
+
+    pub fn set_ota_address(&self, address: Option<core::net::SocketAddrV4>) {
+        self.ota_address.set(address);
     }
 
     pub fn ota_generation(&self) -> u32 {
