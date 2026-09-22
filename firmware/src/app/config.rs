@@ -22,10 +22,6 @@ const MAX_OWNER_INFO_LEN: usize = 119;
 const MAX_MQTT_VALUE_LEN: usize = 255;
 #[cfg(feature = "mqtt")]
 pub const MQTT_SERVER_COUNT: usize = 3;
-const DEFAULT_FLOOD_MAX_UNSCOPED_HOPS: u8 = 5;
-const DEFAULT_FLOOD_MAX_ADVERT_HOPS: u8 = 3;
-const DEFAULT_PATH_HASH_MODE: u8 = 2;
-const DEFAULT_DUTY_CYCLE_PERCENT: u8 = 10;
 const UNPROVISIONED_CONFIG_TEXT: &[u8] = b"# MCRS app.conf\nversion=1\n";
 const COORDINATE_SCALE: i32 = 1_000_000;
 const MIN_LATITUDE_MICRODEGREES: i32 = -90 * COORDINATE_SCALE;
@@ -385,6 +381,13 @@ impl AppConfig {
     }
 
     pub fn remove_region(&mut self, name: &str) -> Result<(), ConfigError> {
+        let defaults = StoredAppConfig::default_with_private_key(self.private_key);
+        if let Some(region) = defaults.regions.find_by_name_prefix(name)
+            && !region.is_wildcard()
+            && region.display_name() == name.strip_prefix('#').unwrap_or(name)
+        {
+            return Err(ConfigError::InheritedRegion);
+        }
         Ok(self.regions.remove_region(name)?)
     }
 
@@ -571,48 +574,51 @@ struct StoredAppConfig {
     mqtt: [MqttConfig; MQTT_SERVER_COUNT],
 }
 
-#[cfg(feature = "mqtt")]
-fn default_mqtt_servers() -> [MqttConfig; MQTT_SERVER_COUNT] {
-    core::array::from_fn(|_| MqttConfig {
-        port: 1883,
-        topic_root: "meshcore/{IATA}/{PUBLIC_KEY}/packets".into(),
-        iata: "XXX".into(),
-        ..Default::default()
-    })
-}
-
 impl StoredAppConfig {
     fn default_with_identity_seed(identity_seed: [u8; 32]) -> Self {
         Self::default_with_private_key(PrivateKey::Seed(identity_seed))
     }
 
     fn default_with_private_key(private_key: PrivateKey) -> Self {
-        Self {
+        Self::with_defaults_text(private_key, super::PROFILE_CONFIG)
+            .expect("invalid embedded defaults or profile")
+    }
+
+    fn with_defaults_text(private_key: PrivateKey, overlay: &str) -> Option<Self> {
+        // Only device-specific values are generated here. Fixed defaults live
+        // in profiles/defaults.conf; the zero values below are parser initialization.
+        let empty = Self {
             private_key,
             latitude_microdegrees: None,
             longitude_microdegrees: None,
             node_name: fit_node_name(&generated_node_name(private_key))
                 .unwrap_or_else(|_| String::from("Repeater")),
             owner_info: String::new(),
-            remote_cli_password: fit_password(identity::REMOTE_CLI_PASSWORD),
+            remote_cli_password: String::new(),
             wifi: WifiConfig::default(),
             radio: RadioConfig {
-                receive_frequency_hz: 869_618_000,
-                spreading_factor: 8,
-                bandwidth_hz: 62_500,
-                coding_rate_denominator: 6,
-                transmit_power_dbm: 14,
+                receive_frequency_hz: 0,
+                spreading_factor: 0,
+                bandwidth_hz: 0,
+                coding_rate_denominator: 0,
+                transmit_power_dbm: 0,
             },
             regions: RegionMap::new(),
             region_capture: false,
-            flood_max_unscoped_hops: DEFAULT_FLOOD_MAX_UNSCOPED_HOPS,
-            flood_max_advert_hops: DEFAULT_FLOOD_MAX_ADVERT_HOPS,
+            flood_max_unscoped_hops: 0,
+            flood_max_advert_hops: 0,
             loop_detection: LoopDetection::default(),
-            path_hash_mode: DEFAULT_PATH_HASH_MODE,
-            duty_cycle_percent: DEFAULT_DUTY_CYCLE_PERCENT,
+            path_hash_mode: 0,
+            duty_cycle_percent: 0,
             #[cfg(feature = "mqtt")]
-            mqtt: default_mqtt_servers(),
-        }
+            mqtt: core::array::from_fn(|_| MqttConfig::default()),
+        };
+        let defaults = decode_config_layer(
+            include_bytes!("../../../profiles/defaults.conf"),
+            &empty,
+            ConfigSource::Defaults,
+        )?;
+        decode_config_layer(overlay.as_bytes(), &defaults, ConfigSource::Profile)
     }
 
     fn from_app_config(config: &AppConfig) -> Self {
@@ -666,10 +672,28 @@ where
     storage.write_atomic(APP_CONFIG_KEY, &data)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ConfigSource {
+    Defaults,
+    Profile,
+    Storage,
+}
+
 fn decode_config_text(data: &[u8], defaults: &StoredAppConfig) -> Option<StoredAppConfig> {
+    decode_config_layer(data, defaults, ConfigSource::Storage)
+}
+
+fn decode_config_layer(
+    data: &[u8],
+    defaults: &StoredAppConfig,
+    source: ConfigSource,
+) -> Option<StoredAppConfig> {
+    let strict = source != ConfigSource::Storage;
+    if strict && data.len() > APP_CONFIG_MAX_LEN {
+        return None;
+    }
     let text = core::str::from_utf8(data).ok()?;
     let mut config = defaults.clone();
-    let mut saw_key = false;
     let mut saw_node_name = false;
 
     for raw_line in text.lines() {
@@ -684,9 +708,15 @@ fn decode_config_text(data: &[u8], defaults: &StoredAppConfig) -> Option<StoredA
 
         match key {
             "version" => {
-                let _ = value.parse::<u8>().ok()?;
+                let version = value.parse::<u8>().ok()?;
+                if strict && version != APP_CONFIG_TEXT_VERSION {
+                    return None;
+                }
             }
             "identity.seed" | "identity.expanded" => {
+                if strict {
+                    return None;
+                }
                 let private_key = PrivateKey::from_hex(&value)?;
                 if private_key.config_key() != key {
                     return None;
@@ -718,6 +748,9 @@ fn decode_config_text(data: &[u8], defaults: &StoredAppConfig) -> Option<StoredA
             "wifi.ssid" => config.wifi.ssid = value,
             "wifi.pass" => config.wifi.password = value,
             "wifi.telnet" => config.wifi.telnet = parse_bool(&value)?,
+            // The base file contains optional MQTT settings for all builds.
+            #[cfg(not(feature = "mqtt"))]
+            key if key.starts_with("mqtt.") && source == ConfigSource::Defaults => {}
             #[cfg(feature = "mqtt")]
             key if key.starts_with("mqtt.") => {
                 let (server, field) = parse_mqtt_key(key)?;
@@ -731,6 +764,7 @@ fn decode_config_text(data: &[u8], defaults: &StoredAppConfig) -> Option<StoredA
                     "auth.audience" | "audience" => mqtt.auth_audience = value,
                     "topic.root" => mqtt.topic_root = value,
                     "iata" => mqtt.iata = value,
+                    _ if strict => return None,
                     _ => {}
                 }
             }
@@ -775,15 +809,15 @@ fn decode_config_text(data: &[u8], defaults: &StoredAppConfig) -> Option<StoredA
                 let allowed = parse_bool(&value)?;
                 config.regions.set_region_from_config(name, allowed).ok()?;
             }
+            _ if strict => return None,
             _ => {}
         }
-        saw_key = true;
     }
 
-    if !saw_key {
-        return None;
-    }
-    if !saw_node_name {
+    if !saw_node_name
+        && config.private_key != defaults.private_key
+        && defaults.node_name == generated_node_name(defaults.private_key)
+    {
         config.node_name = fit_node_name(&generated_node_name(config.private_key)).ok()?;
     }
     config.radio.validate().ok()?;
@@ -794,6 +828,27 @@ fn decode_config_text(data: &[u8], defaults: &StoredAppConfig) -> Option<StoredA
     validate_flood_max_hops(config.flood_max_advert_hops).ok()?;
     validate_path_hash_mode(config.path_hash_mode).ok()?;
     validate_wifi_config(&config.wifi).ok()?;
+    #[cfg(feature = "mqtt")]
+    for mqtt in &config.mqtt {
+        if !mqtt.host.is_empty()
+            && super::mqtt::transport::Endpoint::parse(&mqtt.host, mqtt.port).is_err()
+        {
+            return None;
+        }
+        if [
+            &mqtt.host,
+            &mqtt.username,
+            &mqtt.password,
+            &mqtt.auth_audience,
+            &mqtt.topic_root,
+            &mqtt.iata,
+        ]
+        .iter()
+        .any(|value| value.len() > MAX_MQTT_VALUE_LEN)
+        {
+            return None;
+        }
+    }
     Some(config)
 }
 
@@ -1143,6 +1198,7 @@ pub enum ConfigError {
     InvalidWifiConfig,
     #[cfg(feature = "mqtt")]
     InvalidMqttConfig,
+    InheritedRegion,
     Region(RegionError),
 }
 
@@ -1164,6 +1220,9 @@ impl fmt::Display for ConfigError {
             ConfigError::InvalidWifiConfig => f.write_str("invalid Wi-Fi setting"),
             #[cfg(feature = "mqtt")]
             ConfigError::InvalidMqttConfig => f.write_str("invalid MQTT setting"),
+            ConfigError::InheritedRegion => {
+                f.write_str("inherited region cannot be removed; use region denyf")
+            }
             ConfigError::Region(error) => write!(f, "region: {}", error),
         }
     }
@@ -1221,7 +1280,7 @@ fn fit_password(input: &str) -> String {
     }
 
     if output.is_empty() {
-        output.push_str("meshcore");
+        output.push_str(identity::REMOTE_CLI_PASSWORD);
     }
 
     output
@@ -1460,6 +1519,88 @@ mod tests {
 
     fn defaults() -> StoredAppConfig {
         StoredAppConfig::default_with_identity_seed([7; 32])
+    }
+
+    fn network_defaults(text: &str) -> StoredAppConfig {
+        StoredAppConfig::with_defaults_text(PrivateKey::Seed([7; 32]), text).unwrap()
+    }
+
+    #[test]
+    fn embedded_defaults_and_selected_profile_are_valid() {
+        #[cfg(mcrs_profile)]
+        let profile = include_str!(env!("MCRS_PROFILE_PATH"));
+        #[cfg(not(mcrs_profile))]
+        let profile = "";
+        assert!(StoredAppConfig::with_defaults_text(PrivateKey::Seed([7; 32]), profile).is_some());
+    }
+
+    #[test]
+    fn saved_differences_survive_changes_to_image_defaults() {
+        let image = network_defaults("flood.max.unscoped=4\nflood.max.advert=2\n");
+        let device =
+            decode_config_text(b"flood.max.unscoped=4\nflood.max.advert=1\n", &image).unwrap();
+        let saved = encode_sparse_config_text(&device, &image);
+        let text = core::str::from_utf8(&saved).unwrap();
+        assert!(!text.contains("flood.max.unscoped="));
+        assert!(text.contains("flood.max.advert=1"));
+
+        let updated = network_defaults("flood.max.unscoped=3\nflood.max.advert=2\n");
+        let loaded = decode_config_text(&saved, &updated).unwrap();
+        assert_eq!(loaded.flood_max_unscoped_hops, 3);
+        assert_eq!(loaded.flood_max_advert_hops, 1);
+        assert_eq!(loaded.private_key, device.private_key);
+
+        let matching = network_defaults("flood.max.unscoped=3\nflood.max.advert=1\n");
+        let saved = encode_sparse_config_text(&loaded, &matching);
+        assert!(!core::str::from_utf8(&saved).unwrap().contains("flood.max."));
+    }
+
+    #[test]
+    fn region_overrides_are_additive_and_only_differences_are_saved() {
+        let image = network_defaults(
+            "region.default=northeast\nregion.northeast=true\nregion.other=true\n",
+        );
+        let device =
+            decode_config_text(b"region.local=true\nregion.northeast=false\n", &image).unwrap();
+        let saved = encode_sparse_config_text(&device, &image);
+        let text = core::str::from_utf8(&saved).unwrap();
+        assert!(text.contains("region.northeast=false\n"));
+        assert!(text.contains("region.local=true\n"));
+        assert!(!text.contains("region.other="));
+        assert!(!text.contains("region.default="));
+
+        let updated = network_defaults(
+            "region.default=northeast\nregion.northeast=true\nregion.other=false\nregion.new=true\n",
+        );
+        let loaded = decode_config_text(&saved, &updated).unwrap();
+        let allowed = |name| {
+            loaded
+                .regions
+                .find_by_name_prefix(name)
+                .map(|region| region.allows_flood())
+        };
+        assert_eq!(allowed("northeast"), Some(false));
+        assert_eq!(allowed("local"), Some(true));
+        assert_eq!(allowed("other"), Some(false));
+        assert_eq!(allowed("new"), Some(true));
+        assert_eq!(
+            loaded.regions.default_region().unwrap().display_name(),
+            "northeast"
+        );
+    }
+
+    #[test]
+    fn profile_parser_rejects_invalid_settings_and_device_keys() {
+        for text in [
+            String::from("typo=1"),
+            String::from("radio.spreading_factor=99"),
+            String::from("region.northeast=invalid"),
+            alloc::format!("identity.seed={}", "00".repeat(32)),
+        ] {
+            assert!(
+                StoredAppConfig::with_defaults_text(PrivateKey::Seed([7; 32]), &text).is_none()
+            );
+        }
     }
 
     #[test]

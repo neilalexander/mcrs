@@ -20,6 +20,16 @@ HELTEC_WSL3_PARTITIONS := firmware/partitions_heltec_v3.csv
 HELTEC_WSL3_ELF := target/xtensa-esp32s3-none-elf/release/mcrs-firmware
 DIST_DIR := dist
 MQTT ?= 0
+# One optional profile file, applied after defaults.conf.
+# Bare filenames are resolved in profiles/; paths are relative to the workspace.
+PROFILE ?=
+# Cargo reserves PROFILE for debug/release.
+export MCRS_PROFILE := $(PROFILE)
+ifneq ($(strip $(PROFILE)),)
+empty :=
+space := $(empty) $(empty)
+PROFILE_SUFFIX := -$(basename $(notdir $(subst $(space),_,$(PROFILE))))
+endif
 # Command-line VERSION overrides this for reproducible packaging in CI.
 VERSION := $(shell git describe --tags --dirty --always --abbrev=8 --match 'v[0-9]*' 2>/dev/null | tr '/' '-')
 ifeq ($(strip $(VERSION)),)
@@ -48,7 +58,7 @@ heltec-v3-full-bin: heltec-v3-build | $(DIST_DIR)
 		--partition-table $(HELTEC_V3_PARTITIONS) \
 		--merge \
 		$(HELTEC_V3_ELF) \
-		$(DIST_DIR)/mcrs-heltec-v3$(MQTT_SUFFIX)-$(VERSION)-full.bin
+		$(DIST_DIR)/mcrs-heltec-v3$(PROFILE_SUFFIX)$(MQTT_SUFFIX)-$(VERSION)-full.bin
 
 heltec-v3-upgrade-bin: heltec-v3-build | $(DIST_DIR)
 	espflash save-image \
@@ -59,7 +69,7 @@ heltec-v3-upgrade-bin: heltec-v3-build | $(DIST_DIR)
 		--partition-table $(HELTEC_V3_PARTITIONS) \
 		--target-app-partition ota_0 \
 		$(HELTEC_V3_ELF) \
-		$(DIST_DIR)/mcrs-heltec-v3$(MQTT_SUFFIX)-$(VERSION)-upgrade.bin
+		$(DIST_DIR)/mcrs-heltec-v3$(PROFILE_SUFFIX)$(MQTT_SUFFIX)-$(VERSION)-upgrade.bin
 
 heltec-v4-build:
 	cargo +esp build-heltec-v4 $(MQTT_FEATURE)
@@ -78,7 +88,7 @@ heltec-v4-full-bin: heltec-v4-build | $(DIST_DIR)
 		--partition-table $(HELTEC_V4_PARTITIONS) \
 		--merge \
 		$(HELTEC_V4_ELF) \
-		$(DIST_DIR)/mcrs-heltec-v4$(MQTT_SUFFIX)-$(VERSION)-full.bin
+		$(DIST_DIR)/mcrs-heltec-v4$(PROFILE_SUFFIX)$(MQTT_SUFFIX)-$(VERSION)-full.bin
 
 heltec-v4-upgrade-bin: heltec-v4-build | $(DIST_DIR)
 	espflash save-image \
@@ -89,7 +99,7 @@ heltec-v4-upgrade-bin: heltec-v4-build | $(DIST_DIR)
 		--partition-table $(HELTEC_V4_PARTITIONS) \
 		--target-app-partition ota_0 \
 		$(HELTEC_V4_ELF) \
-		$(DIST_DIR)/mcrs-heltec-v4$(MQTT_SUFFIX)-$(VERSION)-upgrade.bin
+		$(DIST_DIR)/mcrs-heltec-v4$(PROFILE_SUFFIX)$(MQTT_SUFFIX)-$(VERSION)-upgrade.bin
 
 heltec-wsl3-build:
 	cargo +esp build-heltec-wsl3 $(MQTT_FEATURE)
@@ -108,7 +118,7 @@ heltec-wsl3-full-bin: heltec-wsl3-build | $(DIST_DIR)
 		--partition-table $(HELTEC_WSL3_PARTITIONS) \
 		--merge \
 		$(HELTEC_WSL3_ELF) \
-		$(DIST_DIR)/mcrs-heltec-wsl3$(MQTT_SUFFIX)-$(VERSION)-full.bin
+		$(DIST_DIR)/mcrs-heltec-wsl3$(PROFILE_SUFFIX)$(MQTT_SUFFIX)-$(VERSION)-full.bin
 
 heltec-wsl3-upgrade-bin: heltec-wsl3-build | $(DIST_DIR)
 	espflash save-image \
@@ -119,7 +129,7 @@ heltec-wsl3-upgrade-bin: heltec-wsl3-build | $(DIST_DIR)
 		--partition-table $(HELTEC_WSL3_PARTITIONS) \
 		--target-app-partition ota_0 \
 		$(HELTEC_WSL3_ELF) \
-		$(DIST_DIR)/mcrs-heltec-wsl3$(MQTT_SUFFIX)-$(VERSION)-upgrade.bin
+		$(DIST_DIR)/mcrs-heltec-wsl3$(PROFILE_SUFFIX)$(MQTT_SUFFIX)-$(VERSION)-upgrade.bin
 
 $(DIST_DIR):
 	mkdir -p $(DIST_DIR)

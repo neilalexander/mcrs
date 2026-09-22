@@ -78,6 +78,11 @@ impl LoopDetection {
     }
 }
 
+#[cfg(mcrs_profile)]
+const PROFILE_CONFIG: &str = include_str!(env!("MCRS_PROFILE_PATH"));
+#[cfg(not(mcrs_profile))]
+const PROFILE_CONFIG: &str = "";
+
 const RECEIVE_BUFFER_LEN: usize = 255;
 const FORWARD_BUFFER_LEN: usize = 255;
 const INBOUND_QUEUE_CAPACITY: usize = 8;

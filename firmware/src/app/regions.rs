@@ -311,6 +311,14 @@ impl RegionMap {
             if region.display_name() == "default" {
                 continue;
             }
+            if defaults
+                .entry_index_by_name(&region.name)
+                .is_some_and(|index| {
+                    defaults.entries[index].allows_flood() == region.allows_flood()
+                })
+            {
+                continue;
+            }
             let _ = writeln!(
                 out,
                 "region.{}={}",
