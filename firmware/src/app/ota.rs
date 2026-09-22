@@ -6,19 +6,57 @@ const INDEX_HTML: &[u8] = br#"<!doctype html>
 <html>
 <head><meta name="viewport" content="width=device-width,initial-scale=1"><title>MeshCore OTA</title></head>
 <body>
-<h1>MeshCore OTA</h1>
+<h1>MCRS OTA</h1>
+<pre id="partitions">Loading partition information...</pre>
 <input id="file" type="file" accept=".bin,application/octet-stream">
-<button onclick="upload()">Upload</button>
+<button id="upload" onclick="upload()">Upload</button>
+<button id="reboot" onclick="reboot()" hidden>Reboot to apply update</button>
 <pre id="out"></pre>
 <script>
+const out = document.getElementById('out');
+function busy(value) {
+  for (const id of ['file', 'upload', 'reboot']) document.getElementById(id).disabled = value;
+}
+async function refreshPartitions() {
+  const details = document.getElementById('partitions');
+  try {
+    const res = await fetch('/status', {cache: 'no-store'});
+    if (!res.ok) throw new Error('Status request failed');
+    details.textContent = await res.text();
+  } catch (error) {
+    details.textContent = 'Could not load partition information: ' + error.message;
+  }
+}
 async function upload() {
   const file = document.getElementById('file').files[0];
   if (!file) return;
-  const out = document.getElementById('out');
+  busy(true);
+  document.getElementById('reboot').hidden = true;
   out.textContent = 'Uploading...';
-  const res = await fetch('/update', { method: 'POST', headers: {'Content-Type':'application/octet-stream'}, body: file });
-  out.textContent = await res.text();
+  try {
+    const res = await fetch('/update', { method: 'POST', headers: {'Content-Type':'application/octet-stream'}, body: file });
+    out.textContent = await res.text();
+    document.getElementById('reboot').hidden = !res.ok;
+    await refreshPartitions();
+  } catch (error) {
+    out.textContent = 'Upload failed: ' + error.message;
+  } finally {
+    busy(false);
+  }
 }
+async function reboot() {
+  busy(true);
+  out.textContent = 'Requesting reboot...';
+  try {
+    const res = await fetch('/reboot', {method: 'POST'});
+    if (!res.ok) throw new Error(await res.text());
+    out.textContent = await res.text();
+  } catch (error) {
+    out.textContent = 'Reboot request failed: ' + error.message;
+    busy(false);
+  }
+}
+refreshPartitions();
 </script>
 </body>
 </html>
@@ -48,6 +86,30 @@ where
     if request.starts_with(b"GET / ") || request.starts_with(b"GET /HTTP/") {
         write_response(connection, "200 OK", "text/html", INDEX_HTML).await?;
         return Ok(());
+    }
+
+    if request.starts_with(b"GET /status ") {
+        let status = crate::platform::ota_status();
+        let body = alloc::format!(
+            "Current firmware: MCRS {}\nSelected for next boot: {}\nNext upload partition: {}\nUpload capacity: {} bytes\n",
+            env!("MESHCORE_FIRMWARE_VERSION"),
+            status.selected,
+            status.next.unwrap_or("unavailable"),
+            status.next_size,
+        );
+        write_response(connection, "200 OK", "text/plain", body.as_bytes()).await?;
+        return Ok(());
+    }
+
+    if request.starts_with(b"POST /reboot ") {
+        write_response(
+            connection,
+            "200 OK",
+            "text/plain",
+            b"Rebooting. Start OTA again to reconnect to this page.\n",
+        )
+        .await?;
+        crate::platform::reboot();
     }
 
     if !request.starts_with(b"POST /update ") && !request.starts_with(b"POST /update?") {
@@ -139,7 +201,11 @@ where
 {
     write_all_io(connection, b"HTTP/1.1 ").await?;
     write_all_io(connection, status.as_bytes()).await?;
-    write_all_io(connection, b"\r\nConnection: close\r\nContent-Type: ").await?;
+    write_all_io(
+        connection,
+        b"\r\nConnection: close\r\nCache-Control: no-store\r\nContent-Type: ",
+    )
+    .await?;
     write_all_io(connection, content_type.as_bytes()).await?;
     write_all_io(connection, b"\r\nContent-Length: ").await?;
     write_usize(connection, body.len()).await?;
