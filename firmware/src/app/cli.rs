@@ -947,6 +947,11 @@ async fn handle_get_command(
                 .with_config(|config| format!("> {}", config.path_hash_mode()))
                 .await
         }
+        "loop.detect" => {
+            context
+                .with_config(|config| format!("> {}", config.loop_detection().as_str()))
+                .await
+        }
         "status" => status_text(context),
         _ => format!("Unknown config: {}", config),
     }
@@ -1213,6 +1218,22 @@ async fn handle_set_command(
             .await
         {
             Ok(()) => format!("OK - path.hash.mode now: {}", mode),
+            Err(error) => format!("Error: {}", error),
+        };
+    }
+
+    if let Some(mode) = config.strip_prefix("loop.detect ").map(str::trim) {
+        let Some(mode) = super::LoopDetection::parse(mode) else {
+            return String::from("Error, expected off, minimal, moderate, or strict");
+        };
+        return match context
+            .update_config(|config| {
+                config.set_loop_detection(mode);
+                Ok(())
+            })
+            .await
+        {
+            Ok(()) => format!("OK - loop.detect now: {}", mode.as_str()),
             Err(error) => format!("Error: {}", error),
         };
     }
@@ -1721,7 +1742,7 @@ fn denied_text() -> String {
 
 fn help_text() -> String {
     String::from(
-        "Commands: help, ver, status, identity, radio, clock, region, region list {allowed|denied}, ota status, get {name|owner.info|lat|lon|radio|tx|dutycycle|freq|flood.max.unscoped|flood.max.advert|path.hash.mode|public.key|status}; Privileged: time, clock sync, set, unset, password, neighbours, advert, advert.zerohop, discover.neighbours, region {put|remove|allowf|denyf|default}, ota {start|stop}, erase config, reboot",
+        "Commands: help, ver, status, identity, radio, clock, region, region list {allowed|denied}, ota status, get {name|owner.info|lat|lon|radio|tx|dutycycle|freq|flood.max.unscoped|flood.max.advert|path.hash.mode|loop.detect|public.key|status}; Privileged: time, clock sync, set, unset, password, neighbours, advert, advert.zerohop, discover.neighbours, region {put|remove|allowf|denyf|default}, ota {start|stop}, erase config, reboot",
     )
 }
 

@@ -30,7 +30,53 @@ use embassy_sync::{
     signal::Signal,
 };
 use embedded_hal_async::delay::DelayNs;
-use mcrs_protocol::{Packet, PayloadKind, RoutePath, RouteType, SeenPacketCache};
+use mcrs_protocol::{HashSize, Packet, Path, PayloadKind, RoutePath, RouteType, SeenPacketCache};
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LoopDetection {
+    Off,
+    #[default]
+    Minimal,
+    Moderate,
+    Strict,
+}
+
+impl LoopDetection {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "off" => Some(Self::Off),
+            "minimal" => Some(Self::Minimal),
+            "moderate" => Some(Self::Moderate),
+            "strict" => Some(Self::Strict),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Minimal => "minimal",
+            Self::Moderate => "moderate",
+            Self::Strict => "strict",
+        }
+    }
+
+    pub fn detects_loop(self, path: &Path, node_hash: &[u8]) -> bool {
+        // Match upstream's own-prefix occurrence thresholds. Shorter prefixes
+        // allow more matches in minimal/moderate mode to tolerate collisions.
+        let threshold = match (self, path.hash_size()) {
+            (Self::Off, _) => return false,
+            (Self::Minimal, HashSize::One) => 4,
+            (Self::Minimal, HashSize::Two) => 2,
+            (Self::Moderate, HashSize::One) => 2,
+            _ => 1,
+        };
+        path.hashes()
+            .filter(|hash| node_hash.starts_with(hash))
+            .count()
+            >= threshold
+    }
+}
 
 const RECEIVE_BUFFER_LEN: usize = 255;
 const FORWARD_BUFFER_LEN: usize = 255;
@@ -1340,13 +1386,14 @@ async fn prepare_flood_forward(
         false
     };
 
-    let Some((unscoped, max_unscoped_hops, max_advert_hops)) = context
+    let Some((unscoped, max_unscoped_hops, max_advert_hops, loop_detection)) = context
         .with_config(|config| {
             config.regions().match_flood_region(&packet).map(|region| {
                 (
                     region.is_wildcard(),
                     config.flood_max_unscoped_hops(),
                     config.flood_max_advert_hops(),
+                    config.loop_detection(),
                 )
             })
         })
@@ -1359,7 +1406,7 @@ async fn prepare_flood_forward(
         return ForwardDecision::Drop("flood packet without normal path");
     };
     let hop_count = path.hop_count();
-    if path.contains_hash(node_hash) {
+    if loop_detection.detects_loop(path, node_hash) {
         return ForwardDecision::Drop("loop detected");
     }
     if packet.payload.kind() == PayloadKind::Advert && hop_count >= max_advert_hops as usize {
@@ -1522,6 +1569,59 @@ enum ForwardDecision {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mode_names_and_default() {
+        assert_eq!(LoopDetection::default(), LoopDetection::Minimal);
+        for (name, mode) in [
+            ("off", LoopDetection::Off),
+            ("minimal", LoopDetection::Minimal),
+            ("moderate", LoopDetection::Moderate),
+            ("strict", LoopDetection::Strict),
+        ] {
+            assert_eq!(LoopDetection::parse(name), Some(mode));
+            assert_eq!(mode.as_str(), name);
+        }
+        assert_eq!(LoopDetection::parse("unknown"), None);
+    }
+
+    #[test]
+    fn matches_upstream_thresholds_for_every_mode_and_hash_size() {
+        let node_hash = [0xf5, 0xa2, 0x19, 0x88];
+        for (mode, thresholds) in [
+            (LoopDetection::Off, [None, None, None]),
+            (LoopDetection::Minimal, [Some(4), Some(2), Some(1)]),
+            (LoopDetection::Moderate, [Some(2), Some(1), Some(1)]),
+            (LoopDetection::Strict, [Some(1), Some(1), Some(1)]),
+        ] {
+            for (index, threshold) in thresholds.into_iter().enumerate() {
+                let size = index + 1;
+                for matches in 0..=5 {
+                    let mut bytes = Vec::new();
+                    for _ in 0..matches {
+                        bytes.extend_from_slice(&node_hash[..size]);
+                        bytes.extend_from_slice(&[0x42; 3][..size]);
+                    }
+                    let path = Path::new(HashSize::new(size).unwrap(), bytes).unwrap();
+                    assert_eq!(
+                        mode.detects_loop(&path, &node_hash),
+                        threshold.is_some_and(|limit| matches >= limit),
+                        "{mode:?}, {size}-byte IDs, {matches} matches",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn wider_hashes_distinguish_collisions_and_other_nodes_loops_are_ignored() {
+        let node_hash = [0xf5, 0xa2, 0x19, 0x88];
+        let path = Path::new(HashSize::Two, alloc::vec![0xf5, 0x19, 0xf5, 0x19]).unwrap();
+        assert!(!LoopDetection::Strict.detects_loop(&path, &node_hash));
+        let path = Path::new(HashSize::One, alloc::vec![0xf5, 0x42, 0x43]).unwrap();
+        assert!(!LoopDetection::Minimal.detects_loop(&path, &node_hash));
+        assert!(LoopDetection::Strict.detects_loop(&path, &node_hash));
+    }
 
     #[test]
     fn categorizes_transport_routes() {

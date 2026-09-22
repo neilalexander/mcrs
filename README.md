@@ -23,14 +23,17 @@ firmware:
 
 MCRS supports the following features:
 
-* Remote management, including CLI access:
-  * Some features, such as owner information, are not yet supported.
+* Remote management:
+  * Remote configuration and CLI access via remote repeater management.
+  * CLI access also available via serial port and, optionally, via telnet over Wi-Fi.
 * Remote telemetry, including the neighbour list:
   * Sensors are not yet supported.
 * Regions:
   * Allow or deny regions and setting the default advert region works using standard `region put`, `region allowf`, `region denyf`, `region save` CLI commands.
   * Supports `region default` for scoping adverts to a default region.
   * Supports `region capture` for redirecting unscoped flood traffic that arrives directly to the repeater into the default region scope before repeating.
+* Loop detection:
+  * Four modes: `minimal`, `moderate`, `strict` and `off`.
 * Wi-Fi connectivity:
   * OTA firmware updates with A/B partitions in either AP or STA mode.
   * Automatic NTP clock sync in STA mode every hour, avoiding the need for manual clock sync.
@@ -238,6 +241,7 @@ The firmware has some opinionated defaults when compared to the official repeate
 * The default flood max for unscoped traffic is 5 hops.
 * There is no default flood max for scoped traffic. We want to encourage regions being used to
   sufficiently contain flood traffic, as this will be essential to avoid mesh scaling issues.
+* Flood loop detection defaults to `minimal`, which drops at 4/2/1 matches for 1/2/3-byte paths.
 * Guest telemetry access is always allowed without a password. Everyone likes being able to see
   which repeaters can hear which other repeaters, so that anyone can help to improve coverage
   when needed.

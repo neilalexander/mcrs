@@ -4,6 +4,7 @@ use alloc::{string::String, vec::Vec};
 use core::fmt::{self, Write};
 
 use super::{
+    LoopDetection,
     identity::{self, Identity, PrivateKey},
     regions::{RegionError, RegionMap},
 };
@@ -47,6 +48,7 @@ pub struct AppConfig {
     region_capture: bool,
     flood_max_unscoped_hops: u8,
     flood_max_advert_hops: u8,
+    loop_detection: LoopDetection,
     path_hash_mode: u8,
     duty_cycle_percent: u8,
     #[cfg(feature = "mqtt")]
@@ -131,6 +133,7 @@ impl AppConfig {
             region_capture: stored.region_capture,
             flood_max_unscoped_hops: stored.flood_max_unscoped_hops,
             flood_max_advert_hops: stored.flood_max_advert_hops,
+            loop_detection: stored.loop_detection,
             path_hash_mode: stored.path_hash_mode,
             duty_cycle_percent: stored.duty_cycle_percent,
             #[cfg(feature = "mqtt")]
@@ -280,6 +283,7 @@ impl AppConfig {
             "dutycycle" => self.duty_cycle_percent = defaults.duty_cycle_percent,
             "flood.max.unscoped" => self.flood_max_unscoped_hops = defaults.flood_max_unscoped_hops,
             "flood.max.advert" => self.flood_max_advert_hops = defaults.flood_max_advert_hops,
+            "loop.detect" => self.loop_detection = defaults.loop_detection,
             "path.hash.mode" => self.path_hash_mode = defaults.path_hash_mode,
             _ => return Err(ConfigError::UnknownSetting),
         }
@@ -308,6 +312,14 @@ impl AppConfig {
 
     pub fn path_hash_mode(&self) -> u8 {
         self.path_hash_mode
+    }
+
+    pub fn loop_detection(&self) -> LoopDetection {
+        self.loop_detection
+    }
+
+    pub fn set_loop_detection(&mut self, mode: LoopDetection) {
+        self.loop_detection = mode;
     }
 
     pub fn duty_cycle_percent(&self) -> u8 {
@@ -552,6 +564,7 @@ struct StoredAppConfig {
     region_capture: bool,
     flood_max_unscoped_hops: u8,
     flood_max_advert_hops: u8,
+    loop_detection: LoopDetection,
     path_hash_mode: u8,
     duty_cycle_percent: u8,
     #[cfg(feature = "mqtt")]
@@ -594,6 +607,7 @@ impl StoredAppConfig {
             region_capture: false,
             flood_max_unscoped_hops: DEFAULT_FLOOD_MAX_UNSCOPED_HOPS,
             flood_max_advert_hops: DEFAULT_FLOOD_MAX_ADVERT_HOPS,
+            loop_detection: LoopDetection::default(),
             path_hash_mode: DEFAULT_PATH_HASH_MODE,
             duty_cycle_percent: DEFAULT_DUTY_CYCLE_PERCENT,
             #[cfg(feature = "mqtt")]
@@ -616,6 +630,7 @@ impl StoredAppConfig {
             region_capture: config.region_capture,
             flood_max_unscoped_hops: config.flood_max_unscoped_hops,
             flood_max_advert_hops: config.flood_max_advert_hops,
+            loop_detection: config.loop_detection,
             path_hash_mode: config.path_hash_mode,
             duty_cycle_percent: config.duty_cycle_percent,
             #[cfg(feature = "mqtt")]
@@ -751,6 +766,9 @@ fn decode_config_text(data: &[u8], defaults: &StoredAppConfig) -> Option<StoredA
             }
             "path.hash.mode" => {
                 config.path_hash_mode = parse_path_hash_mode(&value)?;
+            }
+            "loop.detect" => {
+                config.loop_detection = LoopDetection::parse(&value)?;
             }
             key if key.starts_with("region.") => {
                 let name = key.strip_prefix("region.")?;
@@ -915,6 +933,9 @@ fn encode_sparse_config_text(config: &StoredAppConfig, defaults: &StoredAppConfi
     if config.path_hash_mode != defaults.path_hash_mode {
         let _ = writeln!(&mut out, "path.hash.mode={}", config.path_hash_mode);
     }
+    if config.loop_detection != defaults.loop_detection {
+        let _ = writeln!(&mut out, "loop.detect={}", config.loop_detection.as_str());
+    }
     #[cfg(feature = "mqtt")]
     for (index, mqtt) in config.mqtt.iter().enumerate() {
         write_mqtt_config(&mut out, index, mqtt, Some(&defaults.mqtt[index]), false);
@@ -1018,6 +1039,7 @@ fn encode_full_config_text_redacted(config: &StoredAppConfig, redact_secrets: bo
         config.flood_max_advert_hops
     );
     let _ = writeln!(&mut out, "path.hash.mode={}", config.path_hash_mode);
+    let _ = writeln!(&mut out, "loop.detect={}", config.loop_detection.as_str());
     #[cfg(feature = "mqtt")]
     for (index, mqtt) in config.mqtt.iter().enumerate() {
         write_mqtt_config(&mut out, index, mqtt, None, redact_secrets);
@@ -1438,6 +1460,42 @@ mod tests {
 
     fn defaults() -> StoredAppConfig {
         StoredAppConfig::default_with_identity_seed([7; 32])
+    }
+
+    #[test]
+    fn loop_detection_defaults_round_trips_and_resets() {
+        let mut config = AppConfig::generated_defaults([7; 32]);
+        assert_eq!(config.loop_detection(), LoopDetection::Minimal);
+        let legacy = decode_config_text(b"version=1\n", &defaults()).unwrap();
+        assert_eq!(legacy.loop_detection, LoopDetection::Minimal);
+        for mode in [
+            LoopDetection::Off,
+            LoopDetection::Minimal,
+            LoopDetection::Moderate,
+            LoopDetection::Strict,
+        ] {
+            config.set_loop_detection(mode);
+            let stored = StoredAppConfig::from_app_config(&config);
+            for encoded in [
+                encode_config_text(&stored),
+                encode_full_config_text_redacted(&stored, false),
+            ] {
+                let decoded = decode_config_text(&encoded, &defaults()).unwrap();
+                assert_eq!(
+                    AppConfig::from_stored(decoded, "storage").loop_detection(),
+                    mode
+                );
+            }
+        }
+        config.unset("loop.detect").unwrap();
+        assert_eq!(config.loop_detection(), LoopDetection::Minimal);
+        let encoded = encode_config_text(&StoredAppConfig::from_app_config(&config));
+        assert!(
+            !core::str::from_utf8(&encoded)
+                .unwrap()
+                .contains("loop.detect=")
+        );
+        assert!(decode_config_text(b"version=1\nloop.detect=unknown\n", &defaults()).is_none());
     }
 
     #[test]
