@@ -90,6 +90,9 @@ const OUTBOUND_QUEUE_CAPACITY: usize = 16;
 const SEEN_PACKET_TTL_MS: u64 = 15_000;
 const FORWARD_DELAY_BASE_MS: u32 = 40;
 const FORWARD_DELAY_JITTER_MS: u32 = 120;
+const OUTBOUND_MAX_ATTEMPTS: u8 = 5;
+const OUTBOUND_RETRY_DELAY_MIN_MS: u32 = 50;
+const OUTBOUND_RETRY_DELAY_MAX_MS: u32 = 500;
 const CAD_MAX_ATTEMPTS: usize = 6;
 const CAD_BUSY_BACKOFF_BASE_MS: u32 = 10;
 const CAD_BUSY_BACKOFF_AIRTIME_DIVISOR: u32 = 2;
@@ -545,6 +548,7 @@ where
     ) -> Result<(), OutboundError> {
         let queued = QueuedTransmit {
             eligible_at_ms: crate::platform::now_millis().saturating_add(delay_ms as u64),
+            attempts: 0,
             packet,
             dedup_signature,
             reboot_after_tx,
@@ -801,6 +805,7 @@ struct PendingDiscover {
 
 struct QueuedTransmit {
     eligible_at_ms: u64,
+    attempts: u8,
     packet: Vec<u8>,
     dedup_signature: Option<[u8; 8]>,
     reboot_after_tx: bool,
@@ -883,6 +888,29 @@ impl SortedOutboundChannel {
                 Some(queue.remove(0))
             }
         })
+    }
+
+    fn retry_current(&self, mut queued: QueuedTransmit, retry_delay_ms: u32) -> Option<u32> {
+        let retried = self.queue.lock(|queue| {
+            let mut queue = queue.borrow_mut();
+            queued.attempts = queued.attempts.saturating_add(1);
+            if queued.attempts >= OUTBOUND_MAX_ATTEMPTS {
+                return None;
+            }
+            queued.eligible_at_ms =
+                crate::platform::now_millis().saturating_add(retry_delay_ms as u64);
+            let insert_at = queue
+                .iter()
+                .position(|pending| queued.eligible_at_ms < pending.eligible_at_ms)
+                .unwrap_or(queue.len());
+            queue.insert(insert_at, queued);
+            self.active.store(0, Ordering::Relaxed);
+            Some(retry_delay_ms)
+        });
+        if retried.is_some() {
+            self.changed.signal(());
+        }
+        retried
     }
 
     fn complete_current(&self) {
@@ -1149,13 +1177,29 @@ async fn transmit_eligible_outbound<R, S, D>(
         .await
         .is_err()
     {
-        context.finish_forward(queued.dedup_signature, false);
         context.record_packet_error();
         crate::platform::log_fmt(format_args!("Outbound packet: transmit failed"));
-        context.outbound.complete_current();
+        let dedup_signature = queued.dedup_signature;
+        let retry_delay_ms = OUTBOUND_RETRY_DELAY_MIN_MS
+            + crate::platform::random_u32()
+                % (OUTBOUND_RETRY_DELAY_MAX_MS - OUTBOUND_RETRY_DELAY_MIN_MS + 1);
+        if let Some(retry_delay_ms) = context.outbound.retry_current(queued, retry_delay_ms) {
+            crate::platform::log_fmt(format_args!(
+                "Outbound packet: retry scheduled in {} ms",
+                retry_delay_ms
+            ));
+        } else {
+            context.finish_forward(dedup_signature, false);
+            context.outbound.complete_current();
+            crate::platform::log_fmt(format_args!(
+                "Outbound packet: dropped after {} failed attempts",
+                OUTBOUND_MAX_ATTEMPTS
+            ));
+        }
         return;
     }
     context.finish_forward(queued.dedup_signature, true);
+    context.outbound.complete_current();
     context.record_packet_sent();
     if let Ok(packet) = Packet::decode(&queued.packet) {
         increment_route_counter(packet.route_type, &context.sent_direct, &context.sent_flood);
@@ -1202,7 +1246,6 @@ async fn transmit_eligible_outbound<R, S, D>(
             )),
         }
     }
-    context.outbound.complete_current();
     if queued.reboot_after_tx {
         crate::platform::reboot();
     }
@@ -1657,6 +1700,7 @@ mod tests {
     fn queued(eligible_at_ms: u64) -> QueuedTransmit {
         QueuedTransmit {
             eligible_at_ms,
+            attempts: 0,
             packet: Vec::new(),
             dedup_signature: None,
             reboot_after_tx: false,

@@ -66,6 +66,10 @@ pub fn init() -> Platform {
     Platform { peripherals }
 }
 
+pub fn random_u32() -> u32 {
+    esp_hal::rng::Rng::new().random()
+}
+
 pub fn init_storage(layout: crate::platform::storage::Layout) -> EspStorage {
     let mut flash = RomFlash;
     let mut partition_table = [0u8; esp_bootloader_esp_idf::partitions::PARTITION_TABLE_MAX_LEN];
