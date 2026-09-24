@@ -38,6 +38,7 @@ pub struct AppConfig {
     node_name: String,
     owner_info: String,
     remote_cli_password: String,
+    acl: super::acl::Acl,
     wifi: WifiConfig,
     radio: RadioConfig,
     regions: RegionMap,
@@ -123,6 +124,7 @@ impl AppConfig {
             node_name: stored.node_name,
             owner_info: stored.owner_info,
             remote_cli_password: stored.remote_cli_password,
+            acl: stored.acl,
             wifi: stored.wifi,
             radio: stored.radio,
             regions: stored.regions,
@@ -246,7 +248,26 @@ impl AppConfig {
         Ok(())
     }
 
+    pub fn acl(&self) -> &super::acl::Acl {
+        &self.acl
+    }
+
+    pub fn set_acl(&mut self, key: &str, role: &str) -> Result<(), ConfigError> {
+        let previous = self.acl.clone();
+        self.acl
+            .set(key, role)
+            .map_err(|_| ConfigError::InvalidAcl)?;
+        if encode_config_text(&StoredAppConfig::from_app_config(self)).len() > APP_CONFIG_MAX_LEN {
+            self.acl = previous;
+            return Err(ConfigError::InvalidAcl);
+        }
+        Ok(())
+    }
+
     pub fn unset(&mut self, setting: &str) -> Result<(), ConfigError> {
+        if let Some(key) = setting.strip_prefix("acl ") {
+            return self.set_acl(key.trim(), "unset");
+        }
         let defaults = Self::from_stored(
             StoredAppConfig::default_with_private_key(self.private_key),
             "generated",
@@ -569,6 +590,7 @@ struct StoredAppConfig {
     node_name: String,
     owner_info: String,
     remote_cli_password: String,
+    acl: super::acl::Acl,
     wifi: WifiConfig,
     radio: RadioConfig,
     regions: RegionMap,
@@ -603,6 +625,7 @@ impl StoredAppConfig {
                 .unwrap_or_else(|_| String::from("Repeater")),
             owner_info: String::new(),
             remote_cli_password: String::new(),
+            acl: super::acl::Acl::default(),
             wifi: WifiConfig::default(),
             radio: RadioConfig {
                 receive_frequency_hz: 0,
@@ -638,6 +661,7 @@ impl StoredAppConfig {
                 .unwrap_or_else(|_| String::from("Repeater")),
             owner_info: String::from(config.owner_info()),
             remote_cli_password: fit_password(config.remote_cli_password()),
+            acl: config.acl.clone(),
             wifi: config.wifi.clone(),
             radio: config.radio,
             regions: config.regions.clone(),
@@ -677,6 +701,9 @@ where
     S: crate::platform::storage::Storage,
 {
     let data = encode_config_text(config);
+    if data.len() > APP_CONFIG_MAX_LEN {
+        return Err(crate::platform::storage::Error::BufferTooSmall);
+    }
     storage.write_atomic(APP_CONFIG_KEY, &data)
 }
 
@@ -812,6 +839,9 @@ fn decode_config_layer(
             "loop.detect" => {
                 config.loop_detection = LoopDetection::parse(&value)?;
             }
+            key if key.starts_with("acl.") => {
+                config.acl.set(key.strip_prefix("acl.")?, &value).ok()?;
+            }
             key if key.starts_with("region.") => {
                 let name = key.strip_prefix("region.")?;
                 let allowed = parse_bool(&value)?;
@@ -879,6 +909,8 @@ fn encode_sparse_config_text(config: &StoredAppConfig, defaults: &StoredAppConfi
     let mut out = String::new();
     let _ = writeln!(&mut out, "# MCRS app.conf");
     let _ = writeln!(&mut out, "version={}", APP_CONFIG_TEXT_VERSION);
+
+    config.acl.write_overrides(&defaults.acl, &mut out);
 
     out.push_str(config.private_key.config_key());
     out.push('=');
@@ -1011,6 +1043,9 @@ fn encode_full_config_text_redacted(config: &StoredAppConfig, redact_secrets: bo
     let mut out = String::new();
     let _ = writeln!(&mut out, "# MCRS app.conf");
     let _ = writeln!(&mut out, "version={}", APP_CONFIG_TEXT_VERSION);
+
+    let defaults = StoredAppConfig::default_with_private_key(config.private_key);
+    config.acl.write_overrides(&defaults.acl, &mut out);
 
     out.push_str(config.private_key.config_key());
     out.push('=');
@@ -1193,6 +1228,7 @@ fn write_mqtt_config(
 pub enum ConfigError {
     UnknownSetting,
     InvalidName,
+    InvalidAcl,
     InvalidLatitude,
     InvalidLongitude,
     InvalidFrequency,
@@ -1214,6 +1250,7 @@ impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ConfigError::UnknownSetting => f.write_str("unknown setting"),
+            ConfigError::InvalidAcl => f.write_str("invalid ACL rule or config full"),
             ConfigError::InvalidName => f.write_str("invalid name"),
             ConfigError::InvalidLatitude => f.write_str("invalid latitude"),
             ConfigError::InvalidLongitude => f.write_str("invalid longitude"),

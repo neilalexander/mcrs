@@ -42,6 +42,11 @@ impl RemoteLoginTable {
         }
     }
 
+    pub fn remove(&mut self, public_key: &[u8; PUB_KEY_SIZE]) {
+        remove_login(&mut self.admin_entries, public_key);
+        remove_login(&mut self.guest_entries, public_key);
+    }
+
     pub fn authenticate(
         &mut self,
         public_key: &[u8; PUB_KEY_SIZE],
@@ -227,9 +232,86 @@ fn oldest_index(entries: &RemoteLoginEntries) -> usize {
     oldest_index
 }
 
+pub fn login_privilege(
+    body: &str,
+    password: &str,
+    acl_role: Option<super::acl::Role>,
+) -> Option<RemotePrivilege> {
+    match acl_role {
+        Some(super::acl::Role::Deny) => return None,
+        Some(super::acl::Role::Admin)
+            if body.is_empty()
+                || body == "login"
+                || body.starts_with("login ")
+                || body == password =>
+        {
+            return Some(RemotePrivilege::Admin);
+        }
+        _ => {}
+    }
+    if body.is_empty() || body == "login" {
+        return Some(RemotePrivilege::Guest);
+    }
+
+    if body == password {
+        return Some(RemotePrivilege::Admin);
+    }
+
+    let candidate = body.strip_prefix("login ")?.trim();
+    if candidate.is_empty() {
+        Some(RemotePrivilege::Guest)
+    } else if candidate == password {
+        Some(RemotePrivilege::Admin)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn acl_login_overrides_password_and_guest_access() {
+        use super::super::acl::Role;
+        for body in ["", "login", "login wrong", "login secret", "secret"] {
+            assert_eq!(
+                login_privilege(body, "secret", Some(Role::Admin)),
+                Some(RemotePrivilege::Admin)
+            );
+            assert_eq!(login_privilege(body, "secret", Some(Role::Deny)), None);
+        }
+        assert_eq!(
+            login_privilege("login", "secret", None),
+            Some(RemotePrivilege::Guest)
+        );
+        assert_eq!(
+            login_privilege("secret", "secret", None),
+            Some(RemotePrivilege::Admin)
+        );
+        assert_eq!(login_privilege("login wrong", "secret", None), None);
+        assert_eq!(
+            login_privilege("cli reboot", "secret", Some(Role::Admin)),
+            None
+        );
+    }
+
+    #[test]
+    fn removing_key_revokes_sessions_and_timestamp_acceptance() {
+        for privilege in [RemotePrivilege::Admin, RemotePrivilege::Guest] {
+            let mut table = RemoteLoginTable::new();
+            table.authenticate(&[1; 32], &[2; 32], privilege, 10, 100, &Path::empty());
+            table.remove(&[1; 32]);
+            assert_eq!(table.privilege_for(&[1; 32], 101), None);
+            assert!(
+                table
+                    .sessions_matching_source_hash(1, 101)
+                    .iter()
+                    .all(Option::is_none)
+            );
+            assert!(!table.accept_newer_timestamp(&[1; 32], privilege, 11, 101));
+        }
+    }
 
     #[test]
     fn reauthentication_moves_session_between_privilege_tables() {

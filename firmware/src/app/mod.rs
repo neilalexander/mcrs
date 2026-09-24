@@ -1,3 +1,4 @@
+pub(crate) mod acl;
 pub mod cli;
 pub mod config;
 mod crypto;
@@ -235,7 +236,13 @@ where
         F: FnOnce(&mut config::AppConfig) -> Result<(), config::ConfigError>,
     {
         let mut config = self.config.lock().await;
+        let previous_acl = config.acl().clone();
         update(&mut config)?;
+        let mut logins = self.remote_logins.lock().await;
+        for key in previous_acl.changed_keys(config.acl()) {
+            logins.remove(key);
+        }
+        drop(logins);
         let mut storage = self.storage.lock().await;
         Ok(config.save(&mut *storage)?)
     }

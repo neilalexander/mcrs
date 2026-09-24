@@ -3,6 +3,9 @@
 
 extern crate alloc;
 
+#[path = "app/acl.rs"]
+mod acl;
+
 #[path = "app/crypto.rs"]
 mod crypto;
 #[path = "app/identity.rs"]

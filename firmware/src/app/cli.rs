@@ -11,7 +11,6 @@ use mcrs_protocol::{
 const LINE_BUFFER_LEN: usize = 160;
 const REMOTE_CLI_REPLY_MAX_LEN: usize = 160;
 const REMOTE_CLI_PREFIX: &str = "cli ";
-const REMOTE_LOGIN_PREFIX: &str = "login ";
 const ANON_REQ_TYPE_REGIONS: u8 = 0x01;
 const ANON_REQ_TYPE_OWNER: u8 = 0x02;
 const ANON_REQ_TYPE_BASIC: u8 = 0x03;
@@ -182,6 +181,13 @@ async fn handle_anonymous_request(
         })
         .await?;
 
+    let acl_role = context
+        .with_config(|config| config.acl().role(&decrypted.sender_pubkey))
+        .await;
+    if acl_role == Some(super::acl::Role::Deny) {
+        return None;
+    }
+
     let timestamp = plaintext_timestamp(&decrypted.plaintext)?;
     let body = plaintext_body(&decrypted.plaintext)?;
 
@@ -202,7 +208,9 @@ async fn handle_anonymous_request(
     let now_ms = crate::platform::now_millis();
 
     let privilege = context
-        .with_config(|config| login_privilege(body, config.remote_cli_password()))
+        .with_config(|config| {
+            super::remote::login_privilege(body, config.remote_cli_password(), acl_role)
+        })
         .await;
     if let Some(privilege) = privilege {
         context
@@ -270,6 +278,13 @@ async fn handle_authenticated_text_message(
             Some((decrypted, *identity.public_key()))
         })
         .await?;
+    if context
+        .with_config(|config| config.acl().role(&decrypted.sender_pubkey))
+        .await
+        == Some(super::acl::Role::Deny)
+    {
+        return None;
+    }
     let plaintext = TextMessagePlaintext::decode(&decrypted.plaintext).ok()?;
 
     if plaintext.text_type != TextType::CliData {
@@ -393,8 +408,16 @@ async fn decrypt_authenticated_payload(
         .remote_sessions_matching_source_hash(payload.source_hash, now_ms)
         .await;
     context
-        .with_identity(|identity| {
-            super::crypto::decrypt_authenticated_direct_payload(payload, identity, &sessions)
+        .with_config(|config| {
+            let decrypted = super::crypto::decrypt_authenticated_direct_payload(
+                payload,
+                config.identity(),
+                &sessions,
+            )?;
+            if config.acl().role(&decrypted.sender_pubkey) == Some(super::acl::Role::Deny) {
+                return None;
+            }
+            Some(decrypted)
         })
         .await
 }
@@ -973,6 +996,24 @@ async fn handle_set_command(
 ) -> String {
     if !request.privilege.is_passworded() {
         return denied_text();
+    }
+
+    if config == "acl" || config.starts_with("acl ") {
+        let mut parts = config.split_ascii_whitespace();
+        let _ = parts.next();
+        let (Some(key), Some(role), None) = (parts.next(), parts.next(), parts.next()) else {
+            return String::from("Error, use set acl <pubkey> admin|deny");
+        };
+        if !matches!(role, "admin" | "deny") {
+            return String::from("Error, use admin|deny (remove with unset acl <pubkey>)");
+        }
+        return match context
+            .update_config(|config| config.set_acl(key, role))
+            .await
+        {
+            Ok(()) => String::from("OK"),
+            Err(error) => format!("Error: {error}"),
+        };
     }
 
     #[cfg(feature = "mqtt")]
@@ -1645,25 +1686,6 @@ fn plaintext_timestamp(plaintext: &[u8]) -> Option<u32> {
     Some(u32::from_le_bytes(timestamp.try_into().ok()?))
 }
 
-fn login_privilege(body: &str, password: &str) -> Option<super::remote::RemotePrivilege> {
-    if body.is_empty() || body == "login" {
-        return Some(super::remote::RemotePrivilege::Guest);
-    }
-
-    if body == password {
-        return Some(super::remote::RemotePrivilege::Admin);
-    }
-
-    let candidate = body.strip_prefix(REMOTE_LOGIN_PREFIX)?.trim();
-    if candidate.is_empty() {
-        Some(super::remote::RemotePrivilege::Guest)
-    } else if candidate == password {
-        Some(super::remote::RemotePrivilege::Admin)
-    } else {
-        None
-    }
-}
-
 fn cli_privilege_for_remote(privilege: Option<super::remote::RemotePrivilege>) -> CliPrivilege {
     match privilege {
         Some(super::remote::RemotePrivilege::Admin) => CliPrivilege::PasswordedRemote,
@@ -1754,7 +1776,7 @@ fn denied_text() -> String {
 
 fn help_text() -> String {
     String::from(
-        "Commands: help, ver, status, identity, radio, clock, region, region list {allowed|denied}, ota status, get {name|owner.info|lat|lon|radio|tx|dutycycle|freq|flood.max.unscoped|flood.max.advert|path.hash.mode|loop.detect|public.key|status}; Privileged: time, clock sync, set, unset, password, neighbours, advert, advert.zerohop, discover.neighbours, region {put|remove|allowf|denyf|default}, ota {start|stop}, export config [all] (serial/telnet), erase config, reboot",
+        "Commands: help, ver, status, identity, radio, clock, region, region list {allowed|denied}, ota status, get {name|owner.info|lat|lon|radio|tx|dutycycle|freq|flood.max.unscoped|flood.max.advert|path.hash.mode|loop.detect|public.key|status}; Privileged: time, clock sync, set, unset, set acl <pubkey> admin|deny, unset acl <pubkey>, password, neighbours, advert, advert.zerohop, discover.neighbours, region {put|remove|allowf|denyf|default}, ota {start|stop}, export config [all] (serial/telnet), erase config, reboot",
     )
 }
 
