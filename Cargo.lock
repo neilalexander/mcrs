@@ -1653,6 +1653,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
+name = "littlefs2-rust"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67e1a3a4bd6770562a56e8950e834a68122463a3e4300329c0f241304d3547bd"
+
+[[package]]
 name = "log"
 version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1733,6 +1739,7 @@ dependencies = [
  "esp-rom-sys",
  "esp-rtos",
  "hmac 0.13.0",
+ "littlefs2-rust",
  "lora-phy",
  "mcrs-protocol",
  "nb 1.1.0",

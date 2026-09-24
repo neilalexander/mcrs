@@ -40,10 +40,6 @@ const ESP_SEGMENT_HEADER_LEN: usize = 8;
 const ESP_IMAGE_CHECKSUM_SEED: u8 = 0xef;
 const ESP_APP_DESC_OFFSET: u32 = 0x20;
 const ESP_APP_DESC_MAGIC: u32 = 0xabcd_5432;
-const STORAGE_MAGIC: [u8; 4] = *b"MCFS";
-const STORAGE_VERSION: u8 = 1;
-const STORAGE_HEADER_LEN: usize = 12;
-const STORAGE_MAX_KEY_LEN: usize = 64;
 const WALL_CLOCK_RTC_MAGIC: u32 = 0x4d435254;
 const WALL_CLOCK_RTC_CHECK: u32 = 0xa5a5_5a5a;
 
@@ -85,19 +81,27 @@ pub fn init_storage(layout: crate::platform::storage::Layout) -> EspStorage {
                 if partition.is_read_only() || partition.len() < layout.partition_size as u32 {
                     None
                 } else {
-                    Some(PartitionFileStorage {
-                        layout,
-                        offset: partition.offset(),
-                        size: partition.len() as usize,
-                    })
+                    match crate::platform::storage::LittleFsStorage::new(
+                        FlashPartition {
+                            offset: partition.offset(),
+                            size: partition.len() as usize,
+                        },
+                        layout.max_file_size,
+                    ) {
+                        Ok(storage) => Some(storage),
+                        Err(error) => {
+                            log_fmt(format_args!("LittleFS initialization failed: {:?}", error));
+                            None
+                        }
+                    }
                 }
             });
 
     match inner {
         Some(storage) => {
             log_fmt(format_args!(
-                "Storage ready: partition={} offset=0x{:x} size={} max_file_size={}",
-                layout.partition_label, storage.offset, storage.size, layout.max_file_size
+                "LittleFS ready: partition={} max_file_size={}",
+                layout.partition_label, layout.max_file_size
             ));
             EspStorage {
                 inner: Some(storage),
@@ -342,7 +346,7 @@ impl OtaUpdate {
 }
 
 pub struct EspStorage {
-    inner: Option<PartitionFileStorage>,
+    inner: Option<crate::platform::storage::LittleFsStorage>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -403,117 +407,51 @@ impl crate::platform::storage::Storage for EspStorage {
     }
 }
 
-impl embedded_storage::nor_flash::NorFlashError for crate::platform::storage::Error {
-    fn kind(&self) -> embedded_storage::nor_flash::NorFlashErrorKind {
-        match self {
-            crate::platform::storage::Error::BufferTooSmall => {
-                embedded_storage::nor_flash::NorFlashErrorKind::OutOfBounds
-            }
-            _ => embedded_storage::nor_flash::NorFlashErrorKind::Other,
-        }
-    }
-}
-
-struct PartitionFileStorage {
-    layout: crate::platform::storage::Layout,
+// A handle to the existing partition; cloning it does not copy flash contents.
+#[derive(Clone, Copy)]
+pub(super) struct FlashPartition {
     offset: u32,
     size: usize,
 }
 
-impl PartitionFileStorage {
-    fn read(
-        &mut self,
-        key: &str,
-        buffer: &mut [u8],
-    ) -> Result<usize, crate::platform::storage::Error> {
-        validate_key(key)?;
-
-        let mut header = [0u8; STORAGE_HEADER_LEN];
-        read_flash(self.offset, &mut header)?;
-
-        if header.iter().all(|byte| *byte == 0xff) {
-            return Err(crate::platform::storage::Error::NotFound);
+impl FlashPartition {
+    fn address(&self, block: u32, offset: usize, len: usize) -> littlefs_rust::Result<u32> {
+        if block as usize >= self.size / FLASH_SECTOR_SIZE
+            || offset
+                .checked_add(len)
+                .is_none_or(|end| end > FLASH_SECTOR_SIZE)
+        {
+            return Err(littlefs_rust::Error::OutOfBounds);
         }
-
-        let record = RecordHeader::decode(&header)?;
-        if record.data_len > self.layout.max_file_size {
-            return Err(crate::platform::storage::Error::Corrupt);
-        }
-
-        let record_len = STORAGE_HEADER_LEN + record.key_len + record.data_len;
-        if record_len > self.size {
-            return Err(crate::platform::storage::Error::Corrupt);
-        }
-
-        let mut record_buffer = vec![0u8; record_len];
-        read_flash(self.offset, &mut record_buffer)?;
-
-        let key_end = STORAGE_HEADER_LEN + record.key_len;
-        if &record_buffer[STORAGE_HEADER_LEN..key_end] != key.as_bytes() {
-            return Err(crate::platform::storage::Error::NotFound);
-        }
-
-        if buffer.len() < record.data_len {
-            return Err(crate::platform::storage::Error::BufferTooSmall);
-        }
-
-        let data = &record_buffer[key_end..key_end + record.data_len];
-        buffer[..data.len()].copy_from_slice(data);
-        Ok(data.len())
-    }
-
-    fn write_atomic(
-        &mut self,
-        key: &str,
-        data: &[u8],
-    ) -> Result<(), crate::platform::storage::Error> {
-        validate_key(key)?;
-
-        if data.len() > self.layout.max_file_size {
-            return Err(crate::platform::storage::Error::BufferTooSmall);
-        }
-
-        let record_len = STORAGE_HEADER_LEN + key.len() + data.len();
-        if record_len > self.size {
-            return Err(crate::platform::storage::Error::BufferTooSmall);
-        }
-
-        let padded_len = align_up(record_len, 4);
-        let mut words = vec![u32::MAX; padded_len / 4];
-        let record = words_as_bytes_mut(&mut words);
-        record[..4].copy_from_slice(&STORAGE_MAGIC);
-        record[4] = STORAGE_VERSION;
-        record[5] = key.len() as u8;
-        record[8..12].copy_from_slice(&(data.len() as u32).to_le_bytes());
-
-        let key_end = STORAGE_HEADER_LEN + key.len();
-        record[STORAGE_HEADER_LEN..key_end].copy_from_slice(key.as_bytes());
-        record[key_end..key_end + data.len()].copy_from_slice(data);
-
-        erase_flash_range(self.offset, padded_len)?;
-        write_flash_words(self.offset, &words)
+        self.offset
+            .checked_add(block * FLASH_SECTOR_SIZE as u32 + offset as u32)
+            .ok_or(littlefs_rust::Error::OutOfBounds)
     }
 }
 
-struct RecordHeader {
-    key_len: usize,
-    data_len: usize,
-}
-
-impl RecordHeader {
-    fn decode(header: &[u8; STORAGE_HEADER_LEN]) -> Result<Self, crate::platform::storage::Error> {
-        if header[..4] != STORAGE_MAGIC || header[4] != STORAGE_VERSION {
-            return Err(crate::platform::storage::Error::Corrupt);
+impl littlefs_rust::BlockDevice for FlashPartition {
+    fn config(&self) -> littlefs_rust::Config {
+        littlefs_rust::Config {
+            block_size: FLASH_SECTOR_SIZE,
+            block_count: self.size / FLASH_SECTOR_SIZE,
         }
-
-        let key_len = header[5] as usize;
-        if key_len == 0 || key_len > STORAGE_MAX_KEY_LEN {
-            return Err(crate::platform::storage::Error::Corrupt);
-        }
-
-        let data_len = u32::from_le_bytes([header[8], header[9], header[10], header[11]]) as usize;
-        Ok(Self { key_len, data_len })
     }
+
+    fn read(&self, block: u32, offset: usize, buffer: &mut [u8]) -> littlefs_rust::Result<()> {
+        read_flash(self.address(block, offset, buffer.len())?, buffer)
+            .map_err(|_| littlefs_rust::Error::Io)
+    }
+
+    fn prog(&mut self, block: u32, offset: usize, data: &[u8]) -> littlefs_rust::Result<()> {
+        write_ota_aligned(self.address(block, offset, data.len())?, data)
+            .map_err(|_| littlefs_rust::Error::Io)
+    }
+
+    fn erase(&mut self, block: u32) -> littlefs_rust::Result<()> {
+        erase_flash_sector(self.address(block, 0, FLASH_SECTOR_SIZE)?)
+            .map_err(|_| littlefs_rust::Error::Io)
+    }
+    // The existing ROM flash functions finish synchronously, so sync is a no-op.
 }
 
 struct RomFlash;
@@ -576,21 +514,6 @@ impl embedded_storage::nor_flash::NorFlash for RomFlash {
 }
 
 impl embedded_storage::nor_flash::MultiwriteNorFlash for RomFlash {}
-
-fn validate_key(key: &str) -> Result<(), crate::platform::storage::Error> {
-    if key.is_empty() || key.len() > STORAGE_MAX_KEY_LEN {
-        return Err(crate::platform::storage::Error::InvalidKey);
-    }
-
-    if key
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-    {
-        Ok(())
-    } else {
-        Err(crate::platform::storage::Error::InvalidKey)
-    }
-}
 
 fn read_flash(offset: u32, bytes: &mut [u8]) -> Result<(), crate::platform::storage::Error> {
     let aligned_offset = offset & !3;
