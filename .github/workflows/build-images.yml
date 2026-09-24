@@ -6,12 +6,23 @@ on:
     tags: ["v[0-9]*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      REF:
+        description: "Build ref (tag, branch or commit SHA)"
+        required: false
+        default: ""
+        type: string
+      PROFILE:
+        description: "Profile (filename in profiles/ or repository-relative path)"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: build-images-${{ github.workflow }}-${{ github.ref }}
+  group: build-images-${{ github.workflow }}-${{ inputs.REF || github.ref }}-${{ inputs.PROFILE || '' }}
   cancel-in-progress: true
 
 env:
@@ -52,6 +63,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
         with:
+          ref: ${{ inputs.REF || '' }}
           fetch-depth: 0
 
       - name: Determine image version
@@ -82,6 +94,7 @@ jobs:
       - name: Build images
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          PROFILE: ${{ inputs.PROFILE || '' }}
         run: make VERSION="$VERSION" MQTT=${{ matrix.variant.mqtt }} ${{ matrix.board.make_target }}
 
       - name: Upload images
