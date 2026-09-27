@@ -32,6 +32,8 @@ const FIRMWARE_VERSION: &str = env!("MESHCORE_FIRMWARE_VERSION");
 const OTA_AP_IP: embassy_net::Ipv4Address = embassy_net::Ipv4Address::new(192, 168, 4, 1);
 const OTA_AP_PREFIX: u8 = 24;
 const OTA_HTTP_PORT: u16 = 80;
+#[cfg(feature = "mqtt")]
+const MQTT_STATUS_INTERVAL_SECS: u64 = 15 * 60;
 const NTP_SERVER: &str = "pool.ntp.org";
 const NTP_PORT: u16 = 123;
 const NTP_UNIX_EPOCH_OFFSET: u32 = 2_208_988_800;
@@ -861,6 +863,7 @@ async fn mqtt_status_json(
 
     context
         .with_config(|config| {
+            let status = context.status();
             crate::app::mqtt::status_json(
                 public_key,
                 online,
@@ -868,6 +871,10 @@ async fn mqtt_status_json(
                 MODEL,
                 FIRMWARE_VERSION,
                 crate::platform::now_seconds(),
+                crate::app::mqtt::StatusStats {
+                    battery_mv: status.battery_millivolts,
+                    uptime_ms: status.uptime_millis,
+                },
             )
         })
         .await
@@ -937,28 +944,24 @@ async fn mqtt_connected<R: embedded_io_async::Read, W: embedded_io_async::Write>
                 rng.bytes(),
             )
             .await?;
-            mqtt_wait_ack(&mut writer, websocket, &ack, &pong, &mut rng).await?;
-            let online = mqtt_status_json(context, &public_key, true).await;
-            transport::write(
-                &mut writer,
-                websocket,
-                2,
-                &mqtt::publish_packet(&status, &online, true),
-                rng.bytes(),
-            )
-            .await
+            mqtt_wait_ack(&mut writer, websocket, &ack, &pong, &mut rng).await
         })
         .await?;
         context.set_mqtt_state(index, mqtt::ConnectionState::Connected);
         crate::platform::log_fmt(format_args!("MQTT {}: connected", index + 1));
-        let mut keepalive = embassy_time::Instant::now() + embassy_time::Duration::from_secs(30);
+        let mut next_status = embassy_time::Instant::now(); // Publish immediately after connecting.
+        let mut keepalive = next_status + embassy_time::Duration::from_secs(30);
         loop {
             let mut event = pin!(context.receive_mqtt_packet(index));
-            let mut idle = pin!(embassy_time::Timer::at(keepalive));
+            let mut idle = pin!(embassy_time::Timer::at(keepalive.min(next_status)));
             let mut control = pin!(pong.wait());
             let (packet, control) = poll_fn(|cx| {
                 context.register_mqtt_waker(index, cx.waker());
                 if context.mqtt_generation() != generation {
+                    return Poll::Ready((None, None));
+                }
+                // Deadlines take priority so busy connections still refresh status.
+                if idle.as_mut().poll(cx).is_ready() {
                     return Poll::Ready((None, None));
                 }
                 if let Poll::Ready(data) = control.as_mut().poll(cx) {
@@ -967,38 +970,45 @@ async fn mqtt_connected<R: embedded_io_async::Read, W: embedded_io_async::Write>
                 if let Poll::Ready(event) = event.as_mut().poll(cx) {
                     return Poll::Ready((Some(event), None));
                 }
-                if idle.as_mut().poll(cx).is_ready() {
-                    return Poll::Ready((None, None));
-                }
                 Poll::Pending
             })
             .await;
             mqtt_io(context, index, generation, async {
                 if let Some(data) = control {
-                    transport::write(&mut writer, websocket, 10, &data, rng.bytes()).await?;
-                } else {
-                    if let Some(event) = packet {
-                        transport::write(
-                            &mut writer,
-                            websocket,
-                            2,
-                            &mqtt::publish_packet(
-                                &topic,
-                                &mqtt::packet_json(&event, &public_key),
-                                false,
-                            ),
-                            rng.bytes(),
-                        )
-                        .await?;
-                    } else {
-                        ack.reset();
-                        transport::write(&mut writer, websocket, 2, &[0xc0, 0], rng.bytes())
-                            .await?;
-                        mqtt_wait_ack(&mut writer, websocket, &ack, &pong, &mut rng).await?;
-                    }
-                    keepalive =
-                        embassy_time::Instant::now() + embassy_time::Duration::from_secs(30);
+                    // WebSocket control frames do not count as MQTT keepalive traffic.
+                    return transport::write(&mut writer, websocket, 10, &data, rng.bytes()).await;
                 }
+                if let Some(event) = packet {
+                    transport::write(
+                        &mut writer,
+                        websocket,
+                        2,
+                        &mqtt::publish_packet(
+                            &topic,
+                            &mqtt::packet_json(&event, &public_key),
+                            false,
+                        ),
+                        rng.bytes(),
+                    )
+                    .await?;
+                } else if embassy_time::Instant::now() >= next_status {
+                    let online = mqtt_status_json(context, &public_key, true).await;
+                    transport::write(
+                        &mut writer,
+                        websocket,
+                        2,
+                        &mqtt::publish_packet(&status, &online, true),
+                        rng.bytes(),
+                    )
+                    .await?;
+                    next_status = embassy_time::Instant::now()
+                        + embassy_time::Duration::from_secs(MQTT_STATUS_INTERVAL_SECS);
+                } else {
+                    ack.reset();
+                    transport::write(&mut writer, websocket, 2, &[0xc0, 0], rng.bytes()).await?;
+                    mqtt_wait_ack(&mut writer, websocket, &ack, &pong, &mut rng).await?;
+                }
+                keepalive = embassy_time::Instant::now() + embassy_time::Duration::from_secs(30);
                 Ok::<(), ()>(())
             })
             .await?;

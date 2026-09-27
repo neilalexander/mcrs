@@ -2047,6 +2047,7 @@ mod tests {
     fn status_counters_match_meshcore_wire_layout() {
         let status = super::super::Status {
             uptime_seconds: 0,
+            uptime_millis: 0,
             sent_direct: 0x11223344,
             sent_flood: 0x55667788,
             received_direct: 0x99aabbcc,

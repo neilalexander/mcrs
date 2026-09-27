@@ -358,8 +358,10 @@ where
     }
 
     pub fn status(&self) -> Status {
+        let uptime_millis = crate::platform::now_millis().saturating_sub(self.started_at_ms);
         Status {
-            uptime_seconds: crate::platform::now_millis().saturating_sub(self.started_at_ms) / 1000,
+            uptime_seconds: uptime_millis / 1000,
+            uptime_millis,
             sent_direct: self.sent_direct.load(Ordering::Relaxed),
             sent_flood: self.sent_flood.load(Ordering::Relaxed),
             received_direct: self.received_direct.load(Ordering::Relaxed),
@@ -787,6 +789,7 @@ fn increment_route_counter(route: RouteType, direct: &AtomicU32, flood: &AtomicU
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Status {
     pub uptime_seconds: u64,
+    pub uptime_millis: u64,
     pub sent_direct: u32,
     pub sent_flood: u32,
     pub received_direct: u32,
