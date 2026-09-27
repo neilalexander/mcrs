@@ -6,25 +6,28 @@ mod schedule;
 
 use schedule::Schedule;
 
-const ZERO_HOP_ADVERT_INTERVAL_HOURS: u32 = 4;
-
 pub async fn run<S, D>(context: &AppContext<S>, delay: &mut D) -> !
 where
     S: crate::platform::storage::Storage,
     D: DelayNs,
 {
-    let interval = context
-        .with_config(|config| config.flood_advert_interval_hours())
+    let (advert_interval, flood_interval) = context
+        .with_config(|config| {
+            (
+                u64::from(config.advert_interval_minutes()) * 60_000,
+                u64::from(config.flood_advert_interval_hours()) * 3_600_000,
+            )
+        })
         .await;
     let now_ms = crate::platform::now_millis();
-    let mut zero_hop = Schedule::new(ZERO_HOP_ADVERT_INTERVAL_HOURS, now_ms);
-    let mut flood = Schedule::new(interval, now_ms);
+    let mut zero_hop = Schedule::new(advert_interval, now_ms);
+    let mut flood = Schedule::new(flood_interval, now_ms);
     loop {
         delay.delay_ms(1_000).await;
         let packet = context
             .with_config(|config| {
                 if flood.due(
-                    config.flood_advert_interval_hours(),
+                    u64::from(config.flood_advert_interval_hours()) * 3_600_000,
                     crate::platform::now_millis(),
                 ) {
                     Some(super::discovery::flood_advert(config))
@@ -36,11 +39,19 @@ where
         if let Some(packet) = packet {
             send_advert(context, packet, "flood").await;
         }
-        if zero_hop.due(
-            ZERO_HOP_ADVERT_INTERVAL_HOURS,
-            crate::platform::now_millis(),
-        ) {
-            let packet = context.with_config(super::discovery::zero_hop_advert).await;
+        let packet = context
+            .with_config(|config| {
+                if zero_hop.due(
+                    u64::from(config.advert_interval_minutes()) * 60_000,
+                    crate::platform::now_millis(),
+                ) {
+                    Some(super::discovery::zero_hop_advert(config))
+                } else {
+                    None
+                }
+            })
+            .await;
+        if let Some(packet) = packet {
             send_advert(context, packet, "zero-hop").await;
         }
     }

@@ -974,6 +974,11 @@ async fn handle_get_command(
                 .with_config(|config| format!("> {}", config.flood_max_advert_hops()))
                 .await
         }
+        "advert.interval" => {
+            context
+                .with_config(|config| format!("> {}", config.advert_interval_minutes()))
+                .await
+        }
         "flood.advert.interval" => {
             context
                 .with_config(|config| format!("> {}", config.flood_advert_interval_hours()))
@@ -1260,6 +1265,25 @@ async fn handle_set_command(
             .await
         {
             Ok(()) => format!("OK - flood.max.advert now: {}", hops),
+            Err(error) => format!("Error: {}", error),
+        };
+    }
+
+    if let Some(minutes) = config.strip_prefix("advert.interval ").map(str::trim) {
+        let Ok(mut minutes) = minutes.parse::<u32>() else {
+            return String::from(
+                "Error, invalid zero-hop advert interval (expected whole minutes, 0 disables)",
+            );
+        };
+        return match context
+            .update_config(|config| {
+                config.set_advert_interval_minutes(minutes);
+                minutes = config.advert_interval_minutes();
+                Ok(())
+            })
+            .await
+        {
+            Ok(()) => format!("OK - advert.interval now: {}", minutes),
             Err(error) => format!("Error: {}", error),
         };
     }
@@ -1799,7 +1823,7 @@ fn denied_text() -> String {
 
 fn help_text() -> String {
     String::from(
-        "Commands: help, ver, status, identity, radio, clock, region, region list {allowed|denied}, ota status, get {name|owner.info|lat|lon|radio|tx|dutycycle|freq|flood.max.unscoped|flood.max.advert|flood.advert.interval|path.hash.mode|loop.detect|public.key|status}; Privileged: time, clock sync, set, unset, set acl <pubkey> admin|deny, unset acl <pubkey>, password, neighbours, advert, advert.zerohop, discover.neighbours, region {put|remove|allowf|denyf|default}, ota {start|stop}, export config [all] (serial/telnet), erase config, reboot",
+        "Commands: help, ver, status, identity, radio, clock, region, region list {allowed|denied}, ota status, get {name|owner.info|lat|lon|radio|tx|dutycycle|freq|flood.max.unscoped|flood.max.advert|advert.interval|flood.advert.interval|path.hash.mode|loop.detect|public.key|status}; Privileged: time, clock sync, set, unset, set acl <pubkey> admin|deny, unset acl <pubkey>, password, neighbours, advert, advert.zerohop, discover.neighbours, region {put|remove|allowf|denyf|default}, ota {start|stop}, export config [all] (serial/telnet), erase config, reboot",
     )
 }
 

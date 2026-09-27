@@ -9,6 +9,13 @@ use super::{
     regions::{RegionError, RegionMap},
 };
 
+fn clamp_advert_interval(minutes: u32) -> u32 {
+    match minutes {
+        1..=59 => 60,
+        _ => minutes,
+    }
+}
+
 const APP_CONFIG_KEY: &str = "app.conf";
 const APP_CONFIG_TEXT_VERSION: u8 = 1;
 const APP_CONFIG_MAX_LEN: usize = 4096;
@@ -45,6 +52,7 @@ pub struct AppConfig {
     region_capture: bool,
     flood_max_unscoped_hops: u8,
     flood_max_advert_hops: u8,
+    advert_interval_minutes: u32,
     flood_advert_interval_hours: u32,
     loop_detection: LoopDetection,
     path_hash_mode: u8,
@@ -132,6 +140,7 @@ impl AppConfig {
             region_capture: stored.region_capture,
             flood_max_unscoped_hops: stored.flood_max_unscoped_hops,
             flood_max_advert_hops: stored.flood_max_advert_hops,
+            advert_interval_minutes: stored.advert_interval_minutes,
             flood_advert_interval_hours: stored.flood_advert_interval_hours,
             loop_detection: stored.loop_detection,
             path_hash_mode: stored.path_hash_mode,
@@ -302,6 +311,7 @@ impl AppConfig {
             "dutycycle" => self.duty_cycle_percent = defaults.duty_cycle_percent,
             "flood.max.unscoped" => self.flood_max_unscoped_hops = defaults.flood_max_unscoped_hops,
             "flood.max.advert" => self.flood_max_advert_hops = defaults.flood_max_advert_hops,
+            "advert.interval" => self.advert_interval_minutes = defaults.advert_interval_minutes,
             "flood.advert.interval" => {
                 self.flood_advert_interval_hours = defaults.flood_advert_interval_hours
             }
@@ -330,6 +340,14 @@ impl AppConfig {
 
     pub fn flood_max_advert_hops(&self) -> u8 {
         self.flood_max_advert_hops
+    }
+
+    pub fn advert_interval_minutes(&self) -> u32 {
+        self.advert_interval_minutes
+    }
+
+    pub fn set_advert_interval_minutes(&mut self, minutes: u32) {
+        self.advert_interval_minutes = clamp_advert_interval(minutes);
     }
 
     pub fn flood_advert_interval_hours(&self) -> u32 {
@@ -610,6 +628,7 @@ struct StoredAppConfig {
     region_capture: bool,
     flood_max_unscoped_hops: u8,
     flood_max_advert_hops: u8,
+    advert_interval_minutes: u32,
     flood_advert_interval_hours: u32,
     loop_detection: LoopDetection,
     path_hash_mode: u8,
@@ -652,6 +671,7 @@ impl StoredAppConfig {
             region_capture: false,
             flood_max_unscoped_hops: 0,
             flood_max_advert_hops: 0,
+            advert_interval_minutes: 0,
             flood_advert_interval_hours: 0,
             loop_detection: LoopDetection::default(),
             path_hash_mode: 0,
@@ -683,6 +703,7 @@ impl StoredAppConfig {
             region_capture: config.region_capture,
             flood_max_unscoped_hops: config.flood_max_unscoped_hops,
             flood_max_advert_hops: config.flood_max_advert_hops,
+            advert_interval_minutes: config.advert_interval_minutes,
             flood_advert_interval_hours: config.flood_advert_interval_hours,
             loop_detection: config.loop_detection,
             path_hash_mode: config.path_hash_mode,
@@ -848,6 +869,9 @@ fn decode_config_layer(
             }
             "flood.max.advert" => {
                 config.flood_max_advert_hops = parse_flood_max_hops(&value)?;
+            }
+            "advert.interval" => {
+                config.advert_interval_minutes = clamp_advert_interval(value.parse::<u32>().ok()?);
             }
             "flood.advert.interval" => {
                 config.flood_advert_interval_hours = value.parse::<u32>().ok()?;
@@ -1044,6 +1068,13 @@ fn encode_sparse_config_text(config: &StoredAppConfig, defaults: &StoredAppConfi
             config.flood_max_advert_hops
         );
     }
+    if config.advert_interval_minutes != defaults.advert_interval_minutes {
+        let _ = writeln!(
+            &mut out,
+            "advert.interval={}",
+            config.advert_interval_minutes
+        );
+    }
     if config.flood_advert_interval_hours != defaults.flood_advert_interval_hours {
         let _ = writeln!(
             &mut out,
@@ -1161,6 +1192,11 @@ fn encode_full_config_text_redacted(config: &StoredAppConfig, redact_secrets: bo
         &mut out,
         "flood.max.advert={}",
         config.flood_max_advert_hops
+    );
+    let _ = writeln!(
+        &mut out,
+        "advert.interval={}",
+        config.advert_interval_minutes
     );
     let _ = writeln!(
         &mut out,
@@ -1608,6 +1644,73 @@ mod tests {
         #[cfg(not(mcrs_profile))]
         let profile = "";
         assert!(StoredAppConfig::with_defaults_text(PrivateKey::Seed([7; 32]), profile).is_some());
+    }
+
+    #[test]
+    fn advert_interval_clamps_minutes_and_preserves_off() {
+        let image = network_defaults("");
+        for (minutes, expected) in [
+            (0, 0),
+            (1, 60),
+            (59, 60),
+            (60, 60),
+            (61, 61),
+            (u32::MAX, u32::MAX),
+        ] {
+            let text = alloc::format!("advert.interval={minutes}\n");
+            let stored = decode_config_text(text.as_bytes(), &image).unwrap();
+            assert_eq!(stored.advert_interval_minutes, expected);
+            assert_eq!(network_defaults(&text).advert_interval_minutes, expected);
+            let mut app = AppConfig::from_stored(image.clone(), "test");
+            app.set_advert_interval_minutes(minutes);
+            assert_eq!(app.advert_interval_minutes(), expected);
+            let saved = encode_sparse_config_text(&StoredAppConfig::from_app_config(&app), &image);
+            assert_eq!(
+                decode_config_text(&saved, &image)
+                    .unwrap()
+                    .advert_interval_minutes,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn advert_interval_defaults_and_round_trip() {
+        let image = network_defaults("");
+        assert_eq!(image.advert_interval_minutes, 240);
+        assert_eq!(
+            decode_config_text(b"version=1\n", &image)
+                .unwrap()
+                .advert_interval_minutes,
+            240
+        );
+        let device = decode_config_text(b"advert.interval=60\n", &image).unwrap();
+        let saved = encode_sparse_config_text(&device, &image);
+        assert!(
+            core::str::from_utf8(&saved)
+                .unwrap()
+                .contains("advert.interval=60\n")
+        );
+        let loaded = decode_config_text(&saved, &image).unwrap();
+        assert_eq!(loaded.advert_interval_minutes, 60);
+        let full = encode_full_config_text_redacted(&loaded, false);
+        assert!(
+            core::str::from_utf8(&full)
+                .unwrap()
+                .contains("advert.interval=60\n")
+        );
+        for value in ["-1", "1.5", "4294967296", "invalid"] {
+            let text = alloc::format!("advert.interval={value}\n");
+            assert!(decode_config_text(text.as_bytes(), &image).is_none());
+        }
+        let mut app = AppConfig::from_stored(loaded, "test");
+        app.set_advert_interval_minutes(0);
+        assert_eq!(app.advert_interval_minutes(), 0);
+        app.unset("advert.interval").unwrap();
+        assert_eq!(
+            app.advert_interval_minutes(),
+            defaults().advert_interval_minutes
+        );
     }
 
     #[test]
