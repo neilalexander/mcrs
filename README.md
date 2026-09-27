@@ -89,7 +89,7 @@ For Heltec v4 and WSL3, use the corresponding `heltec-v4-*` and `heltec-wsl3-*` 
 The `*-bins` targets and GitHub Actions workflow produce two images:
 
 - `*-upgrade.bin`: application-only image to upload through the OTA update page.
-- `*-full.bin`: bootloader, partition table and application for initial USB/serial
+- `*-merged.bin`: bootloader, partition table and application for initial USB/serial
   installation at flash address `0x0`.
 
 Use `make heltec-v3-upgrade-bin` or `make heltec-v3-full-bin` to generate just one

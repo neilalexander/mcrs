@@ -58,7 +58,7 @@ heltec-v3-full-bin: heltec-v3-build | $(DIST_DIR)
 		--partition-table $(HELTEC_V3_PARTITIONS) \
 		--merge \
 		$(HELTEC_V3_ELF) \
-		$(DIST_DIR)/mcrs-heltec-v3$(PROFILE_SUFFIX)$(MQTT_SUFFIX)-$(VERSION)-full.bin
+		$(DIST_DIR)/mcrs-heltec-v3$(PROFILE_SUFFIX)$(MQTT_SUFFIX)-$(VERSION)-merged.bin
 
 heltec-v3-upgrade-bin: heltec-v3-build | $(DIST_DIR)
 	espflash save-image \
@@ -88,7 +88,7 @@ heltec-v4-full-bin: heltec-v4-build | $(DIST_DIR)
 		--partition-table $(HELTEC_V4_PARTITIONS) \
 		--merge \
 		$(HELTEC_V4_ELF) \
-		$(DIST_DIR)/mcrs-heltec-v4$(PROFILE_SUFFIX)$(MQTT_SUFFIX)-$(VERSION)-full.bin
+		$(DIST_DIR)/mcrs-heltec-v4$(PROFILE_SUFFIX)$(MQTT_SUFFIX)-$(VERSION)-merged.bin
 
 heltec-v4-upgrade-bin: heltec-v4-build | $(DIST_DIR)
 	espflash save-image \
@@ -118,7 +118,7 @@ heltec-wsl3-full-bin: heltec-wsl3-build | $(DIST_DIR)
 		--partition-table $(HELTEC_WSL3_PARTITIONS) \
 		--merge \
 		$(HELTEC_WSL3_ELF) \
-		$(DIST_DIR)/mcrs-heltec-wsl3$(PROFILE_SUFFIX)$(MQTT_SUFFIX)-$(VERSION)-full.bin
+		$(DIST_DIR)/mcrs-heltec-wsl3$(PROFILE_SUFFIX)$(MQTT_SUFFIX)-$(VERSION)-merged.bin
 
 heltec-wsl3-upgrade-bin: heltec-wsl3-build | $(DIST_DIR)
 	espflash save-image \
