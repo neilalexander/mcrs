@@ -1719,7 +1719,7 @@ dependencies = [
 
 [[package]]
 name = "mcrs-firmware"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aes 0.9.3",
  "base64",
