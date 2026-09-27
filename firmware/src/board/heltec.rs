@@ -847,6 +847,33 @@ async fn mqtt_session(
 }
 
 #[cfg(feature = "mqtt")]
+async fn mqtt_status_json(
+    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    public_key: &[u8; 32],
+    online: bool,
+) -> String {
+    #[cfg(feature = "board-heltec-v3")]
+    const MODEL: &str = "Heltec V3";
+    #[cfg(feature = "board-heltec-v4")]
+    const MODEL: &str = "Heltec V4";
+    #[cfg(feature = "board-heltec-wsl3")]
+    const MODEL: &str = "Heltec Wireless Stick Lite V3";
+
+    context
+        .with_config(|config| {
+            crate::app::mqtt::status_json(
+                public_key,
+                online,
+                config.node_name(),
+                MODEL,
+                FIRMWARE_VERSION,
+                crate::platform::now_seconds(),
+            )
+        })
+        .await
+}
+
+#[cfg(feature = "mqtt")]
 async fn mqtt_connected<R: embedded_io_async::Read, W: embedded_io_async::Write>(
     context: &crate::app::AppContext<crate::platform::EspStorage>,
     index: usize,
@@ -886,8 +913,6 @@ async fn mqtt_connected<R: embedded_io_async::Read, W: embedded_io_async::Write>
         public_key[2],
         index + 1
     );
-    let offline = mqtt::status_json(&public_key, false);
-    let online = mqtt::status_json(&public_key, true);
     let pong = transport::Pong::new();
     let ack = Signal::<NoopRawMutex, ()>::new();
     let mut reader = transport::Reader::new(reader, websocket, &pong);
@@ -902,6 +927,8 @@ async fn mqtt_connected<R: embedded_io_async::Read, W: embedded_io_async::Write>
     let mut send = pin!(async {
         let mut rng = WifiRng::new();
         mqtt_io(context, index, generation, async {
+            // The broker retains these bytes until the connection is lost.
+            let offline = mqtt_status_json(context, &public_key, false).await;
             transport::write(
                 &mut writer,
                 websocket,
@@ -911,6 +938,7 @@ async fn mqtt_connected<R: embedded_io_async::Read, W: embedded_io_async::Write>
             )
             .await?;
             mqtt_wait_ack(&mut writer, websocket, &ack, &pong, &mut rng).await?;
+            let online = mqtt_status_json(context, &public_key, true).await;
             transport::write(
                 &mut writer,
                 websocket,

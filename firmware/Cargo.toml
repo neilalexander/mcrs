@@ -4,7 +4,7 @@ version = "0.1.1"
 edition = "2024"
 
 [features]
-mqtt = ["dep:base64", "dep:sha1", "dep:embedded-tls", "dep:rand_core"]
+mqtt = ["dep:base64", "dep:sha1", "dep:embedded-tls", "dep:rand_core", "dep:time"]
 board-heltec-v3 = ["esp32s3", "esp-println/uart"]
 board-heltec-v4 = ["esp32s3", "esp-println/jtag-serial", "dep:embedded-io-async-06"]
 board-heltec-wsl3 = ["esp32s3", "esp-println/uart"]
@@ -89,8 +89,9 @@ nb = "1.1.0"
 sha2 = { version = "0.11", default-features = false }
 static_cell = "2.1.1"
 
-# MQTT WebSocket framing and TLS 1.3 (only in MQTT builds).
+# MQTT reporting, WebSocket framing and TLS 1.3 (only in MQTT builds).
 base64 = { version = "0.23.1", default-features = false, features = ["alloc"], optional = true }
 sha1 = { version = "0.11", default-features = false, optional = true }
 embedded-tls = { version = "0.19", default-features = false, optional = true }
 rand_core = { version = "0.6", default-features = false, optional = true }
+time = { version = "0.3.55", default-features = false, optional = true }

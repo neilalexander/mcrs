@@ -89,17 +89,7 @@ impl MqttConfig {
             &self.auth_audience
         };
         let key = hex(public_key);
-        let mut escaped = String::new();
-        for c in audience.chars() {
-            match c {
-                '"' => escaped.push_str("\\\""),
-                '\\' => escaped.push_str("\\\\"),
-                c if c < ' ' => {
-                    let _ = write!(escaped, "\\u{:04x}", c as u32);
-                }
-                c => escaped.push(c),
-            }
-        }
+        let escaped = escape_json(audience);
         let payload = format!(
             "{{\"publicKey\":\"{key}\",\"aud\":\"{escaped}\",\"iat\":{now},\"exp\":{expires}}}"
         );
@@ -231,11 +221,52 @@ pub fn packet_json(event: &PacketEvent, public_key: &[u8; 32]) -> String {
     )
 }
 
-pub fn status_json(public_key: &[u8; 32], online: bool) -> String {
+pub fn status_json(
+    public_key: &[u8; 32],
+    online: bool,
+    origin: &str,
+    model: &str,
+    firmware_version: &str,
+    now: u32,
+) -> String {
     let status = if online { "online" } else { "offline" };
     format!(
-        "{{\"status\":\"{status}\",\"origin_id\":\"{}\"}}",
-        hex(public_key)
+        "{{\"status\":\"{status}\",\"origin\":\"{}\",\"origin_id\":\"{}\",\"model\":\"{}\",\"firmware_version\":\"{}\",\"client_version\":\"MCRS MQTT\",\"timestamp\":\"{}\"}}",
+        escape_json(origin),
+        hex(public_key),
+        escape_json(model),
+        escape_json(firmware_version),
+        utc_timestamp(now),
+    )
+}
+
+fn escape_json(value: &str) -> String {
+    let mut escaped = String::new();
+    for c in value.chars() {
+        match c {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            c if c < ' ' => {
+                let _ = write!(escaped, "\\u{:04x}", c as u32);
+            }
+            c => escaped.push(c),
+        }
+    }
+    escaped
+}
+
+fn utc_timestamp(seconds: u32) -> String {
+    // Every u32 Unix timestamp (1970–2106) is within time's supported range.
+    let utc = time::OffsetDateTime::from_unix_timestamp(i64::from(seconds))
+        .expect("u32 Unix timestamp is in range");
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        utc.year(),
+        utc.month() as u8,
+        utc.day(),
+        utc.hour(),
+        utc.minute(),
+        utc.second(),
     )
 }
 
@@ -335,6 +366,7 @@ pub async fn read_pingresp(reader: &mut impl embedded_io_async::Read) -> Result<
 
 #[cfg(test)]
 mod tests {
+    const FIRMWARE_VERSION: &str = env!("MESHCORE_FIRMWARE_VERSION");
     use super::*;
     use core::{
         future::Future,
@@ -541,13 +573,72 @@ mod tests {
             );
         }
         assert_eq!(
-            status_json(&public_key, true),
-            format!("{{\"status\":\"online\",\"origin_id\":\"{key}\"}}")
+            status_json(
+                &public_key,
+                true,
+                "Repeater",
+                "Heltec V3",
+                FIRMWARE_VERSION,
+                0
+            ),
+            format!(
+                "{{\"status\":\"online\",\"origin\":\"Repeater\",\"origin_id\":\"{key}\",\"model\":\"Heltec V3\",\"firmware_version\":\"{FIRMWARE_VERSION}\",\"client_version\":\"MCRS MQTT\",\"timestamp\":\"1970-01-01T00:00:00Z\"}}"
+            )
         );
         assert_eq!(
-            status_json(&public_key, false),
-            format!("{{\"status\":\"offline\",\"origin_id\":\"{key}\"}}")
+            status_json(
+                &public_key,
+                false,
+                "Repeater",
+                "Heltec V3",
+                FIRMWARE_VERSION,
+                0
+            ),
+            format!(
+                "{{\"status\":\"offline\",\"origin\":\"Repeater\",\"origin_id\":\"{key}\",\"model\":\"Heltec V3\",\"firmware_version\":\"{FIRMWARE_VERSION}\",\"client_version\":\"MCRS MQTT\",\"timestamp\":\"1970-01-01T00:00:00Z\"}}"
+            )
         );
+    }
+
+    #[test]
+    fn status_metadata_is_escaped_and_timestamped_when_generated() {
+        let version_with_control = format!("{FIRMWARE_VERSION}\r");
+        for (online, status) in [(true, "online"), (false, "offline")] {
+            let json = status_json(
+                &[0xab; 32],
+                online,
+                "Repeater \"北\"\n\\",
+                "Board\tV3",
+                &version_with_control,
+                1_790_539_044,
+            );
+            let key = "AB".repeat(32);
+            assert_eq!(
+                json,
+                format!(
+                    "{{\"status\":\"{status}\",\"origin\":\"Repeater \\\"北\\\"\\u000a\\\\\",\"origin_id\":\"{key}\",\"model\":\"Board\\u0009V3\",\"firmware_version\":\"{FIRMWARE_VERSION}\\u000d\",\"client_version\":\"MCRS MQTT\",\"timestamp\":\"2026-09-27T19:57:24Z\"}}"
+                )
+            );
+        }
+        assert!(
+            status_json(&[0; 32], true, "R", "B", FIRMWARE_VERSION, 1_790_539_045)
+                .contains("2026-09-27T19:57:25Z")
+        );
+    }
+
+    #[test]
+    fn status_timestamp_handles_calendar_boundaries_and_full_clock_range() {
+        for (seconds, expected) in [
+            (0, "1970-01-01T00:00:00Z"),
+            (951_868_799, "2000-02-29T23:59:59Z"),
+            (951_868_800, "2000-03-01T00:00:00Z"),
+            (4_107_542_400, "2100-03-01T00:00:00Z"),
+            (1_798_761_599, "2026-12-31T23:59:59Z"),
+            (1_798_761_600, "2027-01-01T00:00:00Z"),
+            (u32::MAX, "2106-02-07T06:28:15Z"),
+        ] {
+            assert_eq!(utc_timestamp(seconds), expected);
+        }
     }
 
     #[test]
@@ -604,13 +695,13 @@ mod tests {
         assert!(json.contains(&identity));
         let status = status_topic(&topic);
         for online in [false, true] {
-            let json = status_json(&key, online);
+            let json = status_json(&key, online, "Repeater", "Heltec V3", FIRMWARE_VERSION, 0);
             let publish = publish_packet(&status, &json, true);
             assert_eq!(publish[0], 0x31);
             assert_eq!(publish_contents(&publish), (status.as_str(), json.as_str()));
             assert!(json.contains(&identity));
         }
-        let offline = status_json(&key, false);
+        let offline = status_json(&key, false, "Repeater", "Heltec V3", FIRMWARE_VERSION, 0);
         let connect = connect_packet(
             (&config.username, &config.password),
             "mcrs-cdcdcd-1",
