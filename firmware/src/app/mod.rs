@@ -823,6 +823,7 @@ struct QueuedTransmit {
 
 #[derive(Clone, Copy)]
 struct NextOutbound {
+    is_forward: bool,
     eligible_at_ms: u64,
     packet_len: usize,
 }
@@ -877,6 +878,7 @@ impl SortedOutboundChannel {
     fn next(&self) -> Option<NextOutbound> {
         self.queue.lock(|queue| {
             queue.borrow().first().map(|queued| NextOutbound {
+                is_forward: queued.dedup_signature.is_some(),
                 eligible_at_ms: queued.eligible_at_ms,
                 packet_len: queued.packet.len(),
             })
@@ -1161,13 +1163,26 @@ async fn transmit_eligible_outbound<R, S, D>(
     S: crate::platform::storage::Storage,
     D: DelayNs,
 {
-    let (radio_config, duty_cycle_percent) = context
-        .with_config(|config| (config.radio(), config.duty_cycle_percent()))
+    let (radio_config, duty_cycle_percent, repeat_enabled) = context
+        .with_config(|config| {
+            (
+                config.radio(),
+                config.duty_cycle_percent(),
+                config.repeat_enabled(),
+            )
+        })
         .await;
     let now_ms = crate::platform::now_millis();
     let Some(next) = context.outbound.next() else {
         return;
     };
+    if next.is_forward && !repeat_enabled {
+        if let Some(queued) = context.outbound.take_first() {
+            context.finish_forward(queued.dedup_signature, false);
+            context.outbound.complete_current();
+        }
+        return;
+    }
     if next.eligible_at_ms > now_ms {
         return;
     }
@@ -1402,6 +1417,9 @@ async fn prepare_forward(
     snr_quarters: i16,
     node_hash: &[u8],
 ) -> ForwardDecision {
+    if !context.with_config(|config| config.repeat_enabled()).await {
+        return ForwardDecision::DoNotForward;
+    }
     if matches!(
         packet.payload.kind(),
         PayloadKind::Reserved(_) | PayloadKind::RawCustom

@@ -50,6 +50,7 @@ pub struct AppConfig {
     radio: RadioConfig,
     regions: RegionMap,
     region_capture: bool,
+    repeat_enabled: bool,
     flood_max_unscoped_hops: u8,
     flood_max_advert_hops: u8,
     advert_interval_minutes: u32,
@@ -138,6 +139,7 @@ impl AppConfig {
             radio: stored.radio,
             regions: stored.regions,
             region_capture: stored.region_capture,
+            repeat_enabled: stored.repeat_enabled,
             flood_max_unscoped_hops: stored.flood_max_unscoped_hops,
             flood_max_advert_hops: stored.flood_max_advert_hops,
             advert_interval_minutes: stored.advert_interval_minutes,
@@ -311,6 +313,7 @@ impl AppConfig {
             "dutycycle" => self.duty_cycle_percent = defaults.duty_cycle_percent,
             "flood.max.unscoped" => self.flood_max_unscoped_hops = defaults.flood_max_unscoped_hops,
             "flood.max.advert" => self.flood_max_advert_hops = defaults.flood_max_advert_hops,
+            "repeat" => self.repeat_enabled = defaults.repeat_enabled,
             "advert.interval" => self.advert_interval_minutes = defaults.advert_interval_minutes,
             "flood.advert.interval" => {
                 self.flood_advert_interval_hours = defaults.flood_advert_interval_hours
@@ -328,6 +331,14 @@ impl AppConfig {
 
     pub fn regions(&self) -> &RegionMap {
         &self.regions
+    }
+
+    pub fn repeat_enabled(&self) -> bool {
+        self.repeat_enabled
+    }
+
+    pub fn set_repeat_enabled(&mut self, enabled: bool) {
+        self.repeat_enabled = enabled;
     }
 
     pub fn region_capture(&self) -> bool {
@@ -626,6 +637,7 @@ struct StoredAppConfig {
     radio: RadioConfig,
     regions: RegionMap,
     region_capture: bool,
+    repeat_enabled: bool,
     flood_max_unscoped_hops: u8,
     flood_max_advert_hops: u8,
     advert_interval_minutes: u32,
@@ -669,6 +681,7 @@ impl StoredAppConfig {
             },
             regions: RegionMap::new(),
             region_capture: false,
+            repeat_enabled: false,
             flood_max_unscoped_hops: 0,
             flood_max_advert_hops: 0,
             advert_interval_minutes: 0,
@@ -701,6 +714,7 @@ impl StoredAppConfig {
             radio: config.radio,
             regions: config.regions.clone(),
             region_capture: config.region_capture,
+            repeat_enabled: config.repeat_enabled,
             flood_max_unscoped_hops: config.flood_max_unscoped_hops,
             flood_max_advert_hops: config.flood_max_advert_hops,
             advert_interval_minutes: config.advert_interval_minutes,
@@ -860,6 +874,9 @@ fn decode_config_layer(
             }
             "region.default" => {
                 config.regions.set_default_from_config(&value).ok()?;
+            }
+            "repeat" => {
+                config.repeat_enabled = parse_repeat(&value)?;
             }
             "region.capture" => {
                 config.region_capture = parse_bool(&value)?;
@@ -1047,6 +1064,9 @@ fn encode_sparse_config_text(config: &StoredAppConfig, defaults: &StoredAppConfi
     config
         .regions
         .write_config_lines_changed(&defaults.regions, &mut out);
+    if config.repeat_enabled != defaults.repeat_enabled {
+        let _ = writeln!(&mut out, "repeat={}", repeat_text(config.repeat_enabled));
+    }
     if config.region_capture != defaults.region_capture {
         let _ = writeln!(
             &mut out,
@@ -1178,6 +1198,7 @@ fn encode_full_config_text_redacted(config: &StoredAppConfig, redact_secrets: bo
         config.duty_cycle_percent
     );
     config.regions.write_config_lines(&mut out);
+    let _ = writeln!(&mut out, "repeat={}", repeat_text(config.repeat_enabled));
     let _ = writeln!(
         &mut out,
         "region.capture={}",
@@ -1436,6 +1457,18 @@ fn push_hex_byte(out: &mut String, byte: u8) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     out.push(HEX[(byte >> 4) as usize] as char);
     out.push(HEX[(byte & 0x0f) as usize] as char);
+}
+
+pub fn parse_repeat(input: &str) -> Option<bool> {
+    match input.trim() {
+        "on" => Some(true),
+        "off" => Some(false),
+        _ => None,
+    }
+}
+
+pub fn repeat_text(enabled: bool) -> &'static str {
+    if enabled { "on" } else { "off" }
 }
 
 fn parse_bool(input: &str) -> Option<bool> {
@@ -1781,6 +1814,51 @@ mod tests {
             app.flood_advert_interval_hours(),
             defaults().flood_advert_interval_hours
         );
+    }
+
+    #[test]
+    fn repeat_defaults_round_trips_and_resets() {
+        let image = network_defaults("");
+        assert!(image.repeat_enabled);
+        assert!(
+            decode_config_text(b"version=1\n", &image)
+                .unwrap()
+                .repeat_enabled
+        );
+        for enabled in [false, true] {
+            let mut app = AppConfig::from_stored(image.clone(), "test");
+            app.set_repeat_enabled(enabled);
+            assert_eq!(app.repeat_enabled(), enabled);
+            let stored = StoredAppConfig::from_app_config(&app);
+            let saved = encode_sparse_config_text(&stored, &image);
+            assert_eq!(
+                decode_config_text(&saved, &image).unwrap().repeat_enabled,
+                enabled
+            );
+            let full = encode_full_config_text_redacted(&stored, false);
+            assert!(
+                core::str::from_utf8(&full)
+                    .unwrap()
+                    .contains(&alloc::format!("repeat={}\n", repeat_text(enabled)))
+            );
+            app.unset("repeat").unwrap();
+            assert_eq!(app.repeat_enabled(), defaults().repeat_enabled);
+        }
+        let disabled_image = network_defaults("repeat=off\n");
+        assert!(!disabled_image.repeat_enabled);
+        // A saved override must survive a change to the image default.
+        let enabled = decode_config_text(b"repeat=on\n", &disabled_image).unwrap();
+        let saved = encode_sparse_config_text(&enabled, &disabled_image);
+        assert!(
+            decode_config_text(&saved, &disabled_image)
+                .unwrap()
+                .repeat_enabled
+        );
+        for invalid in ["", "of", "OFF", "enabled", "typo"] {
+            assert_eq!(parse_repeat(invalid), None);
+            let text = alloc::format!("repeat={invalid}\n");
+            assert!(decode_config_text(text.as_bytes(), &image).is_none());
+        }
     }
 
     #[test]

@@ -488,7 +488,13 @@ async fn handle_anonymous_subrequest(
     context: &AppContext<impl crate::platform::storage::Storage>,
 ) -> Option<Vec<u8>> {
     match body.first().copied()? {
-        ANON_REQ_TYPE_BASIC => Some(anonymous_basic_response(request_timestamp)),
+        ANON_REQ_TYPE_BASIC => Some(
+            context
+                .with_config(|config| {
+                    anonymous_basic_response(request_timestamp, config.repeat_enabled())
+                })
+                .await,
+        ),
         ANON_REQ_TYPE_REGIONS => {
             let regions = context
                 .with_config(|config| config.regions().allowed_names())
@@ -522,11 +528,11 @@ async fn handle_anonymous_subrequest(
     }
 }
 
-fn anonymous_basic_response(request_timestamp: u32) -> Vec<u8> {
+fn anonymous_basic_response(request_timestamp: u32, repeat_enabled: bool) -> Vec<u8> {
     let response = RepeaterResponsePlaintext {
         reflected_tag: request_timestamp,
         responder_time: crate::platform::now_seconds(),
-        body: vec![repeater_features()],
+        body: vec![repeater_features(repeat_enabled)],
     };
     response.encode()
 }
@@ -555,8 +561,8 @@ fn anonymous_owner_response(request_timestamp: u32, node_name: &str, owner_info:
     response.encode()
 }
 
-fn repeater_features() -> u8 {
-    0
+fn repeater_features(repeat_enabled: bool) -> u8 {
+    if repeat_enabled { 0 } else { 0x80 }
 }
 
 fn encode_status_binary_response(status: super::Status, out: &mut Vec<u8>) {
@@ -974,6 +980,13 @@ async fn handle_get_command(
                 .with_config(|config| format!("> {}", config.flood_max_advert_hops()))
                 .await
         }
+        "repeat" => {
+            context
+                .with_config(|config| {
+                    format!("> {}", super::config::repeat_text(config.repeat_enabled()))
+                })
+                .await
+        }
         "advert.interval" => {
             context
                 .with_config(|config| format!("> {}", config.advert_interval_minutes()))
@@ -1265,6 +1278,22 @@ async fn handle_set_command(
             .await
         {
             Ok(()) => format!("OK - flood.max.advert now: {}", hops),
+            Err(error) => format!("Error: {}", error),
+        };
+    }
+
+    if let Some(value) = config.strip_prefix("repeat ").map(str::trim) {
+        let Some(enabled) = super::config::parse_repeat(value) else {
+            return String::from("Error, invalid repeat setting (expected on or off)");
+        };
+        return match context
+            .update_config(|config| {
+                config.set_repeat_enabled(enabled);
+                Ok(())
+            })
+            .await
+        {
+            Ok(()) => format!("OK - repeat is now {}", if enabled { "ON" } else { "OFF" }),
             Err(error) => format!("Error: {}", error),
         };
     }
@@ -1823,7 +1852,7 @@ fn denied_text() -> String {
 
 fn help_text() -> String {
     String::from(
-        "Commands: help, ver, status, identity, radio, clock, region, region list {allowed|denied}, ota status, get {name|owner.info|lat|lon|radio|tx|dutycycle|freq|flood.max.unscoped|flood.max.advert|advert.interval|flood.advert.interval|path.hash.mode|loop.detect|public.key|status}; Privileged: time, clock sync, set, unset, set acl <pubkey> admin|deny, unset acl <pubkey>, password, neighbours, advert, advert.zerohop, discover.neighbours, region {put|remove|allowf|denyf|default}, ota {start|stop}, export config [all] (serial/telnet), erase config, reboot",
+        "Commands: help, ver, status, identity, radio, clock, region, region list {allowed|denied}, ota status, get {name|owner.info|lat|lon|radio|tx|dutycycle|freq|flood.max.unscoped|flood.max.advert|repeat|advert.interval|flood.advert.interval|path.hash.mode|loop.detect|public.key|status}; Privileged: time, clock sync, set, unset, set acl <pubkey> admin|deny, unset acl <pubkey>, password, neighbours, advert, advert.zerohop, discover.neighbours, region {put|remove|allowf|denyf|default}, ota {start|stop}, export config [all] (serial/telnet), erase config, reboot",
     )
 }
 
@@ -2024,6 +2053,16 @@ impl CliPrivilege {
 #[cfg(test)]
 mod tests {
     use super::split_cli_correlation_prefix;
+
+    #[test]
+    fn anonymous_basic_response_reports_disabled_repeater() {
+        for (enabled, features) in [(true, 0), (false, 0x80)] {
+            let response = super::anonymous_basic_response(0x12345678, enabled);
+            assert_eq!(&response[..4], &0x12345678u32.to_le_bytes());
+            assert_eq!(response.len(), 9);
+            assert_eq!(response[8], features);
+        }
+    }
 
     #[test]
     fn owner_info_responses_match_meshcore() {

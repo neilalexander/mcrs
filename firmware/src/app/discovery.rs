@@ -186,6 +186,9 @@ async fn handle_discover_request<S>(
 where
     S: crate::platform::storage::Storage,
 {
+    if !context.with_config(|config| config.repeat_enabled()).await {
+        return None;
+    }
     if type_filter & (1 << AdvertNodeType::Repeater.to_nibble()) == 0 {
         return None;
     }
