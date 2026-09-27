@@ -705,10 +705,13 @@ async fn handle_command(
     let output = match command {
         "" => return None,
         "help" | "?" => help_text(),
-        "export config" | "export config all" => {
+        "export config" | "export config all" | "export config delta" => {
             if request.origin.is_local() && request.privilege.is_passworded() {
                 context
-                    .with_config(|config| config.export_config(command != "export config all"))
+                    .with_config(|config| match command {
+                        "export config delta" => config.export_config_delta(),
+                        _ => config.export_config(command != "export config all"),
+                    })
                     .await
             } else {
                 String::from("CLI: denied, export config requires privileged serial or telnet")
@@ -1852,7 +1855,7 @@ fn denied_text() -> String {
 
 fn help_text() -> String {
     String::from(
-        "Commands: help, ver, status, identity, radio, clock, region, region list {allowed|denied}, ota status, get {name|owner.info|lat|lon|radio|tx|dutycycle|freq|flood.max.unscoped|flood.max.advert|repeat|advert.interval|flood.advert.interval|path.hash.mode|loop.detect|public.key|status}; Privileged: time, clock sync, set, unset, set acl <pubkey> admin|deny, unset acl <pubkey>, password, neighbours, advert, advert.zerohop, discover.neighbours, region {put|remove|allowf|denyf|default}, ota {start|stop}, export config [all] (serial/telnet), erase config, reboot",
+        "Commands: help, ver, status, identity, radio, clock, region, region list {allowed|denied}, ota status, get {name|owner.info|lat|lon|radio|tx|dutycycle|freq|flood.max.unscoped|flood.max.advert|repeat|advert.interval|flood.advert.interval|path.hash.mode|loop.detect|public.key|status}; Privileged: time, clock sync, set, unset, set acl <pubkey> admin|deny, unset acl <pubkey>, password, neighbours, advert, advert.zerohop, discover.neighbours, region {put|remove|allowf|denyf|default}, ota {start|stop}, export config [all|delta] (serial/telnet), erase config, reboot",
     )
 }
 

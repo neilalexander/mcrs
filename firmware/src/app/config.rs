@@ -503,6 +503,13 @@ impl AppConfig {
         .expect("UTF-8 config")
     }
 
+    pub fn export_config_delta(&self) -> String {
+        let config = StoredAppConfig::from_app_config(self);
+        let defaults = StoredAppConfig::default_with_private_key(self.private_key);
+        String::from_utf8(encode_sparse_config_text_redacted(&config, &defaults, true))
+            .expect("UTF-8 config")
+    }
+
     pub fn save<S>(&self, storage: &mut S) -> Result<(), crate::platform::storage::Error>
     where
         S: crate::platform::storage::Storage,
@@ -966,18 +973,30 @@ fn encode_config_text(config: &StoredAppConfig) -> Vec<u8> {
 }
 
 fn encode_sparse_config_text(config: &StoredAppConfig, defaults: &StoredAppConfig) -> Vec<u8> {
+    encode_sparse_config_text_redacted(config, defaults, false)
+}
+
+fn encode_sparse_config_text_redacted(
+    config: &StoredAppConfig,
+    defaults: &StoredAppConfig,
+    redact_secrets: bool,
+) -> Vec<u8> {
     let mut out = String::new();
     let _ = writeln!(&mut out, "# MCRS app.conf");
     let _ = writeln!(&mut out, "version={}", APP_CONFIG_TEXT_VERSION);
 
     config.acl.write_overrides(&defaults.acl, &mut out);
 
-    out.push_str(config.private_key.config_key());
-    out.push('=');
-    for byte in config.private_key.as_bytes() {
-        push_hex_byte(&mut out, *byte);
+    // Storage always carries the device identity. A delta export compares
+    // settings against this device's defaults, so the identity is omitted.
+    if !redact_secrets {
+        out.push_str(config.private_key.config_key());
+        out.push('=');
+        for byte in config.private_key.as_bytes() {
+            push_hex_byte(&mut out, *byte);
+        }
+        out.push('\n');
     }
-    out.push('\n');
 
     if config.latitude_microdegrees != defaults.latitude_microdegrees {
         out.push_str("identity.lat=");
@@ -1005,7 +1024,11 @@ fn encode_sparse_config_text(config: &StoredAppConfig, defaults: &StoredAppConfi
 
     if config.remote_cli_password != defaults.remote_cli_password {
         out.push_str("remote.password=");
-        write_escaped_value(&mut out, &config.remote_cli_password);
+        if redact_secrets {
+            out.push_str("<redacted>");
+        } else {
+            write_escaped_value(&mut out, &config.remote_cli_password);
+        }
         out.push('\n');
     }
 
@@ -1016,7 +1039,11 @@ fn encode_sparse_config_text(config: &StoredAppConfig, defaults: &StoredAppConfi
     }
     if config.wifi.password != defaults.wifi.password {
         out.push_str("wifi.pass=");
-        write_escaped_value(&mut out, &config.wifi.password);
+        if redact_secrets && !config.wifi.password.is_empty() {
+            out.push_str("<redacted>");
+        } else {
+            write_escaped_value(&mut out, &config.wifi.password);
+        }
         out.push('\n');
     }
     if config.wifi.telnet != defaults.wifi.telnet {
@@ -1110,7 +1137,13 @@ fn encode_sparse_config_text(config: &StoredAppConfig, defaults: &StoredAppConfi
     }
     #[cfg(feature = "mqtt")]
     for (index, mqtt) in config.mqtt.iter().enumerate() {
-        write_mqtt_config(&mut out, index, mqtt, Some(&defaults.mqtt[index]), false);
+        write_mqtt_config(
+            &mut out,
+            index,
+            mqtt,
+            Some(&defaults.mqtt[index]),
+            redact_secrets,
+        );
     }
 
     out.into_bytes()
@@ -1859,6 +1892,59 @@ mod tests {
             let text = alloc::format!("repeat={invalid}\n");
             assert!(decode_config_text(text.as_bytes(), &image).is_none());
         }
+    }
+
+    #[test]
+    fn delta_export_compares_profile_defaults_and_redacts_changed_secrets() {
+        let image = network_defaults(
+            "node.name=Profile repeater\nflood.max.advert=7\nremote.password=profile-secret\nwifi.pass=profile-wifi\n",
+        );
+        let unchanged = encode_sparse_config_text_redacted(&image, &image, true);
+        assert_eq!(
+            core::str::from_utf8(&unchanged).unwrap(),
+            "# MCRS app.conf\nversion=1\n"
+        );
+        let device = decode_config_text(
+            b"node.name=My repeater\nflood.max.advert=3\nremote.password=device-secret\nwifi.pass=device-wifi\n",
+            &image,
+        ).unwrap();
+        let delta = encode_sparse_config_text_redacted(&device, &image, true);
+        let delta = core::str::from_utf8(&delta).unwrap();
+        assert!(delta.contains("node.name=My repeater\n"));
+        // The base default still counts as a change when the profile differs.
+        assert!(delta.contains("flood.max.advert=3\n"));
+        assert!(delta.contains("remote.password=<redacted>\n"));
+        assert!(delta.contains("wifi.pass=<redacted>\n"));
+        assert!(!delta.contains("device-secret"));
+        assert!(!delta.contains("device-wifi"));
+        assert!(!delta.contains("identity.seed="));
+        assert!(!delta.contains("identity.expanded="));
+        assert!(!delta.contains("radio.frequency_hz="));
+        // Saving still preserves identity and secrets for an exact reload.
+        let saved = encode_sparse_config_text(&device, &image);
+        let loaded = decode_config_text(&saved, &image).unwrap();
+        assert_eq!(loaded.private_key, device.private_key);
+        assert_eq!(loaded.remote_cli_password, device.remote_cli_password);
+        assert_eq!(loaded.wifi.password, device.wifi.password);
+    }
+
+    #[cfg(feature = "mqtt")]
+    #[test]
+    fn delta_export_redacts_only_changed_mqtt_passwords() {
+        let image = network_defaults("mqtt.1.password=profile-secret\n");
+        let device = decode_config_text(b"mqtt.1.password=device-secret\n", &image).unwrap();
+        let delta = encode_sparse_config_text_redacted(&device, &image, true);
+        let delta = core::str::from_utf8(&delta).unwrap();
+        assert!(delta.contains("mqtt.1.password=<redacted>\n"));
+        assert!(!delta.contains("device-secret"));
+        assert!(!delta.contains("mqtt.2.password="));
+        let cleared = decode_config_text(b"mqtt.1.password=\n", &image).unwrap();
+        let delta = encode_sparse_config_text_redacted(&cleared, &image, true);
+        assert!(
+            core::str::from_utf8(&delta)
+                .unwrap()
+                .contains("mqtt.1.password=\n")
+        );
     }
 
     #[test]
