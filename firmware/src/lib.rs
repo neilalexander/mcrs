@@ -16,3 +16,7 @@ pub mod radio_metrics;
 mod crypto_tests;
 #[cfg(test)]
 use crypto_tests::platform;
+
+#[cfg(test)]
+#[path = "app/periodic/schedule.rs"]
+mod advert_schedule;

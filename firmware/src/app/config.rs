@@ -45,6 +45,7 @@ pub struct AppConfig {
     region_capture: bool,
     flood_max_unscoped_hops: u8,
     flood_max_advert_hops: u8,
+    flood_advert_interval_hours: u32,
     loop_detection: LoopDetection,
     path_hash_mode: u8,
     duty_cycle_percent: u8,
@@ -131,6 +132,7 @@ impl AppConfig {
             region_capture: stored.region_capture,
             flood_max_unscoped_hops: stored.flood_max_unscoped_hops,
             flood_max_advert_hops: stored.flood_max_advert_hops,
+            flood_advert_interval_hours: stored.flood_advert_interval_hours,
             loop_detection: stored.loop_detection,
             path_hash_mode: stored.path_hash_mode,
             duty_cycle_percent: stored.duty_cycle_percent,
@@ -300,6 +302,9 @@ impl AppConfig {
             "dutycycle" => self.duty_cycle_percent = defaults.duty_cycle_percent,
             "flood.max.unscoped" => self.flood_max_unscoped_hops = defaults.flood_max_unscoped_hops,
             "flood.max.advert" => self.flood_max_advert_hops = defaults.flood_max_advert_hops,
+            "flood.advert.interval" => {
+                self.flood_advert_interval_hours = defaults.flood_advert_interval_hours
+            }
             "loop.detect" => self.loop_detection = defaults.loop_detection,
             "path.hash.mode" => self.path_hash_mode = defaults.path_hash_mode,
             _ => return Err(ConfigError::UnknownSetting),
@@ -325,6 +330,14 @@ impl AppConfig {
 
     pub fn flood_max_advert_hops(&self) -> u8 {
         self.flood_max_advert_hops
+    }
+
+    pub fn flood_advert_interval_hours(&self) -> u32 {
+        self.flood_advert_interval_hours
+    }
+
+    pub fn set_flood_advert_interval_hours(&mut self, hours: u32) {
+        self.flood_advert_interval_hours = hours;
     }
 
     pub fn path_hash_mode(&self) -> u8 {
@@ -597,6 +610,7 @@ struct StoredAppConfig {
     region_capture: bool,
     flood_max_unscoped_hops: u8,
     flood_max_advert_hops: u8,
+    flood_advert_interval_hours: u32,
     loop_detection: LoopDetection,
     path_hash_mode: u8,
     duty_cycle_percent: u8,
@@ -638,6 +652,7 @@ impl StoredAppConfig {
             region_capture: false,
             flood_max_unscoped_hops: 0,
             flood_max_advert_hops: 0,
+            flood_advert_interval_hours: 0,
             loop_detection: LoopDetection::default(),
             path_hash_mode: 0,
             duty_cycle_percent: 0,
@@ -668,6 +683,7 @@ impl StoredAppConfig {
             region_capture: config.region_capture,
             flood_max_unscoped_hops: config.flood_max_unscoped_hops,
             flood_max_advert_hops: config.flood_max_advert_hops,
+            flood_advert_interval_hours: config.flood_advert_interval_hours,
             loop_detection: config.loop_detection,
             path_hash_mode: config.path_hash_mode,
             duty_cycle_percent: config.duty_cycle_percent,
@@ -832,6 +848,9 @@ fn decode_config_layer(
             }
             "flood.max.advert" => {
                 config.flood_max_advert_hops = parse_flood_max_hops(&value)?;
+            }
+            "flood.advert.interval" => {
+                config.flood_advert_interval_hours = value.parse::<u32>().ok()?;
             }
             "path.hash.mode" => {
                 config.path_hash_mode = parse_path_hash_mode(&value)?;
@@ -1025,6 +1044,13 @@ fn encode_sparse_config_text(config: &StoredAppConfig, defaults: &StoredAppConfi
             config.flood_max_advert_hops
         );
     }
+    if config.flood_advert_interval_hours != defaults.flood_advert_interval_hours {
+        let _ = writeln!(
+            &mut out,
+            "flood.advert.interval={}",
+            config.flood_advert_interval_hours
+        );
+    }
     if config.path_hash_mode != defaults.path_hash_mode {
         let _ = writeln!(&mut out, "path.hash.mode={}", config.path_hash_mode);
     }
@@ -1135,6 +1161,11 @@ fn encode_full_config_text_redacted(config: &StoredAppConfig, redact_secrets: bo
         &mut out,
         "flood.max.advert={}",
         config.flood_max_advert_hops
+    );
+    let _ = writeln!(
+        &mut out,
+        "flood.advert.interval={}",
+        config.flood_advert_interval_hours
     );
     let _ = writeln!(&mut out, "path.hash.mode={}", config.path_hash_mode);
     let _ = writeln!(&mut out, "loop.detect={}", config.loop_detection.as_str());
@@ -1577,6 +1608,76 @@ mod tests {
         #[cfg(not(mcrs_profile))]
         let profile = "";
         assert!(StoredAppConfig::with_defaults_text(PrivateKey::Seed([7; 32]), profile).is_some());
+    }
+
+    #[test]
+    fn flood_advert_interval_preserves_whole_hours_and_off() {
+        let image = network_defaults("");
+        for (hours, expected) in [
+            (0, 0),
+            (1, 1),
+            (59, 59),
+            (60, 60),
+            (61, 61),
+            (u32::MAX, u32::MAX),
+        ] {
+            let text = alloc::format!("flood.advert.interval={hours}\n");
+            let stored = decode_config_text(text.as_bytes(), &image).unwrap();
+            assert_eq!(stored.flood_advert_interval_hours, expected);
+            assert_eq!(
+                network_defaults(&text).flood_advert_interval_hours,
+                expected
+            );
+            let mut app = AppConfig::from_stored(image.clone(), "test");
+            app.set_flood_advert_interval_hours(hours);
+            assert_eq!(app.flood_advert_interval_hours(), expected);
+            let saved = encode_sparse_config_text(&StoredAppConfig::from_app_config(&app), &image);
+            assert_eq!(
+                decode_config_text(&saved, &image)
+                    .unwrap()
+                    .flood_advert_interval_hours,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn flood_advert_interval_defaults_and_round_trip() {
+        let image = network_defaults("");
+        assert_eq!(image.flood_advert_interval_hours, 0);
+        assert_eq!(
+            decode_config_text(b"version=1\n", &image)
+                .unwrap()
+                .flood_advert_interval_hours,
+            0
+        );
+        let device = decode_config_text(b"flood.advert.interval=1\n", &image).unwrap();
+        let saved = encode_sparse_config_text(&device, &image);
+        assert!(
+            core::str::from_utf8(&saved)
+                .unwrap()
+                .contains("flood.advert.interval=1\n")
+        );
+        let loaded = decode_config_text(&saved, &image).unwrap();
+        assert_eq!(loaded.flood_advert_interval_hours, 1);
+        let full = encode_full_config_text_redacted(&loaded, false);
+        assert!(
+            core::str::from_utf8(&full)
+                .unwrap()
+                .contains("flood.advert.interval=1\n")
+        );
+        for value in ["-1", "1.5", "4294967296", "invalid"] {
+            let text = alloc::format!("flood.advert.interval={value}\n");
+            assert!(decode_config_text(text.as_bytes(), &image).is_none());
+        }
+        let mut app = AppConfig::from_stored(loaded, "test");
+        app.set_flood_advert_interval_hours(0);
+        assert_eq!(app.flood_advert_interval_hours(), 0);
+        app.unset("flood.advert.interval").unwrap();
+        assert_eq!(
+            app.flood_advert_interval_hours(),
+            defaults().flood_advert_interval_hours
+        );
     }
 
     #[test]

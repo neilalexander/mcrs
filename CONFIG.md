@@ -2,7 +2,7 @@
 
 MCRS uses a different configuration format to the official MeshCore repeater firmware, therefore if you are converting an existing repeater to MCRS, the configuration will not be migrated. You will have to set up the repeater again as below.
 
-When MCRS is first installed, the repeater will have a default name `Repeater-XXXXXX`. It will not send out an advert by default. To send a zero-hop advert, hold the `PRG` button until the display shows `Zero-hop advert sent`. 
+When MCRS is first installed, the repeater will have a default name `Repeater-XXXXXX`. It sends a zero-hop advert every four hours; scheduled flood adverts are disabled by default. To send a zero-hop advert, hold the `PRG` button until the display shows `Zero-hop advert sent`.
 
 To perform initial configuration, either:
 

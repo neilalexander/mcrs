@@ -974,6 +974,11 @@ async fn handle_get_command(
                 .with_config(|config| format!("> {}", config.flood_max_advert_hops()))
                 .await
         }
+        "flood.advert.interval" => {
+            context
+                .with_config(|config| format!("> {}", config.flood_advert_interval_hours()))
+                .await
+        }
         "path.hash.mode" => {
             context
                 .with_config(|config| format!("> {}", config.path_hash_mode()))
@@ -1255,6 +1260,24 @@ async fn handle_set_command(
             .await
         {
             Ok(()) => format!("OK - flood.max.advert now: {}", hops),
+            Err(error) => format!("Error: {}", error),
+        };
+    }
+
+    if let Some(hours) = config.strip_prefix("flood.advert.interval ").map(str::trim) {
+        let Ok(hours) = hours.parse::<u32>() else {
+            return String::from(
+                "Error, invalid flood advert interval (expected whole hours, 0 disables)",
+            );
+        };
+        return match context
+            .update_config(|config| {
+                config.set_flood_advert_interval_hours(hours);
+                Ok(())
+            })
+            .await
+        {
+            Ok(()) => format!("OK - flood.advert.interval now: {}", hours),
             Err(error) => format!("Error: {}", error),
         };
     }
@@ -1776,7 +1799,7 @@ fn denied_text() -> String {
 
 fn help_text() -> String {
     String::from(
-        "Commands: help, ver, status, identity, radio, clock, region, region list {allowed|denied}, ota status, get {name|owner.info|lat|lon|radio|tx|dutycycle|freq|flood.max.unscoped|flood.max.advert|path.hash.mode|loop.detect|public.key|status}; Privileged: time, clock sync, set, unset, set acl <pubkey> admin|deny, unset acl <pubkey>, password, neighbours, advert, advert.zerohop, discover.neighbours, region {put|remove|allowf|denyf|default}, ota {start|stop}, export config [all] (serial/telnet), erase config, reboot",
+        "Commands: help, ver, status, identity, radio, clock, region, region list {allowed|denied}, ota status, get {name|owner.info|lat|lon|radio|tx|dutycycle|freq|flood.max.unscoped|flood.max.advert|flood.advert.interval|path.hash.mode|loop.detect|public.key|status}; Privileged: time, clock sync, set, unset, set acl <pubkey> admin|deny, unset acl <pubkey>, password, neighbours, advert, advert.zerohop, discover.neighbours, region {put|remove|allowf|denyf|default}, ota {start|stop}, export config [all] (serial/telnet), erase config, reboot",
     )
 }
 
