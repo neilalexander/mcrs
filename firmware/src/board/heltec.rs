@@ -560,6 +560,11 @@ async fn run_ota_station_mode<'a>(
     device: esp_radio::wifi::Interface<'a>,
     context: &crate::app::AppContext<crate::platform::EspStorage>,
 ) -> ! {
+    // Sleep the modem between DTIM beacons while keeping the station connected.
+    if let Err(error) = controller.set_power_saving(esp_radio::wifi::PowerSaveMode::Minimum) {
+        crate::platform::log_fmt(format_args!("Wi-Fi: power saving setup failed: {:?}", error));
+    }
+
     // DHCP, DNS, NTP, Telnet and OTA can each hold a socket concurrently.
     #[cfg(not(feature = "mqtt"))]
     const SOCKET_COUNT: usize = 5;
