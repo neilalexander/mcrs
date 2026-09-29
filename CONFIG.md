@@ -141,3 +141,8 @@ You can configure up to three servers. Replace `<n>` below with `1`, `2` or `3`.
 | `mqtt.<n>.iata` | `XXX` | Text | Value substituted for the IATA placeholder; intended as a location code. |
 
 To disable an MQTT server, for example server `1`, do `unset mqtt.1` and then `mqtt restart`.
+
+The NTP server defaults to `pool.ntp.org`. Use `set ntp <host>` to save a hostname
+or IPv4 address (up to 253 bytes), `get ntp` to inspect it, or `unset ntp` to
+restore the default. Changes apply at the next NTP sync attempt. The config-file
+key is `ntp`.

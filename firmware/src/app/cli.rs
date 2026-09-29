@@ -1010,6 +1010,11 @@ async fn handle_get_command(
                 .with_config(|config| format!("> {}", config.loop_detection().as_str()))
                 .await
         }
+        "ntp" => {
+            context
+                .with_config(|config| format!("> {}", config.ntp()))
+                .await
+        }
         "status" => status_text(context),
         _ => format!("Unknown config: {}", config),
     }
@@ -1022,6 +1027,14 @@ async fn handle_set_command(
 ) -> String {
     if !request.privilege.is_passworded() {
         return denied_text();
+    }
+
+    if config == "ntp" || config.starts_with("ntp ") {
+        let host = config.strip_prefix("ntp").unwrap().trim();
+        return match context.update_config(|config| config.set_ntp(host)).await {
+            Ok(()) => String::from("OK - applies at next NTP sync"),
+            Err(error) => format!("Error: {error}"),
+        };
     }
 
     if config == "acl" || config.starts_with("acl ") {

@@ -46,6 +46,7 @@ pub struct AppConfig {
     owner_info: String,
     remote_cli_password: String,
     acl: super::acl::Acl,
+    ntp: String,
     wifi: WifiConfig,
     radio: RadioConfig,
     regions: RegionMap,
@@ -135,6 +136,7 @@ impl AppConfig {
             owner_info: stored.owner_info,
             remote_cli_password: stored.remote_cli_password,
             acl: stored.acl,
+            ntp: stored.ntp,
             wifi: stored.wifi,
             radio: stored.radio,
             regions: stored.regions,
@@ -190,6 +192,16 @@ impl AppConfig {
 
     pub fn remote_cli_password(&self) -> &str {
         &self.remote_cli_password
+    }
+
+    pub fn ntp(&self) -> &str {
+        &self.ntp
+    }
+
+    pub fn set_ntp(&mut self, value: &str) -> Result<(), ConfigError> {
+        validate_ntp_host(value)?;
+        self.ntp = value.into();
+        Ok(())
     }
 
     pub fn wifi(&self) -> &WifiConfig {
@@ -304,6 +316,7 @@ impl AppConfig {
             "password" => self.remote_cli_password = defaults.remote_cli_password,
             "lat" => self.latitude_microdegrees = defaults.latitude_microdegrees,
             "lon" => self.longitude_microdegrees = defaults.longitude_microdegrees,
+            "ntp" => self.ntp = defaults.ntp,
             "wifi.ssid" => self.wifi.ssid = defaults.wifi.ssid,
             "wifi.pass" => self.wifi.password = defaults.wifi.password,
             "wifi.telnet" => self.wifi.telnet = defaults.wifi.telnet,
@@ -640,6 +653,7 @@ struct StoredAppConfig {
     owner_info: String,
     remote_cli_password: String,
     acl: super::acl::Acl,
+    ntp: String,
     wifi: WifiConfig,
     radio: RadioConfig,
     regions: RegionMap,
@@ -678,6 +692,7 @@ impl StoredAppConfig {
             owner_info: String::new(),
             remote_cli_password: String::new(),
             acl: super::acl::Acl::default(),
+            ntp: String::new(),
             wifi: WifiConfig::default(),
             radio: RadioConfig {
                 receive_frequency_hz: 0,
@@ -717,6 +732,7 @@ impl StoredAppConfig {
             owner_info: String::from(config.owner_info()),
             remote_cli_password: fit_password(config.remote_cli_password()),
             acl: config.acl.clone(),
+            ntp: config.ntp.clone(),
             wifi: config.wifi.clone(),
             radio: config.radio,
             regions: config.regions.clone(),
@@ -838,6 +854,10 @@ fn decode_config_layer(
             "remote.password" => {
                 config.remote_cli_password = fit_password(&value);
             }
+            "ntp" => {
+                validate_ntp_host(&value).ok()?;
+                config.ntp = value;
+            }
             "wifi.ssid" => config.wifi.ssid = value,
             "wifi.pass" => config.wifi.password = value,
             "wifi.telnet" => config.wifi.telnet = parse_bool(&value)?,
@@ -957,6 +977,18 @@ fn decode_config_layer(
     Some(config)
 }
 
+fn validate_ntp_host(host: &str) -> Result<(), ConfigError> {
+    if host.is_empty()
+        || host.len() > 253
+        || !host
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+    {
+        return Err(ConfigError::InvalidNtpHost);
+    }
+    Ok(())
+}
+
 fn validate_wifi_config(wifi: &WifiConfig) -> Result<(), ConfigError> {
     if wifi.ssid.len() > MAX_WIFI_SSID_LEN
         || !(wifi.password.is_empty()
@@ -1030,6 +1062,10 @@ fn encode_sparse_config_text_redacted(
             write_escaped_value(&mut out, &config.remote_cli_password);
         }
         out.push('\n');
+    }
+
+    if config.ntp != defaults.ntp {
+        let _ = writeln!(&mut out, "ntp={}", config.ntp);
     }
 
     if config.wifi.ssid != defaults.wifi.ssid {
@@ -1168,6 +1204,7 @@ fn encode_full_config_text_redacted(config: &StoredAppConfig, redact_secrets: bo
     }
     out.push('\n');
 
+    let _ = writeln!(&mut out, "ntp={}", config.ntp);
     out.push_str("wifi.ssid=");
     write_escaped_value(&mut out, &config.wifi.ssid);
     out.push('\n');
@@ -1360,6 +1397,7 @@ pub enum ConfigError {
     InvalidDutyCycle,
     InvalidFloodMaxHops,
     InvalidPathHashMode,
+    InvalidNtpHost,
     InvalidWifiConfig,
     #[cfg(feature = "mqtt")]
     InvalidMqttConfig,
@@ -1383,6 +1421,7 @@ impl fmt::Display for ConfigError {
             ConfigError::InvalidDutyCycle => f.write_str("invalid duty cycle"),
             ConfigError::InvalidFloodMaxHops => f.write_str("invalid flood max hops"),
             ConfigError::InvalidPathHashMode => f.write_str("invalid path hash mode"),
+            ConfigError::InvalidNtpHost => f.write_str("invalid NTP host"),
             ConfigError::InvalidWifiConfig => f.write_str("invalid Wi-Fi setting"),
             #[cfg(feature = "mqtt")]
             ConfigError::InvalidMqttConfig => f.write_str("invalid MQTT setting"),
@@ -2090,6 +2129,42 @@ mod tests {
         assert_eq!(fit_owner_info(&("x".repeat(118) + "é")), "x".repeat(118));
         assert_eq!(fit_owner_info(&("x".repeat(117) + "é")).len(), 119);
         assert_eq!(fit_owner_info("Alice\0ignored"), "Alice");
+    }
+
+    #[test]
+    fn ntp_override_round_trips_and_resets() {
+        let mut config = AppConfig::generated_defaults([7; 32]);
+        assert_eq!(config.ntp(), "pool.ntp.org");
+        for host in ["time.example.net", "192.0.2.1"] {
+            config.set_ntp(host).unwrap();
+            let stored = StoredAppConfig::from_app_config(&config);
+            let encoded = encode_config_text(&stored);
+            let decoded = decode_config_text(&encoded, &defaults()).unwrap();
+            assert_eq!(decoded.ntp, host);
+            assert!(
+                core::str::from_utf8(&encode_full_config_text_redacted(&stored, true))
+                    .unwrap()
+                    .contains(&alloc::format!("ntp={host}\n"))
+            );
+        }
+        for host in [
+            "",
+            "time.example.net:123",
+            "https://time.example.net",
+            "a b",
+            "a\nb",
+        ] {
+            assert_eq!(config.set_ntp(host), Err(ConfigError::InvalidNtpHost));
+        }
+        config.unset("ntp").unwrap();
+        assert_eq!(config.ntp(), "pool.ntp.org");
+        assert!(
+            !core::str::from_utf8(&encode_config_text(&StoredAppConfig::from_app_config(
+                &config
+            )))
+            .unwrap()
+            .contains("ntp=")
+        );
     }
 
     #[test]

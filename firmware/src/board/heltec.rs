@@ -34,7 +34,6 @@ const OTA_AP_PREFIX: u8 = 24;
 const OTA_HTTP_PORT: u16 = 80;
 #[cfg(feature = "mqtt")]
 const MQTT_STATUS_INTERVAL_SECS: u64 = 15 * 60;
-const NTP_SERVER: &str = "pool.ntp.org";
 const NTP_PORT: u16 = 123;
 const NTP_UNIX_EPOCH_OFFSET: u32 = 2_208_988_800;
 const NTP_RETRY_SECONDS: u64 = 60;
@@ -639,7 +638,7 @@ async fn run_ota_station_mode<'a>(
             }
             {
                 let mut server = pin!(serve_ota(stack, context));
-                let mut ntp = pin!(ntp_loop(stack));
+                let mut ntp = pin!(ntp_loop(stack, context));
                 let mut telnet = pin!(crate::app::telnet::serve(stack, context));
                 #[cfg(feature = "mqtt")]
                 let mut mqtt1 = pin!(mqtt_loop(stack, context, 0));
@@ -1111,9 +1110,15 @@ async fn wait_mqtt_retry_or_restart(
     .await
 }
 
-async fn ntp_loop(stack: embassy_net::Stack<'_>) -> ! {
+async fn ntp_loop(
+    stack: embassy_net::Stack<'_>,
+    context: &crate::app::AppContext<crate::platform::EspStorage>,
+) -> ! {
     loop {
-        let delay_seconds = match sync_ntp(stack).await {
+        let host = context
+            .with_config(|config| String::from(config.ntp()))
+            .await;
+        let delay_seconds = match sync_ntp(stack, &host).await {
             Some(unix_seconds) => {
                 if crate::platform::set_wall_clock_if_forward(unix_seconds) {
                     crate::platform::log_fmt(format_args!(
@@ -1132,9 +1137,9 @@ async fn ntp_loop(stack: embassy_net::Stack<'_>) -> ! {
     }
 }
 
-async fn sync_ntp(stack: embassy_net::Stack<'_>) -> Option<u32> {
+async fn sync_ntp(stack: embassy_net::Stack<'_>, host: &str) -> Option<u32> {
     let addresses = stack
-        .dns_query(NTP_SERVER, embassy_net::dns::DnsQueryType::A)
+        .dns_query(host, embassy_net::dns::DnsQueryType::A)
         .await
         .ok()?;
     let address = addresses.first().copied()?;
