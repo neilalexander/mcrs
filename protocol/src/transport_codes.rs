@@ -3,6 +3,7 @@ use alloc::vec::Vec;
 use crate::{Result, wire::read_u16_le};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct TransportCodes {
     pub primary: u16,
     pub secondary: u16,

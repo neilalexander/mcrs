@@ -3,6 +3,7 @@ use alloc::vec::Vec;
 use crate::{Error, HashSize, MAX_PATH_SIZE, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Path {
     hash_size: HashSize,
     bytes: Vec<u8>,

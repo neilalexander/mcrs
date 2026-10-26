@@ -6,6 +6,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct DirectEncryptedPayload {
     pub destination_hash: u8,
     pub source_hash: u8,

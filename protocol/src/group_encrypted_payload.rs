@@ -6,6 +6,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct GroupEncryptedPayload {
     pub channel_hash: u8,
     pub mac: [u8; CIPHER_MAC_SIZE],

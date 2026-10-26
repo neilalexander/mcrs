@@ -6,6 +6,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct AdvertAppData {
     pub node_type: AdvertNodeType,
     pub location: Option<(i32, i32)>,

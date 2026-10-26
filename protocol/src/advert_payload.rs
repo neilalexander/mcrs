@@ -8,6 +8,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct AdvertPayload {
     pub public_key: [u8; PUB_KEY_SIZE],
     pub timestamp: u32,

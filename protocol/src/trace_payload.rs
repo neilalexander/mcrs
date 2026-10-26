@@ -6,6 +6,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct TracePayload {
     pub tag: u32,
     pub auth_code: u32,

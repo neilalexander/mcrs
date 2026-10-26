@@ -6,6 +6,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct AnonymousRequestPayload {
     pub destination_hash: u8,
     pub sender_pubkey: [u8; PUB_KEY_SIZE],
