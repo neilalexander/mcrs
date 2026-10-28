@@ -8,7 +8,7 @@ pub struct ReceivedPacket {
     pub snr_quarters: i16,
 }
 
-pub trait Receiver {
+pub trait Radio {
     async fn wait_for_read(&mut self, buffer: &mut [u8]) -> Result<ReceivedPacket, ()>;
 
     async fn channel_is_busy(&mut self) -> Result<bool, ()>;

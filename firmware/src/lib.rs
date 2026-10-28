@@ -2,13 +2,10 @@
 #![no_std]
 extern crate alloc;
 
-#[cfg(feature = "mqtt")]
-#[path = "app/mqtt/transport.rs"]
-pub mod mqtt_transport;
-
-#[cfg(feature = "mqtt")]
-#[path = "app/mqtt.rs"]
-pub mod mqtt;
+pub mod app;
+pub mod memory;
+pub mod modules;
+pub mod platform;
 
 pub mod radio_metrics;
 
@@ -16,7 +13,3 @@ pub mod radio_metrics;
 mod crypto_tests;
 #[cfg(test)]
 use crypto_tests::platform;
-
-#[cfg(test)]
-#[path = "app/periodic/schedule.rs"]
-mod advert_schedule;

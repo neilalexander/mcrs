@@ -160,7 +160,7 @@ impl NeighbourTable {
                 output,
                 " rssi={} snr={} packets={}",
                 neighbour.last_rssi,
-                mcrs_firmware::radio_metrics::SnrDb(neighbour.last_snr_quarters),
+                crate::radio_metrics::SnrDb(neighbour.last_snr_quarters),
                 neighbour.packet_count
             );
         }
@@ -275,7 +275,7 @@ fn log_discovered(neighbour: Neighbour) {
     crate::platform::log_fmt(format_args!(
         "Neighbour discovered: RSSI={} SNR={}",
         neighbour.last_rssi,
-        mcrs_firmware::radio_metrics::SnrDb(neighbour.last_snr_quarters)
+        crate::radio_metrics::SnrDb(neighbour.last_snr_quarters)
     ));
     crate::platform::log_hex_line("Neighbour hash:", &neighbour.hash(), MAX_NEIGHBOUR_HASH_LEN);
     crate::platform::log_hex_line("Neighbour pubkey:", &neighbour.public_key, 8);

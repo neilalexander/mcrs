@@ -16,12 +16,12 @@ use crate::board::heltec;
 
 #[esp_rtos::main]
 async fn main(_spawner: embassy_executor::Spawner) -> ! {
-    let platform = crate::platform::init();
+    let platform = mcrs_firmware::platform::init();
 
     init(platform).await
 }
 
-async fn init(mut platform: crate::platform::Platform) -> ! {
+async fn init(mut platform: mcrs_firmware::platform::Platform) -> ! {
     let timg0 = TimerGroup::new(platform.peripherals.TIMG0);
     let software_interrupt = SoftwareInterruptControl::new(platform.peripherals.SW_INTERRUPT);
     esp_rtos::start(timg0.timer0, software_interrupt.software_interrupt0);
@@ -37,8 +37,8 @@ async fn init(mut platform: crate::platform::Platform) -> ! {
             .with_mosi(platform.peripherals.GPIO10)
             .with_miso(platform.peripherals.GPIO11),
         Err(_) => {
-            crate::platform::log_radio_spi_config_failed();
-            crate::platform::idle_loop();
+            mcrs_firmware::platform::log_radio_spi_config_failed();
+            mcrs_firmware::platform::idle_loop();
         }
     };
 
@@ -56,16 +56,16 @@ async fn init(mut platform: crate::platform::Platform) -> ! {
                 .with_scl(platform.peripherals.GPIO18);
 
             Some(
-                crate::modules::ssd1306::Display::new_with_power_active_level(
+                mcrs_firmware::modules::ssd1306::Display::new_with_power_active_level(
                     i2c,
                     reset,
                     power,
-                    crate::modules::ssd1306::PowerActiveLevel::Low,
+                    mcrs_firmware::modules::ssd1306::PowerActiveLevel::Low,
                 ),
             )
         }
         Err(_) => {
-            crate::platform::log_display_i2c_config_failed();
+            mcrs_firmware::platform::log_display_i2c_config_failed();
             None
         }
     };
@@ -113,7 +113,7 @@ async fn init(mut platform: crate::platform::Platform) -> ! {
         reset: Output::new(platform.peripherals.GPIO12, Level::High, output_config),
         dio1: Input::new(platform.peripherals.GPIO14, input_config),
         busy: Input::new(platform.peripherals.GPIO13, input_config),
-        board_config: crate::modules::sx1262::BoardConfig::heltec_v3(),
+        board_config: mcrs_firmware::modules::sx1262::BoardConfig::heltec_v3(),
         frontend: heltec::NoRadioFrontend,
     };
 
@@ -124,7 +124,7 @@ async fn init(mut platform: crate::platform::Platform) -> ! {
                 .into_async(),
         ),
         Err(_) => {
-            crate::platform::log_cli_uart_config_failed();
+            mcrs_firmware::platform::log_cli_uart_config_failed();
             None
         }
     };
@@ -133,10 +133,11 @@ async fn init(mut platform: crate::platform::Platform) -> ! {
         wifi: platform.peripherals.WIFI,
     };
 
-    let mut storage = crate::platform::init_storage(crate::board::STORAGE_LAYOUT);
-    let defaults = crate::app::config::AppConfig::generated_defaults(identity_seed);
-    let config = crate::app::config::AppConfig::load_or_create(&mut storage, defaults);
-    let context = crate::app::AppContext::new(config, storage, crate::board::MEMORY_PROFILE);
+    let mut storage = mcrs_firmware::platform::init_storage(crate::board::STORAGE_LAYOUT);
+    let defaults = mcrs_firmware::app::config::AppConfig::generated_defaults(identity_seed);
+    let config = mcrs_firmware::app::config::AppConfig::load_or_create(&mut storage, defaults);
+    let context =
+        mcrs_firmware::app::AppContext::new(config, storage, crate::board::MEMORY_PROFILE);
     heltec::log_memory_profile(crate::board::MEMORY_PROFILE);
     heltec::log_effective_config(&context).await;
     heltec::publish_battery_sample(&mut battery, &context).await;
