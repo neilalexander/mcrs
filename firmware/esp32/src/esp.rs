@@ -17,10 +17,11 @@ use esp_hal::{clock::CpuClock, peripherals::Peripherals, rtc_cntl::Rtc, time::In
 use esp_println::{print, println};
 
 use esp_backtrace as _;
+use mcrs_repeater::{VERSION, radio_metrics::SnrDb};
 
 // Use the HAL's supported descriptor section, preserving the git-derived version.
 esp_bootloader_esp_idf::esp_app_desc!(
-    env!("MESHCORE_FIRMWARE_VERSION"),
+    VERSION,
     env!("CARGO_PKG_NAME"),
     esp_bootloader_esp_idf::BUILD_TIME,
     esp_bootloader_esp_idf::BUILD_DATE,
@@ -66,7 +67,7 @@ pub fn random_u32() -> u32 {
     esp_hal::rng::Rng::new().random()
 }
 
-pub fn init_storage(layout: crate::platform::storage::Layout) -> EspStorage {
+pub fn init_storage(layout: mcrs_repeater::platform::storage::Layout) -> EspStorage {
     let mut flash = RomFlash;
     let mut partition_table = [0u8; esp_bootloader_esp_idf::partitions::PARTITION_TABLE_MAX_LEN];
     let inner =
@@ -81,7 +82,7 @@ pub fn init_storage(layout: crate::platform::storage::Layout) -> EspStorage {
                 if partition.is_read_only() || partition.len() < layout.partition_size as u32 {
                     None
                 } else {
-                    match crate::platform::storage::LittleFsStorage::new(
+                    match crate::littlefs::LittleFsStorage::new(
                         FlashPartition {
                             offset: partition.offset(),
                             size: partition.len() as usize,
@@ -346,7 +347,7 @@ impl OtaUpdate {
 }
 
 pub struct EspStorage {
-    inner: Option<crate::platform::storage::LittleFsStorage>,
+    inner: Option<crate::littlefs::LittleFsStorage>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -365,8 +366,8 @@ pub enum OtaError {
     InvalidImage,
 }
 
-impl From<crate::platform::storage::Error> for OtaError {
-    fn from(_error: crate::platform::storage::Error) -> Self {
+impl From<mcrs_repeater::platform::storage::Error> for OtaError {
+    fn from(_error: mcrs_repeater::platform::storage::Error) -> Self {
         Self::Storage
     }
 }
@@ -383,15 +384,15 @@ pub struct OtaUpdate {
     saw_header: bool,
 }
 
-impl crate::platform::storage::Storage for EspStorage {
+impl mcrs_repeater::platform::storage::Storage for EspStorage {
     fn read(
         &mut self,
         key: &str,
         buffer: &mut [u8],
-    ) -> Result<usize, crate::platform::storage::Error> {
+    ) -> Result<usize, mcrs_repeater::platform::storage::Error> {
         self.inner
             .as_mut()
-            .ok_or(crate::platform::storage::Error::NotAvailable)?
+            .ok_or(mcrs_repeater::platform::storage::Error::NotAvailable)?
             .read(key, buffer)
     }
 
@@ -399,10 +400,10 @@ impl crate::platform::storage::Storage for EspStorage {
         &mut self,
         key: &str,
         data: &[u8],
-    ) -> Result<(), crate::platform::storage::Error> {
+    ) -> Result<(), mcrs_repeater::platform::storage::Error> {
         self.inner
             .as_mut()
-            .ok_or(crate::platform::storage::Error::NotAvailable)?
+            .ok_or(mcrs_repeater::platform::storage::Error::NotAvailable)?
             .write_atomic(key, data)
     }
 }
@@ -457,7 +458,7 @@ impl littlefs_rust::BlockDevice for FlashPartition {
 struct RomFlash;
 
 impl embedded_storage::ReadStorage for RomFlash {
-    type Error = crate::platform::storage::Error;
+    type Error = mcrs_repeater::platform::storage::Error;
 
     fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
         read_flash(offset, bytes)
@@ -479,7 +480,7 @@ impl embedded_storage::Storage for RomFlash {
 }
 
 impl embedded_storage::nor_flash::ErrorType for RomFlash {
-    type Error = crate::platform::storage::Error;
+    type Error = mcrs_repeater::platform::storage::Error;
 }
 
 impl embedded_storage::nor_flash::ReadNorFlash for RomFlash {
@@ -500,14 +501,14 @@ impl embedded_storage::nor_flash::NorFlash for RomFlash {
 
     fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> {
         if from > to {
-            return Err(crate::platform::storage::Error::Corrupt);
+            return Err(mcrs_repeater::platform::storage::Error::Corrupt);
         }
         erase_flash_range(from, to.saturating_sub(from) as usize)
     }
 
     fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
         if !bytes.len().is_multiple_of(4) {
-            return Err(crate::platform::storage::Error::BufferTooSmall);
+            return Err(mcrs_repeater::platform::storage::Error::BufferTooSmall);
         }
         write_ota_aligned(offset, bytes)
     }
@@ -515,7 +516,10 @@ impl embedded_storage::nor_flash::NorFlash for RomFlash {
 
 impl embedded_storage::nor_flash::MultiwriteNorFlash for RomFlash {}
 
-fn read_flash(offset: u32, bytes: &mut [u8]) -> Result<(), crate::platform::storage::Error> {
+fn read_flash(
+    offset: u32,
+    bytes: &mut [u8],
+) -> Result<(), mcrs_repeater::platform::storage::Error> {
     let aligned_offset = offset & !3;
     let prefix_len = (offset - aligned_offset) as usize;
     let aligned_len = align_up(prefix_len + bytes.len(), 4);
@@ -529,7 +533,7 @@ fn read_flash(offset: u32, bytes: &mut [u8]) -> Result<(), crate::platform::stor
         )
     };
     if result != esp_rom_sys::rom::spiflash::ESP_ROM_SPIFLASH_RESULT_OK {
-        return Err(crate::platform::storage::Error::Io);
+        return Err(mcrs_repeater::platform::storage::Error::Io);
     }
 
     let aligned_bytes = words_as_bytes(&words);
@@ -538,9 +542,12 @@ fn read_flash(offset: u32, bytes: &mut [u8]) -> Result<(), crate::platform::stor
 }
 
 #[esp_hal::ram]
-fn write_flash_words(offset: u32, words: &[u32]) -> Result<(), crate::platform::storage::Error> {
+fn write_flash_words(
+    offset: u32,
+    words: &[u32],
+) -> Result<(), mcrs_repeater::platform::storage::Error> {
     if !offset.is_multiple_of(4) {
-        return Err(crate::platform::storage::Error::Io);
+        return Err(mcrs_repeater::platform::storage::Error::Io);
     }
 
     let result = critical_section::with(|_| unsafe {
@@ -553,13 +560,16 @@ fn write_flash_words(offset: u32, words: &[u32]) -> Result<(), crate::platform::
     if result == esp_rom_sys::rom::spiflash::ESP_ROM_SPIFLASH_RESULT_OK {
         Ok(())
     } else {
-        Err(crate::platform::storage::Error::Io)
+        Err(mcrs_repeater::platform::storage::Error::Io)
     }
 }
 
-fn write_ota_aligned(offset: u32, bytes: &[u8]) -> Result<(), crate::platform::storage::Error> {
+fn write_ota_aligned(
+    offset: u32,
+    bytes: &[u8],
+) -> Result<(), mcrs_repeater::platform::storage::Error> {
     if !bytes.len().is_multiple_of(4) {
-        return Err(crate::platform::storage::Error::BufferTooSmall);
+        return Err(mcrs_repeater::platform::storage::Error::BufferTooSmall);
     }
 
     let mut offset = offset;
@@ -579,7 +589,10 @@ fn write_ota_aligned(offset: u32, bytes: &[u8]) -> Result<(), crate::platform::s
     Ok(())
 }
 
-fn erase_flash_range(offset: u32, len: usize) -> Result<(), crate::platform::storage::Error> {
+fn erase_flash_range(
+    offset: u32,
+    len: usize,
+) -> Result<(), mcrs_repeater::platform::storage::Error> {
     if len == 0 {
         return Ok(());
     }
@@ -594,9 +607,9 @@ fn erase_flash_range(offset: u32, len: usize) -> Result<(), crate::platform::sto
 }
 
 #[esp_hal::ram]
-fn erase_flash_sector(offset: u32) -> Result<(), crate::platform::storage::Error> {
+fn erase_flash_sector(offset: u32) -> Result<(), mcrs_repeater::platform::storage::Error> {
     if !(offset as usize).is_multiple_of(FLASH_SECTOR_SIZE) {
-        return Err(crate::platform::storage::Error::Io);
+        return Err(mcrs_repeater::platform::storage::Error::Io);
     }
 
     let result = critical_section::with(|_| unsafe {
@@ -605,7 +618,7 @@ fn erase_flash_sector(offset: u32) -> Result<(), crate::platform::storage::Error
     if result == esp_rom_sys::rom::spiflash::ESP_ROM_SPIFLASH_RESULT_OK {
         Ok(())
     } else {
-        Err(crate::platform::storage::Error::Io)
+        Err(mcrs_repeater::platform::storage::Error::Io)
     }
 }
 
@@ -828,31 +841,20 @@ fn retained_wall_clock_checksum(unix_seconds: u32, rtc_seconds: u32) -> u32 {
         ^ WALL_CLOCK_RTC_CHECK
 }
 
-pub fn battery_level_percent() -> Option<u8> {
-    None
-}
-
-pub fn battery_millivolts() -> Option<u16> {
-    None
-}
-
 fn init_heap() {
     esp_alloc::heap_allocator!(size: HEAP_SIZE);
 }
 
-pub fn log_starting() {
-    println!(
-        "MCRS firmware {} starting on ESP",
-        env!("MESHCORE_FIRMWARE_VERSION")
-    );
+fn log_starting() {
+    println!("MCRS firmware {} starting on ESP", VERSION);
     esp_rom_sys::rom::ets_delay_us(10_000);
 }
 
-pub fn log_fmt(args: fmt::Arguments<'_>) {
+fn log_fmt(args: fmt::Arguments<'_>) {
     println!("{}", args);
 }
 
-pub fn log_hex_line(label: &str, bytes: &[u8], max_len: usize) {
+fn log_hex_line(label: &str, bytes: &[u8], max_len: usize) {
     print!("{}", label);
     for byte in bytes.iter().take(max_len) {
         print!(" {:02x}", byte);
@@ -863,7 +865,7 @@ pub fn log_hex_line(label: &str, bytes: &[u8], max_len: usize) {
     println!();
 }
 
-pub fn log_i8_line(label: &str, values: &[i8], max_len: usize) {
+fn log_i8_line(label: &str, values: &[i8], max_len: usize) {
     print!("{}", label);
     for value in values.iter().take(max_len) {
         print!(" {}", value);
@@ -874,48 +876,48 @@ pub fn log_i8_line(label: &str, values: &[i8], max_len: usize) {
     println!();
 }
 
-pub fn log_radio_spi_config_failed() {
+fn log_radio_spi_config_failed() {
     println!("Failed to configure SX1262 SPI bus");
 }
 
-pub fn log_display_i2c_config_failed() {
+fn log_display_i2c_config_failed() {
     println!("Failed to configure OLED I2C bus");
 }
 
 #[cfg(not(feature = "board-heltec-v4"))]
-pub fn log_cli_uart_config_failed() {
+fn log_cli_uart_config_failed() {
     println!("Failed to configure CLI UART");
 }
 
-pub fn log_display_init_failed() {
+fn log_display_init_failed() {
     println!("Failed to initialize OLED display");
 }
 
-pub fn log_display_write_failed() {
+fn log_display_write_failed() {
     println!("Failed to write OLED display");
 }
 
-pub fn log_radio_initialized() {
+fn log_radio_initialized() {
     println!("SX1262 initialized");
 }
 
-pub fn log_radio_init_failed() {
+fn log_radio_init_failed() {
     println!("Failed to initialize SX1262");
 }
 
-pub fn log_radio_packet_received(len: usize, rssi: i16, snr_quarters: i16, _payload: &[u8]) {
+fn log_radio_packet_received(len: usize, rssi: i16, snr_quarters: i16, _payload: &[u8]) {
     println!(
         "SX1262 received packet: {} bytes, RSSI {}, SNR {}",
         len,
         rssi,
-        crate::radio_metrics::SnrDb(snr_quarters)
+        SnrDb(snr_quarters)
     );
 }
 
-pub fn log_radio_receive_failed() {
+fn log_radio_receive_failed() {
     println!("SX1262 receive failed");
 }
 
-pub fn log_radio_receive_error(stage: &str, error: &str) {
+fn log_radio_receive_error(stage: &str, error: &str) {
     println!("SX1262 receive {} error: {}", stage, error);
 }

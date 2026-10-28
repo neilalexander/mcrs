@@ -21,3 +21,4 @@ compile_error!("Select only one firmware board feature");
 
 mod board;
 mod esp;
+mod littlefs;

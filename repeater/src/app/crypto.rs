@@ -106,7 +106,7 @@ pub fn encode_login_response(
     reply_path: Path,
 ) -> Option<Vec<u8>> {
     let response = RepeaterLoginResponsePlaintext {
-        server_timestamp: crate::platform::now_seconds(),
+        server_timestamp: todo!("now seconds"),
         keep_alive_interval: 0,
         legacy_permissions: u8::from(acl_permissions == PERM_ACL_ADMIN),
         acl_permissions,
@@ -131,7 +131,7 @@ pub fn encode_cli_text_response(
     message: &[u8],
     reply_path: Path,
 ) -> Option<Vec<u8>> {
-    let mut timestamp = crate::platform::now_seconds();
+    let mut timestamp: u32 = todo!("now seconds");
     if timestamp == request_timestamp {
         timestamp = timestamp.wrapping_add(1);
     }
@@ -242,10 +242,10 @@ fn response_nonce(
     responder_public_key: &[u8; 32],
 ) -> [u8; 4] {
     let Ok(mut mac) = <HmacSha256 as KeyInit>::new_from_slice(shared_secret) else {
-        return crate::platform::now_seconds().to_le_bytes();
+        return todo!("now seconds .to_le_bytes();");
     };
 
-    mac.update(&crate::platform::now_millis().to_le_bytes());
+    mac.update(todo!("&crate::platform::now_millis().to_le_bytes()"));
     mac.update(requester_public_key);
     mac.update(responder_public_key);
 

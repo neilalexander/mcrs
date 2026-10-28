@@ -9,7 +9,7 @@ pub mod identity;
 pub mod mqtt;
 
 mod neighbours;
-pub mod ota;
+//pub mod ota;
 pub mod periodic;
 mod protocol_log;
 pub mod regions;
@@ -25,7 +25,7 @@ use core::{
     sync::atomic::{AtomicI16, AtomicU8, AtomicU16, AtomicU32, Ordering},
     task::{Poll, Waker},
 };
-use defmt::{debug, error, warn};
+use defmt::{debug, error, info, warn};
 use embassy_sync::{
     blocking_mutex::{Mutex as BlockingMutex, raw::CriticalSectionRawMutex},
     channel::Channel,
@@ -816,7 +816,7 @@ impl SortedOutboundChannel {
         })
     }
 
-    fn retry_current<P: Platform, S>(
+    fn retry_current<P: Platform, S: Storage>(
         &self,
         context: &AppContext<P, S>,
         mut queued: QueuedTransmit,
@@ -1080,7 +1080,6 @@ async fn transmit_eligible_outbound<P: Platform, R, S: Storage, D>(
     airtime_budget: &mut AirtimeBudget,
 ) where
     R: crate::modules::Radio,
-    S: crate::platform::storage::Storage,
     D: DelayNs,
 {
     let (radio_config, duty_cycle_percent, repeat_enabled) = context
@@ -1123,7 +1122,7 @@ async fn transmit_eligible_outbound<P: Platform, R, S: Storage, D>(
         .is_err()
     {
         context.record_packet_error();
-        crate::platform::log_fmt(format_args!("Outbound packet: transmit failed"));
+        warn!("Outbound packet: transmit failed");
         let dedup_signature = queued.dedup_signature;
         let retry_delay_ms = OUTBOUND_RETRY_DELAY_MIN_MS
             + context.platform.random_u32()
@@ -1131,19 +1130,16 @@ async fn transmit_eligible_outbound<P: Platform, R, S: Storage, D>(
         if let Some(retry_delay_ms) =
             context
                 .outbound
-                .retry_current(queued, context, retry_delay_ms)
+                .retry_current(context, queued, retry_delay_ms)
         {
-            crate::platform::log_fmt(format_args!(
-                "Outbound packet: retry scheduled in {} ms",
-                retry_delay_ms
-            ));
+            info!("Outbound packet: retry scheduled in {} ms", retry_delay_ms);
         } else {
             context.finish_forward(dedup_signature, false);
             context.outbound.complete_current();
-            crate::platform::log_fmt(format_args!(
+            error!(
                 "Outbound packet: dropped after {} failed attempts",
                 OUTBOUND_MAX_ATTEMPTS
-            ));
+            );
         }
         return;
     }
@@ -1161,42 +1157,46 @@ async fn transmit_eligible_outbound<P: Platform, R, S: Storage, D>(
 
     let airtime_ms = radio_config.packet_airtime_ms(queued.packet.len());
     context.record_tx_airtime(airtime_ms);
-    airtime_budget.record_transmit(self.platform.now_millis(), airtime_ms, duty_cycle_percent);
+    airtime_budget.record_transmit(
+        context.platform.now_millis(),
+        airtime_ms,
+        duty_cycle_percent,
+    );
     if duty_cycle_percent >= 100 {
         match region {
-            Some(region) => crate::platform::log_fmt(format_args!(
+            Some(region) => info!(
                 "Outbound packet: transmitted {} bytes region={} airtime={}ms dutycycle=100% budget=unlimited",
                 queued.packet.len(),
                 region,
                 airtime_ms
-            )),
-            None => crate::platform::log_fmt(format_args!(
+            ),
+            None => info!(
                 "Outbound packet: transmitted {} bytes airtime={}ms dutycycle=100% budget=unlimited",
                 queued.packet.len(),
                 airtime_ms
-            )),
+            ),
         }
     } else {
         match region {
-            Some(region) => crate::platform::log_fmt(format_args!(
+            Some(region) => info!(
                 "Outbound packet: transmitted {} bytes region={} airtime={}ms dutycycle={}% budget={}ms",
                 queued.packet.len(),
                 region,
                 airtime_ms,
                 duty_cycle_percent,
                 airtime_budget.available_ms
-            )),
-            None => crate::platform::log_fmt(format_args!(
+            ),
+            None => info!(
                 "Outbound packet: transmitted {} bytes airtime={}ms dutycycle={}% budget={}ms",
                 queued.packet.len(),
                 airtime_ms,
                 duty_cycle_percent,
                 airtime_budget.available_ms
-            )),
+            ),
         }
     }
     if queued.reboot_after_tx {
-        crate::platform::reboot();
+        context.platform.reboot();
     }
 }
 
@@ -1215,7 +1215,7 @@ where
     let (radio_config, duty_cycle_percent) = context
         .with_config(|config| (config.radio(), config.duty_cycle_percent()))
         .await;
-    let now_ms = self.platform.now_millis();
+    let now_ms = context.platform.now_millis();
     let next = context.outbound.next_after_reset();
     let budget_ready_ms = match next {
         Some(_) if duty_cycle_percent >= 100 => now_ms,
@@ -1248,7 +1248,7 @@ where
     };
 
     let wait_ms = eligible_at_ms
-        .saturating_sub(self.platform.now_millis())
+        .saturating_sub(context.platform.now_millis())
         .min(u32::MAX as u64) as u32;
     let mut timer = pin!(delay.delay_ms(wait_ms));
     poll_fn(|cx| {
@@ -1282,7 +1282,7 @@ async fn apply_repeater_rules<P: Platform, S: Storage>(
             queue_repeater_packet(context, packet, signature, node_hash, "capture").await;
         }
         ForwardDecision::Drop(reason) => {
-            crate::platform::log_fmt(format_args!("Protocol repeater: drop: {}", reason));
+            info!("Protocol repeater: drop: {}", reason);
         }
         ForwardDecision::DoNotForward => {}
     }
@@ -1299,15 +1299,15 @@ async fn queue_repeater_packet<P: Platform, S: Storage>(
 {
     let delay_ms = forwarding_delay_ms(signature, node_hash);
     let Ok(encoded) = packet.encode() else {
-        crate::platform::log_fmt(format_args!("Protocol repeater: {} encode failed", action));
+        error!("Protocol repeater: {} encode failed", action);
         return;
     };
     if encoded.len() > FORWARD_BUFFER_LEN {
-        crate::platform::log_fmt(format_args!(
+        warn!(
             "Protocol repeater: encoded {} too long: {} bytes",
             action,
             encoded.len()
-        ));
+        );
         return;
     }
 
@@ -1320,19 +1320,19 @@ async fn queue_repeater_packet<P: Platform, S: Storage>(
                 &context.duplicates_direct,
                 &context.duplicates_flood,
             );
-            crate::platform::log_fmt(format_args!("Protocol repeater: drop: duplicate"));
+            info!("Protocol repeater: drop: duplicate");
             return;
         }
         Err(OutboundError::QueueFull) => {
-            crate::platform::log_fmt(format_args!("Protocol repeater: outbound queue full"));
+            error!("Protocol repeater: outbound queue full");
             return;
         }
     }
 
-    crate::platform::log_fmt(format_args!(
+    info!(
         "Protocol repeater: queued {} {} bytes, eligible in {} ms",
         action, encoded_len, delay_ms
-    ));
+    );
 }
 
 async fn prepare_forward<P: Platform, S: Storage>(

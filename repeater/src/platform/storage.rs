@@ -1,7 +1,3 @@
-mod littlefs;
-
-pub use littlefs::LittleFsStorage;
-
 pub trait Storage {
     fn read(&mut self, key: &str, buffer: &mut [u8]) -> Result<usize, Error>;
     fn write_atomic(&mut self, key: &str, data: &[u8]) -> Result<(), Error>;

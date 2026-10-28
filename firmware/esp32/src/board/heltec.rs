@@ -21,10 +21,12 @@ use static_cell::StaticCell;
 pub type RadioSpi = Spi<'static, Blocking>;
 pub type RadioOutput = Output<'static>;
 pub type RadioInput = Input<'static>;
+
 #[cfg(not(feature = "board-heltec-v4"))]
 pub type CliSerial = esp_hal::uart::Uart<'static, esp_hal::Async>;
 #[cfg(feature = "board-heltec-v4")]
 pub type CliSerial = esp_hal::usb_serial_jtag::UsbSerialJtag<'static, esp_hal::Async>;
+
 pub type ButtonInput = Input<'static>;
 pub type BatteryAdc = Adc<'static, ADC1<'static>, Blocking>;
 pub type BatterySensePin = AdcPin<GPIO1<'static>, ADC1<'static>, AdcCalCurve<ADC1<'static>>>;
@@ -123,8 +125,8 @@ where
     RESET: embedded_hal::digital::OutputPin,
     POWER: embedded_hal::digital::OutputPin,
 {
-    let mut display_delay = mcrs_repeater::platform::radio_delay();
-    let mut button_delay = mcrs_repeater::platform::radio_delay();
+    let mut display_delay = crate::esp::radio_delay();
+    let mut button_delay = crate::esp::radio_delay();
 
     let Some(display) = &mut display else {
         loop {
@@ -388,7 +390,7 @@ where
     FRONTEND: RadioFrontend,
 {
     let mut cli = mcrs_repeater::app::cli::Cli::new();
-    let mut periodic_delay = mcrs_repeater::platform::radio_delay();
+    let mut periodic_delay = crate::esp::radio_delay();
     let mut display_future = pin!(display_task(display, prg_button, &context));
     let mut radio_future = pin!(radio_task(radio, &context));
     let mut handler_future = pin!(mcrs_repeater::app::handler_loop(&context));
@@ -1431,7 +1433,7 @@ async fn battery_task(
     mut battery: BatteryMonitor,
     context: &mcrs_repeater::app::AppContext<mcrs_repeater::platform::EspStorage>,
 ) -> ! {
-    let mut delay = mcrs_repeater::platform::radio_delay();
+    let mut delay = crate::esp::radio_delay();
 
     loop {
         publish_battery_sample_with_delay(&mut battery, context, &mut delay).await;
@@ -1444,7 +1446,7 @@ pub async fn publish_battery_sample(
     battery: &mut BatteryMonitor,
     context: &mcrs_repeater::app::AppContext<mcrs_repeater::platform::EspStorage>,
 ) {
-    let mut delay = mcrs_repeater::platform::radio_delay();
+    let mut delay = crate::esp::radio_delay();
     publish_battery_sample_with_delay(battery, context, &mut delay).await;
 }
 
@@ -1526,7 +1528,7 @@ where
         reset,
         dio1,
         busy,
-        mcrs_repeater::platform::radio_delay(),
+        crate::esp::radio_delay(),
         board_config,
         receive_config,
     )
@@ -1540,7 +1542,7 @@ where
     };
 
     mcrs_repeater::platform::log_radio_initialized();
-    let mut app_delay = mcrs_repeater::platform::radio_delay();
+    let mut app_delay = crate::esp::radio_delay();
     let mut receiver = BoardRadio { receiver, frontend };
     mcrs_repeater::app::radio_loop(&mut receiver, context, &mut app_delay).await;
 }

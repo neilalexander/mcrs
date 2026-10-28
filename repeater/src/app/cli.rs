@@ -1,6 +1,9 @@
 extern crate alloc;
 
-use super::AppContext;
+use crate::{
+    app::AppContext,
+    platform::{Platform, storage::Storage},
+};
 use alloc::{format, string::String, vec, vec::Vec};
 use core::fmt::Write;
 use defmt::{debug, info, warn};
@@ -81,10 +84,11 @@ impl Cli {
         }
     }
 
-    pub async fn accept_byte<Store>(&mut self, byte: u8, context: &AppContext<Store>)
-    where
-        Store: crate::platform::storage::Storage,
-    {
+    pub async fn accept_byte<P: Platform, S: Storage>(
+        &mut self,
+        byte: u8,
+        context: &AppContext<P, S>,
+    ) {
         match byte {
             b'\r' | b'\n' => self.submit(context).await,
             0x08 | 0x7f => {
@@ -102,10 +106,7 @@ impl Cli {
         }
     }
 
-    async fn submit<Store>(&mut self, context: &AppContext<Store>)
-    where
-        Store: crate::platform::storage::Storage,
-    {
+    async fn submit<P: Platform, S: Storage>(&mut self, context: &AppContext<P, S>) {
         if self.len == 0 {
             return;
         }
@@ -116,28 +117,22 @@ impl Cli {
         if let Some(response) = handle_command(command.trim(), context, CliRequest::serial()).await
             && response.post_reply == Some(PostReplyAction::Reboot)
         {
-            crate::platform::reboot();
+            context.platform.reboot();
         }
     }
 }
 
-pub async fn handle_privileged_tcp_command<Store>(
+pub async fn handle_privileged_tcp_command<P: Platform, S: Storage>(
     command: &str,
-    context: &AppContext<Store>,
-) -> Option<CliResponse>
-where
-    Store: crate::platform::storage::Storage,
-{
+    context: &AppContext<P, S>,
+) -> Option<CliResponse> {
     handle_command(command.trim(), context, CliRequest::tcp()).await
 }
 
-pub async fn handle_remote_packet<Store>(
+pub async fn handle_remote_packet<P: Platform, S: Storage>(
     packet: &Packet,
-    context: &AppContext<Store>,
-) -> Option<alloc::vec::Vec<u8>>
-where
-    Store: crate::platform::storage::Storage,
-{
+    context: &AppContext<P, S>,
+) -> Option<alloc::vec::Vec<u8>> {
     if let Payload::AnonymousRequest(payload) = &packet.payload {
         let reply_path = if packet.route_type.is_flood() {
             packet.normal_path()?.reversed()
@@ -170,10 +165,10 @@ where
     }
 }
 
-async fn handle_anonymous_request(
+async fn handle_anonymous_request<P: Platform, S: Storage>(
     payload: &mcrs_protocol::AnonymousRequestPayload,
     reply_path: mcrs_protocol::Path,
-    context: &AppContext<impl crate::platform::storage::Storage>,
+    context: &AppContext<P, S>,
 ) -> Option<alloc::vec::Vec<u8>> {
     let (decrypted, responder_public_key) = context
         .with_identity(|identity| {
@@ -206,7 +201,7 @@ async fn handle_anonymous_request(
         return None;
     };
     let body = body.trim();
-    let now_ms = crate::platform::now_millis();
+    let now_ms = context.platform.now_millis();
 
     let privilege = context
         .with_config(|config| {
@@ -264,11 +259,11 @@ async fn handle_anonymous_request(
     )
 }
 
-async fn handle_authenticated_text_message(
+async fn handle_authenticated_text_message<P: Platform, S: Storage>(
     payload: &mcrs_protocol::DirectEncryptedPayload,
-    context: &AppContext<impl crate::platform::storage::Storage>,
+    context: &AppContext<P, S>,
 ) -> Option<alloc::vec::Vec<u8>> {
-    let now_ms = crate::platform::now_millis();
+    let now_ms = context.platform.now_millis();
     let sessions = context
         .remote_sessions_matching_source_hash(payload.source_hash, now_ms)
         .await;
@@ -343,10 +338,10 @@ fn split_cli_correlation_prefix(command: &str) -> (Option<&str>, &str) {
     }
 }
 
-async fn handle_authenticated_request(
+async fn handle_authenticated_request<P: Platform, S: Storage>(
     packet: &Packet,
     payload: &mcrs_protocol::DirectEncryptedPayload,
-    context: &AppContext<impl crate::platform::storage::Storage>,
+    context: &AppContext<P, S>,
 ) -> Option<Vec<u8>> {
     let flood_region = if packet.route_type.is_flood() {
         let region = context
@@ -356,7 +351,7 @@ async fn handle_authenticated_request(
     } else {
         None
     };
-    let now_ms = crate::platform::now_millis();
+    let now_ms = context.platform.now_millis();
     let decrypted = decrypt_authenticated_payload(payload, context, now_ms).await?;
     let plaintext = RequestPlaintext::decode(&decrypted.plaintext).ok()?;
     let responder_public_key = context.public_key().await;
@@ -400,9 +395,9 @@ async fn handle_authenticated_request(
     )
 }
 
-async fn decrypt_authenticated_payload(
+async fn decrypt_authenticated_payload<P: Platform, S: Storage>(
     payload: &mcrs_protocol::DirectEncryptedPayload,
-    context: &AppContext<impl crate::platform::storage::Storage>,
+    context: &AppContext<P, S>,
     now_ms: u64,
 ) -> Option<super::crypto::AuthenticatedPlaintext> {
     let sessions = context
@@ -423,9 +418,9 @@ async fn decrypt_authenticated_payload(
         .await
 }
 
-async fn handle_binary_request(
+async fn handle_binary_request<P: Platform, S: Storage>(
     request: &RequestPlaintext,
-    context: &AppContext<impl crate::platform::storage::Storage>,
+    context: &AppContext<P, S>,
     now_ms: u64,
     privilege: super::remote::RemotePrivilege,
 ) -> Option<Vec<u8>> {
@@ -480,16 +475,20 @@ async fn handle_binary_request(
     }
 }
 
-async fn handle_anonymous_subrequest(
+async fn handle_anonymous_subrequest<P: Platform, S: Storage>(
     body: &[u8],
     request_timestamp: u32,
-    context: &AppContext<impl crate::platform::storage::Storage>,
+    context: &AppContext<P, S>,
 ) -> Option<Vec<u8>> {
     match body.first().copied()? {
         ANON_REQ_TYPE_BASIC => Some(
             context
                 .with_config(|config| {
-                    anonymous_basic_response(request_timestamp, config.repeat_enabled())
+                    anonymous_basic_response(
+                        request_timestamp,
+                        context.platform.now_seconds(),
+                        config.repeat_enabled(),
+                    )
                 })
                 .await,
         ),
@@ -499,7 +498,7 @@ async fn handle_anonymous_subrequest(
                 .await;
             let response = RepeaterResponsePlaintext {
                 reflected_tag: request_timestamp,
-                responder_time: crate::platform::now_seconds(),
+                responder_time: context.platform.now_seconds(),
                 body: regions.into_bytes(),
             };
             Some(response.encode())
@@ -511,6 +510,7 @@ async fn handle_anonymous_subrequest(
                         request_timestamp,
                         config.node_name(),
                         config.owner_info(),
+                        context.platform.now_seconds(),
                     )
                 })
                 .await,
@@ -523,10 +523,14 @@ async fn handle_anonymous_subrequest(
     }
 }
 
-fn anonymous_basic_response(request_timestamp: u32, repeat_enabled: bool) -> Vec<u8> {
+fn anonymous_basic_response(
+    request_timestamp: u32,
+    responder_time: u32,
+    repeat_enabled: bool,
+) -> Vec<u8> {
     let response = RepeaterResponsePlaintext {
         reflected_tag: request_timestamp,
-        responder_time: crate::platform::now_seconds(),
+        responder_time,
         body: vec![repeater_features(repeat_enabled)],
     };
     response.encode()
@@ -543,14 +547,19 @@ fn owner_info_response(request_timestamp: u32, node_name: &str, owner_info: &str
     response
 }
 
-fn anonymous_owner_response(request_timestamp: u32, node_name: &str, owner_info: &str) -> Vec<u8> {
+fn anonymous_owner_response(
+    request_timestamp: u32,
+    node_name: &str,
+    owner_info: &str,
+    responder_time: u32,
+) -> Vec<u8> {
     let mut body = Vec::new();
     body.extend_from_slice(node_name.as_bytes());
     body.push(b'\n');
     body.extend_from_slice(owner_info.as_bytes());
     let response = RepeaterResponsePlaintext {
         reflected_tag: request_timestamp,
-        responder_time: crate::platform::now_seconds(),
+        responder_time,
         body,
     };
     response.encode()
@@ -603,9 +612,9 @@ fn encode_status_binary_response(status: super::Status, out: &mut Vec<u8>) {
     write_u32(stats, &mut offset, status.packet_errors);
 }
 
-async fn handle_command(
+async fn handle_command<P: Platform, S: Storage>(
     command: &str,
-    context: &AppContext<impl crate::platform::storage::Storage>,
+    context: &AppContext<P, S>,
     request: CliRequest,
 ) -> Option<CliResponse> {
     if !request.allows_command(command) {
@@ -614,7 +623,7 @@ async fn handle_command(
     }
 
     if let Some(seconds) = command.strip_prefix("time ").map(str::trim) {
-        let output = handle_time_set_command(seconds, request);
+        let output = handle_time_set_command(context, seconds, request);
         return Some(command_response(request, output));
     }
 
@@ -638,10 +647,10 @@ async fn handle_command(
         return Some(command_response(request, output));
     }
 
-    if command == "ota" || command.starts_with("ota ") {
-        let output = handle_ota_command(command, context, request);
-        return Some(command_response(request, output));
-    }
+    // if command == "ota" || command.starts_with("ota ") {
+    //     let output = handle_ota_command(command, context, request);
+    //     return Some(command_response(request, output));
+    // }
 
     #[cfg(feature = "mqtt")]
     if command == "mqtt status" {
@@ -784,7 +793,7 @@ async fn handle_command(
             if !request.privilege.is_passworded() {
                 denied_text()
             } else {
-                let now_ms = crate::platform::now_millis();
+                let now_ms = context.platform.now_millis();
                 let tag = discovery_tag(now_ms);
                 let packet = super::discovery::discover_neighbours_request(tag);
                 let output = enqueue_command_packet(context, packet, "OK - Discover sent").await;
@@ -820,16 +829,17 @@ async fn handle_command(
                 default_region
             )
         }
-        "clock" => format!("Clock: {}", crate::platform::now_seconds()),
+        "clock" => format!("Clock: {}", context.platform.now_seconds()),
         "clock sync" => {
             if !request.privilege.is_passworded() {
                 denied_text()
             } else if request.sender_timestamp == 0 {
                 String::from("Error - no remote timestamp available")
-            } else if crate::platform::set_wall_clock_if_forward(
-                request.sender_timestamp.saturating_add(1),
-            ) {
-                format!("OK - clock set: {}", crate::platform::now_seconds())
+            } else if context
+                .platform
+                .set_wall_clock_if_forward(request.sender_timestamp.saturating_add(1))
+            {
+                format!("OK - clock set: {}", context.platform.now_seconds())
             } else {
                 String::from("Error - clock cannot go backwards")
             }
@@ -856,9 +866,9 @@ fn command_response(request: CliRequest, text: String) -> CliResponse {
     }
 }
 
-async fn handle_get_command(
+async fn handle_get_command<P: Platform, S: Storage>(
     config: &str,
-    context: &AppContext<impl crate::platform::storage::Storage>,
+    context: &AppContext<P, S>,
     request: CliRequest,
 ) -> String {
     #[cfg(feature = "mqtt")]
@@ -1015,9 +1025,9 @@ async fn handle_get_command(
     }
 }
 
-async fn handle_set_command(
+async fn handle_set_command<P: Platform, S: Storage>(
     config: &str,
-    context: &AppContext<impl crate::platform::storage::Storage>,
+    context: &AppContext<P, S>,
     request: CliRequest,
 ) -> String {
     if !request.privilege.is_passworded() {
@@ -1161,7 +1171,7 @@ async fn handle_set_command(
     }
 
     if let Some(seconds) = config.strip_prefix("time ").map(str::trim) {
-        return handle_time_set_command(seconds, request);
+        return handle_time_set_command(context, seconds, request);
     }
 
     if let Some(latitude) = config.strip_prefix("lat ").map(str::trim) {
@@ -1403,9 +1413,9 @@ fn parse_mqtt_setting(setting: &str) -> Option<(usize, &str)> {
     (index < super::config::MQTT_SERVER_COUNT).then_some((index, key))
 }
 
-async fn handle_unset_command(
+async fn handle_unset_command<P: Platform, S: Storage>(
     setting: &str,
-    context: &AppContext<impl crate::platform::storage::Storage>,
+    context: &AppContext<P, S>,
     request: CliRequest,
 ) -> String {
     if !request.privilege.is_passworded() {
@@ -1442,9 +1452,9 @@ async fn handle_unset_command(
     }
 }
 
-async fn handle_region_command(
+async fn handle_region_command<P: Platform, S: Storage>(
     command: &str,
-    context: &AppContext<impl crate::platform::storage::Storage>,
+    context: &AppContext<P, S>,
     request: CliRequest,
 ) -> String {
     let mut parts = command.split_ascii_whitespace();
@@ -1605,52 +1615,56 @@ async fn handle_region_command(
     }
 }
 
-fn handle_ota_command(
-    command: &str,
-    context: &AppContext<impl crate::platform::storage::Storage>,
+// fn handle_ota_command<P: Platform, S: Storage>(
+//     command: &str,
+//     context: &AppContext<P, S>,
+//     request: CliRequest,
+// ) -> String {
+//     let mut parts = command.split_ascii_whitespace();
+//     let _ota = parts.next();
+//     match parts.next() {
+//         None | Some("status") => ota_status_text(),
+//         Some("start") => {
+//             if !request.privilege.is_passworded() {
+//                 denied_text()
+//             } else {
+//                 context.request_ota_start();
+//                 match context.ota_address() {
+//                     Some(address) => format!("OTA: start requested; http://{}/", address),
+//                     None => String::from("OTA: start requested; waiting for Wi-Fi"),
+//                 }
+//             }
+//         }
+//         Some("stop") => {
+//             if !request.privilege.is_passworded() {
+//                 denied_text()
+//             } else {
+//                 context.request_ota_stop();
+//                 String::from("OTA: stop requested")
+//             }
+//         }
+//         _ => String::from("Err - use 'ota status', 'ota start', or 'ota stop'"),
+//     }
+// }
+
+// fn ota_status_text<P: Platform, S: Storage>(context: &AppContext<P, S>) -> String {
+//     let status = context.platform.ota_status();
+//     if !status.available {
+//         return String::from("OTA: unavailable");
+//     }
+
+//     let next = status.next.unwrap_or("unknown");
+//     format!(
+//         "OTA: selected={} next={} next_size={}",
+//         status.selected, next, status.next_size
+//     )
+// }
+
+fn handle_time_set_command<P: Platform, S: Storage>(
+    context: &AppContext<P, S>,
+    seconds: &str,
     request: CliRequest,
 ) -> String {
-    let mut parts = command.split_ascii_whitespace();
-    let _ota = parts.next();
-    match parts.next() {
-        None | Some("status") => ota_status_text(),
-        Some("start") => {
-            if !request.privilege.is_passworded() {
-                denied_text()
-            } else {
-                context.request_ota_start();
-                match context.ota_address() {
-                    Some(address) => format!("OTA: start requested; http://{}/", address),
-                    None => String::from("OTA: start requested; waiting for Wi-Fi"),
-                }
-            }
-        }
-        Some("stop") => {
-            if !request.privilege.is_passworded() {
-                denied_text()
-            } else {
-                context.request_ota_stop();
-                String::from("OTA: stop requested")
-            }
-        }
-        _ => String::from("Err - use 'ota status', 'ota start', or 'ota stop'"),
-    }
-}
-
-fn ota_status_text() -> String {
-    let status = crate::platform::ota_status();
-    if !status.available {
-        return String::from("OTA: unavailable");
-    }
-
-    let next = status.next.unwrap_or("unknown");
-    format!(
-        "OTA: selected={} next={} next_size={}",
-        status.selected, next, status.next_size
-    )
-}
-
-fn handle_time_set_command(seconds: &str, request: CliRequest) -> String {
     if !request.privilege.is_passworded() {
         return denied_text();
     }
@@ -1659,8 +1673,8 @@ fn handle_time_set_command(seconds: &str, request: CliRequest) -> String {
         return String::from("Error - bad time");
     };
 
-    if crate::platform::set_wall_clock_if_forward(seconds) {
-        format!("OK - clock set: {}", crate::platform::now_seconds())
+    if context.platform.set_wall_clock_if_forward(seconds) {
+        format!("OK - clock set: {}", context.platform.now_seconds())
     } else {
         String::from("Error - clock cannot go backwards")
     }
@@ -1864,7 +1878,7 @@ fn help_text() -> String {
     )
 }
 
-fn status_text(context: &AppContext<impl crate::platform::storage::Storage>) -> String {
+fn status_text<P: Platform, S: Storage>(context: &AppContext<P, S>) -> String {
     let status = context.status();
     let mut output = String::new();
     let _ = writeln!(output, "Uptime: {}s", status.uptime_seconds);
@@ -1911,8 +1925,8 @@ fn status_text(context: &AppContext<impl crate::platform::storage::Storage>) -> 
     }
     output
 }
-async fn enqueue_command_packet(
-    context: &AppContext<impl crate::platform::storage::Storage>,
+async fn enqueue_command_packet<P: Platform, S: Storage>(
+    context: &AppContext<P, S>,
     packet: Option<Vec<u8>>,
     success: &str,
 ) -> String {
@@ -2062,7 +2076,7 @@ mod tests {
     #[test]
     fn anonymous_basic_response_reports_disabled_repeater() {
         for (enabled, features) in [(true, 0), (false, 0x80)] {
-            let response = super::anonymous_basic_response(0x12345678, enabled);
+            let response = super::anonymous_basic_response(0x12345678, 5, enabled);
             assert_eq!(&response[..4], &0x12345678u32.to_le_bytes());
             assert_eq!(response.len(), 9);
             assert_eq!(response[8], features);
@@ -2078,7 +2092,7 @@ mod tests {
                 &authenticated[4..],
                 alloc::format!("{}\nRepeater\n{}", super::FIRMWARE_VERSION, owner).as_bytes()
             );
-            let anonymous = super::anonymous_owner_response(0x12345678, "Repeater", owner);
+            let anonymous = super::anonymous_owner_response(0x12345678, "Repeater", owner, 5);
             assert_eq!(&anonymous[..4], &0x12345678u32.to_le_bytes());
             assert_eq!(
                 &anonymous[8..],
