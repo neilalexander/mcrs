@@ -1,0 +1,9 @@
+{
+    "rust-analyzer.cargo.features": [
+        "board-heltec-v3",
+        "mqtt"
+    ],
+    "rust-analyzer.check.targets": ["xtensa-esp32s3-none-elf"],
+    "rust-analyzer.cargo.allTargets": false,
+    "rust-analyzer.cargo.target": "xtensa-esp32s3-none-elf"
+}
