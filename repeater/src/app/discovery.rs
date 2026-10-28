@@ -1,10 +1,12 @@
+use crate::app::{AppContext, config::AppConfig};
+use crate::platform::Platform;
+use crate::platform::storage::Storage;
 use alloc::{string::String, vec::Vec};
+use defmt::{error, info};
 use mcrs_protocol::{
     AdvertAppData, AdvertNodeType, AdvertPayload, ControlMessage, ControlPayload, HashSize,
     MAX_ADVERT_DATA_SIZE, Packet, Path, Payload, RoutePath, RouteType,
 };
-
-use super::{AppContext, config::AppConfig};
 
 pub const DISCOVER_NEIGHBOURS_TTL_MS: u64 = 60_000;
 
@@ -20,18 +22,12 @@ pub fn flood_advert(config: &AppConfig) -> Option<Vec<u8>> {
         .map(|region| String::from(region.display_name()));
     match config.regions().apply_default_scope(&mut packet) {
         Ok(true) => match default_region {
-            Some(region) => crate::platform::log_fmt(format_args!(
-                "Advert: using default region scope region={}",
-                region
-            )),
-            None => crate::platform::log_fmt(format_args!("Advert: using default region scope")),
+            Some(region) => info!("Advert: using default region scope region={}", region),
+            None => info!("Advert: using default region scope"),
         },
         Ok(false) => {}
         Err(error) => {
-            crate::platform::log_fmt(format_args!(
-                "Advert: default region scope failed: {}",
-                error
-            ));
+            error!("Advert: default region scope failed: {}", error);
             return None;
         }
     }
@@ -43,11 +39,11 @@ fn advert(config: &AppConfig, route_type: RouteType) -> Option<Vec<u8>> {
 }
 
 fn advert_packet(config: &AppConfig, route_type: RouteType) -> Option<Packet> {
-    crate::platform::log_fmt(format_args!(
+    info!(
         "Advert: sending {} name={}",
         route_type_name(route_type),
         config.node_name()
-    ));
+    );
 
     let location = config.location();
     let app_data = AdvertAppData {
@@ -58,7 +54,7 @@ fn advert_packet(config: &AppConfig, route_type: RouteType) -> Option<Packet> {
         name: advert_name(config.node_name(), location.is_some()),
     };
     let app_data_bytes = app_data.encode().ok()?;
-    let timestamp = crate::platform::now_seconds();
+    let timestamp: u32 = todo!(); //crate::platform::now_seconds();
     let public_key = *config.identity().public_key();
 
     let mut signed_message = Vec::new();
@@ -131,16 +127,13 @@ pub fn discover_neighbours_request(tag: u32) -> Option<Vec<u8>> {
     .ok()
 }
 
-pub async fn handle_control_packet<S>(
+pub async fn handle_control_packet<P: Platform, S: Storage>(
     packet: &Packet,
-    context: &AppContext<S>,
+    context: &AppContext<P, S>,
     rssi: i16,
     snr_quarters: i16,
     now_ms: u64,
-) -> Option<Vec<u8>>
-where
-    S: crate::platform::storage::Storage,
-{
+) -> Option<Vec<u8>> {
     if !is_zero_hop(packet) {
         return None;
     }
@@ -173,8 +166,8 @@ where
     }
 }
 
-async fn handle_discover_request<S>(
-    context: &AppContext<S>,
+async fn handle_discover_request<P: Platform, S: Storage>(
+    context: &AppContext<P, S>,
     snr_quarters: i16,
     prefix_only: bool,
     type_filter: u8,
@@ -190,7 +183,7 @@ where
     if type_filter & (1 << AdvertNodeType::Repeater.to_nibble()) == 0 {
         return None;
     }
-    if since.is_some_and(|since| since > crate::platform::now_seconds()) {
+    if since.is_some_and(|since| since > todo!()) {
         return None;
     }
 
@@ -203,7 +196,7 @@ where
         public_key[..prefix_len].to_vec(),
     );
 
-    crate::platform::log_fmt(format_args!("Discover neighbours: response queued"));
+    info!("Discover neighbours: response queued");
     Packet {
         route_type: RouteType::Direct,
         transport_codes: None,
@@ -214,8 +207,8 @@ where
     .ok()
 }
 
-async fn handle_discover_response<S>(
-    context: &AppContext<S>,
+async fn handle_discover_response<P: Platform, S: Storage>(
+    context: &AppContext<P, S>,
     rssi: i16,
     snr_quarters: i16,
     now_ms: u64,

@@ -2,6 +2,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use core::fmt::Write;
+use defmt::info;
 use mcrs_protocol::{AdvertNodeType, PUB_KEY_SIZE, Packet, Payload, RoutePath, node_hash};
 
 const MAX_NEIGHBOUR_HASH_LEN: usize = 4;
@@ -272,11 +273,11 @@ fn neighbour_precedes(left: Neighbour, right: Neighbour, order_by: u8) -> bool {
 }
 
 fn log_discovered(neighbour: Neighbour) {
-    crate::platform::log_fmt(format_args!(
+    info!(
         "Neighbour discovered: RSSI={} SNR={}",
         neighbour.last_rssi,
         crate::radio_metrics::SnrDb(neighbour.last_snr_quarters)
-    ));
-    crate::platform::log_hex_line("Neighbour hash:", &neighbour.hash(), MAX_NEIGHBOUR_HASH_LEN);
-    crate::platform::log_hex_line("Neighbour pubkey:", &neighbour.public_key, 8);
+    );
+    info!("Neighbour hash: {:02x}", neighbour.hash());
+    info!("Neighbour pubkey: {:02x} ...", &neighbour.public_key[..8]);
 }

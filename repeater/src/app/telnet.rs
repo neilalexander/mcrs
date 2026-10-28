@@ -1,4 +1,6 @@
 use super::{AppContext, cli::PostReplyAction};
+use crate::platform::Platform;
+use crate::platform::storage::Storage;
 use defmt::info;
 use embedded_io_async::Write as _;
 
@@ -6,10 +8,10 @@ const TELNET_PORT: u16 = 23;
 const LINE_BUFFER_LEN: usize = 160;
 const IAC: u8 = 255;
 
-pub async fn serve<S>(stack: embassy_net::Stack<'_>, context: &AppContext<S>) -> !
-where
-    S: crate::platform::storage::Storage,
-{
+pub async fn serve<P: Platform, S: Storage>(
+    stack: embassy_net::Stack<'_>,
+    context: &AppContext<P, S>,
+) -> ! {
     if !context.with_config(|config| config.wifi().telnet()).await {
         core::future::pending::<()>().await;
     }
@@ -30,9 +32,9 @@ where
     }
 }
 
-async fn handle_connection<S>(
+async fn handle_connection<P: Platform, S: Storage>(
     socket: &mut embassy_net::tcp::TcpSocket<'_>,
-    context: &AppContext<S>,
+    context: &AppContext<P, S>,
 ) -> Result<(), ()>
 where
     S: crate::platform::storage::Storage,
@@ -85,7 +87,7 @@ where
                         }
                         socket.flush().await.map_err(|_| ())?;
                         if response.post_reply == Some(PostReplyAction::Reboot) {
-                            crate::platform::reboot();
+                            context.platform.reboot();
                         }
                     }
                     socket.write_all(b"> ").await.map_err(|_| ())?;

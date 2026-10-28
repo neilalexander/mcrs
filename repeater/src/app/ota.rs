@@ -109,7 +109,7 @@ where
             b"Rebooting. Start OTA again to reconnect to this page.\n",
         )
         .await?;
-        crate::platform::reboot();
+        context.platform.reboot();
     }
 
     if !request.starts_with(b"POST /update ") && !request.starts_with(b"POST /update?") {

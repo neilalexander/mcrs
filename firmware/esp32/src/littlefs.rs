@@ -1,8 +1,8 @@
 use alloc::{vec, vec::Vec};
 use littlefs_rust::{BlockDevice, Error as FsError, Filesystem, FilesystemOptions};
 
-use super::{Error, Storage};
-use crate::platform::esp::FlashPartition;
+use crate::esp::FlashPartition;
+use mcrs_repeater::platform::storage::{Error, Storage};
 
 const MAX_KEY_LEN: usize = 64;
 const TEMP_PATH: &str = ".pending";
@@ -24,10 +24,7 @@ fn options() -> FilesystemOptions {
 }
 
 impl LittleFsStorage {
-    pub(in crate::platform) fn new(
-        mut device: FlashPartition,
-        max_file_size: usize,
-    ) -> Result<Self, Error> {
+    pub fn new(mut device: FlashPartition, max_file_size: usize) -> Result<Self, Error> {
         let mut header = [0xff; 12];
         device.read(0, 0, &mut header).map_err(map_error)?;
         let legacy = if &header[..4] == b"MCFS" {
