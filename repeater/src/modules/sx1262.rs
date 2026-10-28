@@ -1,4 +1,5 @@
 use crate::radio_metrics::{PacketStatus, StatusSpi};
+use defmt::error;
 use embedded_hal::digital::OutputPin;
 use embedded_hal_async::{delay::DelayNs, digital::Wait, spi::SpiDevice};
 use lora_phy::{
@@ -169,7 +170,7 @@ where
             )
             .await
             .map_err(|error| {
-                crate::platform::log_radio_receive_error("prepare", radio_error_name(&error));
+                error!("prepare: {}", error);
             })?;
 
         self.packet_status.take();
@@ -178,7 +179,7 @@ where
             .rx(&self.rx_packet_params, buffer)
             .await
             .map_err(|error| {
-                crate::platform::log_radio_receive_error("rx", radio_error_name(&error));
+                error!("rx: {}", error);
             })?;
 
         let status = self.packet_status.take().ok_or(())?;
@@ -194,14 +195,14 @@ where
             .prepare_for_cad(&self.modulation_params)
             .await
             .map_err(|error| {
-                crate::platform::log_radio_receive_error("CAD prepare", radio_error_name(&error));
+                error!("CAD prepare: {}", error);
             })?;
 
         self.radio
             .cad(&self.modulation_params)
             .await
             .map_err(|error| {
-                crate::platform::log_radio_receive_error("CAD", radio_error_name(&error));
+                error!("CAD: {}", error);
             })
     }
 
@@ -215,38 +216,11 @@ where
             )
             .await
             .map_err(|error| {
-                crate::platform::log_radio_receive_error("tx-prepare", radio_error_name(&error));
+                error!("tx-prepare: {}", error);
             })?;
 
         self.radio.tx().await.map_err(|error| {
-            crate::platform::log_radio_receive_error("tx", radio_error_name(&error));
+            error!("tx: {}", error);
         })
-    }
-}
-
-fn radio_error_name(error: &RadioError) -> &'static str {
-    match error {
-        RadioError::SPI => "spi",
-        RadioError::Reset => "reset",
-        RadioError::RfSwitchRx => "rf-switch-rx",
-        RadioError::RfSwitchTx => "rf-switch-tx",
-        RadioError::Busy => "busy",
-        RadioError::Irq => "irq",
-        RadioError::DIO1 => "dio1",
-        RadioError::InvalidConfiguration => "invalid-configuration",
-        RadioError::InvalidRadioMode => "invalid-radio-mode",
-        RadioError::OpError(_) => "op-error",
-        RadioError::InvalidBaseAddress(_, _) => "invalid-base-address",
-        RadioError::PayloadSizeUnexpected(_) => "payload-size-unexpected",
-        RadioError::PayloadSizeMismatch(_, _) => "payload-size-mismatch",
-        RadioError::UnavailableSpreadingFactor => "unavailable-spreading-factor",
-        RadioError::UnavailableBandwidth => "unavailable-bandwidth",
-        RadioError::InvalidBandwidthForFrequency => "invalid-bandwidth-for-frequency",
-        RadioError::InvalidSF6ExplicitHeaderRequest => "invalid-sf6-explicit-header-request",
-        RadioError::InvalidOutputPowerForFrequency => "invalid-output-power-for-frequency",
-        RadioError::TransmitTimeout => "transmit-timeout",
-        RadioError::ReceiveTimeout => "receive-timeout",
-        RadioError::DutyCycleUnsupported => "duty-cycle-unsupported",
-        RadioError::RngUnsupported => "rng-unsupported",
     }
 }

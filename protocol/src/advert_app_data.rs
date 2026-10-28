@@ -5,8 +5,7 @@ use crate::{
     wire::{read_i32_le, read_u8, read_u16_le},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone, PartialEq, Eq, defmt::Format)]
 pub struct AdvertAppData {
     pub node_type: AdvertNodeType,
     pub location: Option<(i32, i32)>,

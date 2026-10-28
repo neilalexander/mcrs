@@ -2,8 +2,7 @@ use core::fmt;
 
 use crate::PayloadKind;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone, PartialEq, Eq, defmt::Format)]
 pub enum Error {
     EmptyPacket,
     InvalidHeaderSentinel,

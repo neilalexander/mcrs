@@ -5,8 +5,7 @@ use crate::{
     wire::{ensure_payload_len, read_array, read_u8},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone, PartialEq, Eq, defmt::Format)]
 pub struct GroupEncryptedPayload {
     pub channel_hash: u8,
     pub mac: [u8; CIPHER_MAC_SIZE],

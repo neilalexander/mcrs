@@ -4,7 +4,9 @@ use core::{cell::Cell, fmt};
 use embedded_hal_async::spi::{ErrorType, Operation, SpiDevice};
 
 /// Format quarter-dB as a decimal dB value without floating point or allocation.
+#[derive(Clone, Copy, Debug)]
 pub struct SnrDb(pub i16);
+
 impl fmt::Display for SnrDb {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let magnitude = self.0.unsigned_abs();
@@ -12,6 +14,16 @@ impl fmt::Display for SnrDb {
             f.write_str("-")?;
         }
         write!(f, "{}.{:02}", magnitude / 4, (magnitude % 4) * 25)
+    }
+}
+
+impl defmt::Format for SnrDb {
+    fn format(&self, f: defmt::Formatter) {
+        let magnitude = self.0.unsigned_abs();
+        if self.0 < 0 {
+            defmt::write!(f, "-");
+        }
+        defmt::write!(f, "{}.{:02}", magnitude / 4, (magnitude % 4) * 25)
     }
 }
 

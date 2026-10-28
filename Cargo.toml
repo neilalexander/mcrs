@@ -1,5 +1,5 @@
 [workspace]
-members = ["protocol", "firmware"]
+members = ["firmware/esp32", "firmware/nrf52", "protocol", "repeater"]
 exclude = ["fuzz"]
 resolver = "3"
 

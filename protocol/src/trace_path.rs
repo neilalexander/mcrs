@@ -2,8 +2,7 @@ use alloc::vec::Vec;
 
 use crate::{Error, Result};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone, PartialEq, Eq, defmt::Format)]
 pub struct TracePath {
     pub consumed_hops: u8,
     pub snr_samples: Vec<i8>,

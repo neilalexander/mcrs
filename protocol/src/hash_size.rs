@@ -1,7 +1,6 @@
 use crate::{Error, Result};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, defmt::Format)]
 pub enum HashSize {
     One,
     Two,

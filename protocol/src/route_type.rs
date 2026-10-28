@@ -1,5 +1,4 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, defmt::Format)]
 pub enum RouteType {
     TransportFlood,
     Flood,

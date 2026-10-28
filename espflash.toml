@@ -1,5 +1,5 @@
 [idf]
-partition_table = "firmware/partitions_heltec_v3.csv"
+partition_table = "firmware/esp32/partitions_heltec_v3.csv"
 
 [flash]
 size = "8MB"

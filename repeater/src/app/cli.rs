@@ -3,6 +3,7 @@ extern crate alloc;
 use super::AppContext;
 use alloc::{format, string::String, vec, vec::Vec};
 use core::fmt::Write;
+use defmt::{debug, info, warn};
 use mcrs_protocol::{
     PERM_ACL_ADMIN, PERM_ACL_GUEST, Packet, Payload, RepeaterResponsePlaintext, RequestPlaintext,
     TextMessagePlaintext, TextType,
@@ -95,7 +96,7 @@ impl Cli {
                 self.len += 1;
             }
             _ => {
-                crate::platform::log_fmt(format_args!("CLI: line too long"));
+                warn!("CLI: line too long");
                 self.len = 0;
             }
         }
@@ -225,11 +226,11 @@ async fn handle_anonymous_request(
             .await;
         let mut sender = String::new();
         append_hex(&mut sender, &payload.sender_pubkey);
-        crate::platform::log_fmt(format_args!(
+        info!(
             "Remote login accepted: privilege={} pubkey={}",
             remote_privilege_name(privilege),
             sender
-        ));
+        );
         return super::crypto::encode_login_response(
             &decrypted.shared_secret,
             &decrypted.sender_pubkey,
@@ -465,18 +466,15 @@ async fn handle_binary_request(
                 .await,
         ),
         request_type if privilege != super::remote::RemotePrivilege::Admin => {
-            crate::platform::log_fmt(format_args!(
+            warn!(
                 "Remote request denied: type=0x{:02x} privilege={}",
                 request_type,
                 remote_privilege_name(privilege)
-            ));
+            );
             None
         }
         request_type => {
-            crate::platform::log_fmt(format_args!(
-                "Remote request unsupported: type=0x{:02x}",
-                request_type
-            ));
+            warn!("Remote request unsupported: type=0x{:02x}", request_type);
             None
         }
     }
@@ -518,10 +516,7 @@ async fn handle_anonymous_subrequest(
                 .await,
         ),
         request_type if request_type < b' ' => {
-            crate::platform::log_fmt(format_args!(
-                "Anonymous request unsupported: type=0x{:02x}",
-                request_type
-            ));
+            warn!("Anonymous request unsupported: type=0x{:02x}", request_type);
             None
         }
         _ => None,
@@ -1842,21 +1837,18 @@ fn log_command_output(request: CliRequest, output: &str) {
     match request.origin {
         CliOrigin::Serial => {
             for line in output.lines() {
-                crate::platform::log_fmt(format_args!("{}", line));
+                info!("{}", line);
             }
         }
         CliOrigin::Tcp => {}
         CliOrigin::Remote => {
             if output.starts_with("CLI: denied") {
-                crate::platform::log_fmt(format_args!(
-                    "Remote CLI denied: privilege={}",
-                    request.privilege.name()
-                ));
+                warn!("Remote CLI denied: privilege={}", request.privilege.name());
             } else if output.starts_with("CLI: unknown command") {
-                crate::platform::log_fmt(format_args!(
+                warn!(
                     "Remote CLI unknown command: privilege={}",
                     request.privilege.name()
-                ));
+                );
             }
         }
     }
@@ -1933,11 +1925,8 @@ async fn enqueue_command_packet(
     match context.enqueue_outbound(packet) {
         Ok(()) => {
             match region {
-                Some(region) => crate::platform::log_fmt(format_args!(
-                    "CLI: queued packet {} bytes region={}",
-                    len, region
-                )),
-                None => crate::platform::log_fmt(format_args!("CLI: queued packet {} bytes", len)),
+                Some(region) => debug!("CLI: queued packet {} bytes region={}", len, region),
+                None => debug!("CLI: queued packet {} bytes", len),
             }
             String::from(success)
         }

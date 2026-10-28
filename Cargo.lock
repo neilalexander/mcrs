@@ -1717,13 +1717,67 @@ dependencies = [
 ]
 
 [[package]]
-name = "mcrs-firmware"
+name = "mcrs-esp32"
 version = "0.1.2"
 dependencies = [
  "aes 0.9.3",
  "base64",
  "critical-section",
  "curve25519-dalek",
+ "ed25519-dalek",
+ "embassy-executor",
+ "embassy-net",
+ "embassy-sync 0.8.0",
+ "embassy-time",
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
+ "embedded-io-async 0.6.1",
+ "embedded-io-async 0.7.0",
+ "embedded-storage",
+ "embedded-tls",
+ "esp-alloc",
+ "esp-backtrace",
+ "esp-bootloader-esp-idf",
+ "esp-hal",
+ "esp-println",
+ "esp-radio",
+ "esp-rom-sys",
+ "esp-rtos",
+ "hmac 0.13.0",
+ "littlefs2-rust",
+ "lora-phy",
+ "mcrs-repeater",
+ "nb 1.1.0",
+ "rand_core 0.6.4",
+ "sha1 0.11.0",
+ "sha2 0.11.0",
+ "static_cell",
+ "time",
+]
+
+[[package]]
+name = "mcrs-nrf52"
+version = "0.1.0"
+
+[[package]]
+name = "mcrs-protocol"
+version = "0.1.0"
+dependencies = [
+ "defmt 1.2.0",
+ "ed25519-dalek",
+ "hmac 0.13.0",
+ "sha2 0.11.0",
+]
+
+[[package]]
+name = "mcrs-repeater"
+version = "0.1.2"
+dependencies = [
+ "aes 0.9.3",
+ "base64",
+ "critical-section",
+ "curve25519-dalek",
+ "defmt 1.2.0",
  "ed25519-dalek",
  "embassy-executor",
  "embassy-net",
@@ -1753,16 +1807,6 @@ dependencies = [
  "sha2 0.11.0",
  "static_cell",
  "time",
-]
-
-[[package]]
-name = "mcrs-protocol"
-version = "0.1.0"
-dependencies = [
- "defmt 1.2.0",
- "ed25519-dalek",
- "hmac 0.13.0",
- "sha2 0.11.0",
 ]
 
 [[package]]

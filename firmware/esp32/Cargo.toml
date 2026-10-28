@@ -1,5 +1,5 @@
 [package]
-name = "mcrs-firmware"
+name = "mcrs-esp32"
 version = "0.1.2"
 edition = "2024"
 
@@ -57,6 +57,8 @@ esp32s3 = [
 ]
 
 [dependencies]
+mcrs-repeater = { path = "../../repeater" }
+
 aes = { version = "0.9.3", default-features = false }
 curve25519-dalek = { version = "5.0.0", default-features = false, features = ["alloc", "precomputed-tables", "zeroize"] }
 ed25519-dalek = { version = "3.0.0", default-features = false, features = ["zeroize", "hazmat"] }
@@ -84,7 +86,6 @@ esp-rom-sys = { version = "0.1.5", optional = true }
 esp-radio = { version = "0.18.0", default-features = false, features = ["wifi", "esp-alloc", "unstable"], optional = true }
 hmac = { version = "0.13", default-features = false }
 lora-phy = "3.0.1"
-mcrs-protocol = { path = "../protocol" }
 nb = "1.1.0"
 sha2 = { version = "0.11", default-features = false }
 static_cell = "2.1.1"
