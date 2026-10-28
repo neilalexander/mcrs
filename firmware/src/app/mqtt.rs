@@ -1,7 +1,6 @@
 //! Minimal MQTT 3.1.1 packet reporter, modelled on MeshCore-MQTT.
 
-pub use crate::mqtt_transport as transport;
-
+use crate::app::config;
 use alloc::{
     format,
     string::{String, ToString},
@@ -10,6 +9,109 @@ use alloc::{
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use core::fmt::Write as _;
+use core::{
+    cell::{Cell, RefCell},
+    fmt,
+    future::{Future, poll_fn},
+    pin::pin,
+    sync::atomic::{AtomicI16, AtomicU8, AtomicU16, AtomicU32, Ordering},
+    task::{Poll, Waker},
+};
+use embassy_sync::{
+    blocking_mutex::{Mutex as BlockingMutex, raw::CriticalSectionRawMutex},
+    channel::Channel,
+    mutex::Mutex,
+    signal::Signal,
+};
+
+pub mod transport;
+
+pub struct MqttContext {
+    channels: [Channel<CriticalSectionRawMutex, PacketEvent, 8>; config::MQTT_SERVER_COUNT],
+    generation: Cell<u32>,
+    wakers: [RefCell<Option<Waker>>; config::MQTT_SERVER_COUNT],
+    states: [AtomicU8; config::MQTT_SERVER_COUNT],
+    errors: [Cell<Option<ConnectionError>>; config::MQTT_SERVER_COUNT],
+}
+
+impl MqttContext {
+    pub fn new() -> Self {
+        Self {
+            channels: core::array::from_fn(|_| Channel::new()),
+            generation: Cell::new(0),
+            wakers: core::array::from_fn(|_| RefCell::new(None)),
+            states: core::array::from_fn(|_| AtomicU8::new(ConnectionState::Disconnected as u8)),
+            errors: core::array::from_fn(|_| Cell::new(None)),
+        }
+    }
+
+    pub fn report_packet(
+        &self,
+        direction: Direction,
+        payload: &[u8],
+        rssi: i16,
+        snr_quarters: i16,
+    ) {
+        for channel in &self.channels {
+            let _ = channel.try_send(PacketEvent::new(direction, payload, rssi, snr_quarters));
+        }
+    }
+
+    pub async fn receive_packet(&self, index: usize) -> PacketEvent {
+        self.channels[index].receive().await
+    }
+
+    pub fn request_restart(&self) {
+        self.generation.set(self.generation.get().wrapping_add(1));
+        for error in &self.errors {
+            error.set(None);
+        }
+        for waker in &self.wakers {
+            if let Some(waker) = waker.borrow_mut().take() {
+                waker.wake();
+            }
+        }
+    }
+
+    pub fn generation(&self) -> u32 {
+        self.generation.get()
+    }
+
+    pub fn register_waker(&self, index: usize, waker: &Waker) {
+        if let Some(slot) = self.wakers.get(index) {
+            slot.borrow_mut().replace(waker.clone());
+        }
+    }
+
+    pub fn set_state(&self, index: usize, state: ConnectionState) {
+        if matches!(
+            state,
+            ConnectionState::Connected | ConnectionState::Disabled
+        ) {
+            self.set_error(index, None);
+        }
+        if let Some(current) = self.states.get(index) {
+            current.store(state as u8, Ordering::Relaxed);
+        }
+    }
+
+    pub fn get_state(&self, index: usize) -> ConnectionState {
+        self.states
+            .get(index)
+            .map(|state| ConnectionState::from_u8(state.load(Ordering::Relaxed)))
+            .unwrap_or(ConnectionState::Disabled)
+    }
+
+    pub fn set_error(&self, index: usize, error: Option<ConnectionError>) {
+        if let Some(slot) = self.errors.get(index) {
+            slot.set(error);
+        }
+    }
+
+    pub fn get_error(&self, index: usize) -> Option<ConnectionError> {
+        self.errors.get(index).and_then(Cell::get)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AuthMode {

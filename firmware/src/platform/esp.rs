@@ -31,7 +31,7 @@ esp_bootloader_esp_idf::esp_app_desc!(
     esp_bootloader_esp_idf::SECURE_VERSION
 );
 
-const HEAP_SIZE: usize = crate::board::MEMORY_PROFILE.heap_size;
+const HEAP_SIZE: usize = 160 * 1024; //crate::board::MEMORY_PROFILE.heap_size;
 const FLASH_SECTOR_SIZE: usize = 4096;
 const OTA_WRITE_WORDS: usize = 256;
 const ESP_IMAGE_MAGIC: u8 = 0xe9;
@@ -908,7 +908,7 @@ pub fn log_radio_packet_received(len: usize, rssi: i16, snr_quarters: i16, _payl
         "SX1262 received packet: {} bytes, RSSI {}, SNR {}",
         len,
         rssi,
-        mcrs_firmware::radio_metrics::SnrDb(snr_quarters)
+        crate::radio_metrics::SnrDb(snr_quarters)
     );
 }
 

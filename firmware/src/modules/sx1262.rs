@@ -1,3 +1,4 @@
+use crate::radio_metrics::{PacketStatus, StatusSpi};
 use embedded_hal::digital::OutputPin;
 use embedded_hal_async::{delay::DelayNs, digital::Wait, spi::SpiDevice};
 use lora_phy::{
@@ -8,7 +9,6 @@ use lora_phy::{
     },
     sx126x::{Config, Sx126x, Sx1262, TcxoCtrlVoltage},
 };
-use mcrs_firmware::radio_metrics::{PacketStatus, StatusSpi};
 
 pub const ENABLE_PUBLIC_NETWORK: bool = false;
 pub const RECEIVE_PREAMBLE_LENGTH: u16 = 8;
@@ -150,7 +150,7 @@ where
     })
 }
 
-impl<SPI, CTRL, WAIT, DLY> crate::modules::Receiver for Receiver<SPI, CTRL, WAIT, DLY>
+impl<SPI, CTRL, WAIT, DLY> crate::modules::Radio for Receiver<SPI, CTRL, WAIT, DLY>
 where
     SPI: SpiDevice<u8>,
     CTRL: OutputPin,

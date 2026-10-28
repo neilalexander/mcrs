@@ -2,11 +2,12 @@ pub(crate) mod acl;
 pub mod cli;
 pub mod config;
 mod crypto;
-pub(crate) mod discovery;
+pub mod discovery;
 pub mod identity;
 
 #[cfg(feature = "mqtt")]
-pub use mcrs_firmware::mqtt;
+pub mod mqtt;
+
 mod neighbours;
 pub mod ota;
 pub mod periodic;
@@ -32,6 +33,9 @@ use embassy_sync::{
 };
 use embedded_hal_async::delay::DelayNs;
 use mcrs_protocol::{HashSize, Packet, Path, PayloadKind, RoutePath, RouteType, SeenPacketCache};
+
+#[cfg(feature = "mqtt")]
+use crate::app::mqtt::MqttContext;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LoopDetection {
@@ -115,20 +119,15 @@ where
     remote_logins: AppMutex<remote::RemoteLoginTable>,
     inbound: Channel<CriticalSectionRawMutex, RxEvent, INBOUND_QUEUE_CAPACITY>,
     outbound: SortedOutboundChannel,
+
     #[cfg(feature = "mqtt")]
-    mqtt: [Channel<CriticalSectionRawMutex, mqtt::PacketEvent, 8>; config::MQTT_SERVER_COUNT],
+    pub mqtt: mqtt::MqttContext,
+
     ota_requested: Cell<bool>,
     ota_address: Cell<Option<core::net::SocketAddrV4>>,
     ota_waker: RefCell<Option<Waker>>,
     ota_generation: Cell<u32>,
-    #[cfg(feature = "mqtt")]
-    mqtt_generation: Cell<u32>,
-    #[cfg(feature = "mqtt")]
-    mqtt_wakers: [RefCell<Option<Waker>>; config::MQTT_SERVER_COUNT],
-    #[cfg(feature = "mqtt")]
-    mqtt_states: [AtomicU8; config::MQTT_SERVER_COUNT],
-    #[cfg(feature = "mqtt")]
-    mqtt_errors: [Cell<Option<mqtt::ConnectionError>>; config::MQTT_SERVER_COUNT],
+
     reboot_after_next_remote_reply: Cell<bool>,
     seen_packets: RefCell<SeenPacketCache>,
     pending_forwards: RefCell<Vec<[u8; 8]>>,
@@ -167,22 +166,15 @@ where
             remote_logins: Mutex::new(remote::RemoteLoginTable::new()),
             inbound: Channel::new(),
             outbound: SortedOutboundChannel::new(memory.outbound_queue_len),
+
             #[cfg(feature = "mqtt")]
-            mqtt: core::array::from_fn(|_| Channel::new()),
+            mqtt: MqttContext::new(),
+
             ota_requested: Cell::new(false),
             ota_address: Cell::new(None),
             ota_waker: RefCell::new(None),
             ota_generation: Cell::new(0),
-            #[cfg(feature = "mqtt")]
-            mqtt_generation: Cell::new(0),
-            #[cfg(feature = "mqtt")]
-            mqtt_wakers: core::array::from_fn(|_| RefCell::new(None)),
-            #[cfg(feature = "mqtt")]
-            mqtt_states: core::array::from_fn(|_| {
-                AtomicU8::new(mqtt::ConnectionState::Disconnected as u8)
-            }),
-            #[cfg(feature = "mqtt")]
-            mqtt_errors: core::array::from_fn(|_| Cell::new(None)),
+
             reboot_after_next_remote_reply: Cell::new(false),
             seen_packets: RefCell::new(SeenPacketCache::new_with_capacity(
                 SEEN_PACKET_TTL_MS,
@@ -458,29 +450,6 @@ where
             .ok();
     }
 
-    #[cfg(feature = "mqtt")]
-    fn report_mqtt_packet(
-        &self,
-        direction: mqtt::Direction,
-        payload: &[u8],
-        rssi: i16,
-        snr_quarters: i16,
-    ) {
-        for channel in &self.mqtt {
-            let _ = channel.try_send(mqtt::PacketEvent::new(
-                direction,
-                payload,
-                rssi,
-                snr_quarters,
-            ));
-        }
-    }
-
-    #[cfg(feature = "mqtt")]
-    pub async fn receive_mqtt_packet(&self, index: usize) -> mqtt::PacketEvent {
-        self.mqtt[index].receive().await
-    }
-
     fn enqueue_inbound(
         &self,
         payload: &[u8],
@@ -597,65 +566,6 @@ where
 
     pub fn register_ota_waker(&self, waker: &Waker) {
         self.ota_waker.borrow_mut().replace(waker.clone());
-    }
-
-    #[cfg(feature = "mqtt")]
-    pub fn request_mqtt_restart(&self) {
-        self.mqtt_generation
-            .set(self.mqtt_generation.get().wrapping_add(1));
-        for error in &self.mqtt_errors {
-            error.set(None);
-        }
-        for waker in &self.mqtt_wakers {
-            if let Some(waker) = waker.borrow_mut().take() {
-                waker.wake();
-            }
-        }
-    }
-
-    #[cfg(feature = "mqtt")]
-    pub fn mqtt_generation(&self) -> u32 {
-        self.mqtt_generation.get()
-    }
-
-    #[cfg(feature = "mqtt")]
-    pub fn register_mqtt_waker(&self, index: usize, waker: &Waker) {
-        if let Some(slot) = self.mqtt_wakers.get(index) {
-            slot.borrow_mut().replace(waker.clone());
-        }
-    }
-
-    #[cfg(feature = "mqtt")]
-    pub fn set_mqtt_state(&self, index: usize, state: mqtt::ConnectionState) {
-        if matches!(
-            state,
-            mqtt::ConnectionState::Connected | mqtt::ConnectionState::Disabled
-        ) {
-            self.set_mqtt_error(index, None);
-        }
-        if let Some(current) = self.mqtt_states.get(index) {
-            current.store(state as u8, Ordering::Relaxed);
-        }
-    }
-
-    #[cfg(feature = "mqtt")]
-    pub fn mqtt_state(&self, index: usize) -> mqtt::ConnectionState {
-        self.mqtt_states
-            .get(index)
-            .map(|state| mqtt::ConnectionState::from_u8(state.load(Ordering::Relaxed)))
-            .unwrap_or(mqtt::ConnectionState::Disabled)
-    }
-
-    #[cfg(feature = "mqtt")]
-    pub fn set_mqtt_error(&self, index: usize, error: Option<mqtt::ConnectionError>) {
-        if let Some(slot) = self.mqtt_errors.get(index) {
-            slot.set(error);
-        }
-    }
-
-    #[cfg(feature = "mqtt")]
-    pub fn mqtt_error(&self, index: usize) -> Option<mqtt::ConnectionError> {
-        self.mqtt_errors.get(index).and_then(Cell::get)
     }
 
     fn wake_ota(&self) {
@@ -1012,7 +922,7 @@ enum RadioWait {
 
 pub async fn radio_loop<R, S, D>(radio: &mut R, context: &AppContext<S>, delay: &mut D) -> !
 where
-    R: crate::modules::Receiver,
+    R: crate::modules::Radio,
     S: crate::platform::storage::Storage,
     D: DelayNs,
 {
@@ -1054,8 +964,9 @@ where
                     packet.snr_quarters,
                     payload,
                 );
+
                 #[cfg(feature = "mqtt")]
-                context.report_mqtt_packet(
+                context.mqtt.report_packet(
                     mqtt::Direction::Rx,
                     payload,
                     packet.rssi,
@@ -1159,7 +1070,7 @@ async fn transmit_eligible_outbound<R, S, D>(
     delay: &mut D,
     airtime_budget: &mut AirtimeBudget,
 ) where
-    R: crate::modules::Receiver,
+    R: crate::modules::Radio,
     S: crate::platform::storage::Storage,
     D: DelayNs,
 {
@@ -1229,8 +1140,12 @@ async fn transmit_eligible_outbound<R, S, D>(
     if let Ok(packet) = Packet::decode(&queued.packet) {
         increment_route_counter(packet.route_type, &context.sent_direct, &context.sent_flood);
     }
+
     #[cfg(feature = "mqtt")]
-    context.report_mqtt_packet(mqtt::Direction::Tx, &queued.packet, 0, 0);
+    context
+        .mqtt
+        .report_packet(mqtt::Direction::Tx, &queued.packet, 0, 0);
+
     let airtime_ms = radio_config.packet_airtime_ms(queued.packet.len());
     context.record_tx_airtime(airtime_ms);
     airtime_budget.record_transmit(
@@ -1284,7 +1199,7 @@ async fn wait_for_read_or_eligible_outbound<R, S, D>(
     airtime_budget: &mut AirtimeBudget,
 ) -> RadioWait
 where
-    R: crate::modules::Receiver,
+    R: crate::modules::Radio,
     S: crate::platform::storage::Storage,
     D: DelayNs,
 {
@@ -1601,7 +1516,7 @@ async fn transmit_when_clear<R, D>(
     delay: &mut D,
 ) -> Result<(), ()>
 where
-    R: crate::modules::Receiver,
+    R: crate::modules::Radio,
     D: DelayNs,
 {
     for attempt in 0..CAD_MAX_ATTEMPTS {

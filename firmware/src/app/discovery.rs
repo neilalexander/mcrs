@@ -1,5 +1,3 @@
-extern crate alloc;
-
 use alloc::{string::String, vec::Vec};
 use mcrs_protocol::{
     AdvertAppData, AdvertNodeType, AdvertPayload, ControlMessage, ControlPayload, HashSize,

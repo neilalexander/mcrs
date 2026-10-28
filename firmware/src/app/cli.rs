@@ -653,9 +653,9 @@ async fn handle_command(
         let output = if request.origin.is_local() {
             let mut output = String::new();
             for index in 0..super::config::MQTT_SERVER_COUNT {
-                let state = context.mqtt_state(index);
+                let state = context.mqtt.get_state(index);
                 let _ = write!(&mut output, "MQTT {}: {}", index + 1, state.as_str());
-                if let Some(error) = context.mqtt_error(index) {
+                if let Some(error) = context.mqtt.get_error(index) {
                     let _ = write!(&mut output, " (last error: {})", error.as_str());
                 }
                 output.push('\n');
@@ -670,7 +670,7 @@ async fn handle_command(
     #[cfg(feature = "mqtt")]
     if command == "mqtt restart" {
         let output = if request.origin.is_local() && request.privilege.is_passworded() {
-            context.request_mqtt_restart();
+            context.mqtt.request_restart();
             String::from("OK - MQTT restarting")
         } else {
             denied_text()
@@ -1428,7 +1428,7 @@ async fn handle_unset_command(
     match context.update_config(|config| config.unset(setting)).await {
         #[cfg(feature = "mqtt")]
         Ok(()) if matches!(setting, "mqtt.1" | "mqtt.2" | "mqtt.3") => {
-            context.request_mqtt_restart();
+            context.mqtt.request_restart();
             String::from("OK - MQTT server reset to defaults; MQTT restarting")
         }
         Ok(())

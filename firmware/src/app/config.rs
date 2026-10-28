@@ -25,16 +25,17 @@ const MIN_WIFI_PASSWORD_LEN: usize = 8;
 const MAX_WIFI_PASSWORD_LEN: usize = 63;
 const MAX_NODE_NAME_LEN: usize = 31;
 const MAX_OWNER_INFO_LEN: usize = 119;
-#[cfg(feature = "mqtt")]
-const MAX_MQTT_VALUE_LEN: usize = 255;
-#[cfg(feature = "mqtt")]
-pub const MQTT_SERVER_COUNT: usize = 3;
 const UNPROVISIONED_CONFIG_TEXT: &[u8] = b"# MCRS app.conf\nversion=1\n";
 const COORDINATE_SCALE: i32 = 1_000_000;
 const MIN_LATITUDE_MICRODEGREES: i32 = -90 * COORDINATE_SCALE;
 const MAX_LATITUDE_MICRODEGREES: i32 = 90 * COORDINATE_SCALE;
 const MIN_LONGITUDE_MICRODEGREES: i32 = -180 * COORDINATE_SCALE;
 const MAX_LONGITUDE_MICRODEGREES: i32 = 180 * COORDINATE_SCALE;
+
+#[cfg(feature = "mqtt")]
+const MAX_MQTT_VALUE_LEN: usize = 255;
+#[cfg(feature = "mqtt")]
+pub const MQTT_SERVER_COUNT: usize = 3;
 
 pub struct AppConfig {
     identity: Identity,

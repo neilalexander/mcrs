@@ -15,6 +15,7 @@ use core::{
 };
 use embedded_hal_async::delay::DelayNs as _;
 use esp_radio::wifi::{AuthenticationMethod, Config, ap::AccessPointConfig, sta::StationConfig};
+use mcrs_firmware::memory::MemoryProfile;
 use static_cell::StaticCell;
 
 pub type RadioSpi = Spi<'static, Blocking>;
@@ -55,10 +56,9 @@ const BATTERY_ADC_SAMPLES: u32 = 8;
 const BATTERY_DIVIDER_SCALE_MILLI: u32 = 5420;
 const BATTERY_PERCENT_MIN_MV: u16 = 3300;
 const BATTERY_PERCENT_MAX_MV: u16 = 4100;
-pub(crate) const MEMORY_PROFILE: crate::memory::MemoryProfile =
-    crate::memory::MemoryProfile::new(160 * 1024, 8, 16, 64, 256);
-pub(crate) const STORAGE_LAYOUT: crate::platform::storage::Layout =
-    crate::platform::storage::Layout {
+pub(crate) const MEMORY_PROFILE: MemoryProfile = MemoryProfile::new(160 * 1024, 8, 16, 64, 256);
+pub(crate) const STORAGE_LAYOUT: mcrs_firmware::platform::storage::Layout =
+    mcrs_firmware::platform::storage::Layout {
         partition_label: "meshcore",
         partition_size: 256 * 1024,
         max_file_size: 4096,
@@ -70,7 +70,7 @@ pub struct RadioResources<F> {
     pub reset: RadioOutput,
     pub dio1: RadioInput,
     pub busy: RadioInput,
-    pub board_config: crate::modules::sx1262::BoardConfig,
+    pub board_config: mcrs_firmware::modules::sx1262::BoardConfig,
     pub frontend: F,
 }
 
@@ -115,17 +115,17 @@ pub fn generate_identity_seed(rng: RNG<'_>, adc: ADC1<'_>) -> [u8; 32] {
 }
 
 async fn display_task<I2C, RESET, POWER>(
-    mut display: Option<crate::modules::ssd1306::Display<I2C, RESET, POWER>>,
+    mut display: Option<mcrs_firmware::modules::ssd1306::Display<I2C, RESET, POWER>>,
     mut button: ButtonInput,
-    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    context: &mcrs_firmware::app::AppContext<mcrs_firmware::platform::EspStorage>,
 ) -> !
 where
     I2C: embedded_hal::i2c::I2c + embedded_hal::i2c::ErrorType,
     RESET: embedded_hal::digital::OutputPin,
     POWER: embedded_hal::digital::OutputPin,
 {
-    let mut display_delay = crate::platform::radio_delay();
-    let mut button_delay = crate::platform::radio_delay();
+    let mut display_delay = mcrs_firmware::platform::radio_delay();
+    let mut button_delay = mcrs_firmware::platform::radio_delay();
 
     let Some(display) = &mut display else {
         loop {
@@ -138,7 +138,7 @@ where
     };
 
     if display.init(&mut display_delay).await.is_err() {
-        crate::platform::log_display_init_failed();
+        mcrs_firmware::platform::log_display_init_failed();
         loop {
             if wait_for_prg_button_action(&mut button_delay, &mut button).await
                 == ButtonAction::LongHold
@@ -149,7 +149,7 @@ where
     }
 
     if write_display_status(display, context, None).await.is_err() {
-        crate::platform::log_display_write_failed();
+        mcrs_firmware::platform::log_display_write_failed();
         loop {
             if wait_for_prg_button_action(&mut button_delay, &mut button).await
                 == ButtonAction::LongHold
@@ -167,14 +167,14 @@ where
                     if display.sleep().is_ok() {
                         awake = false;
                     } else {
-                        crate::platform::log_display_write_failed();
+                        mcrs_firmware::platform::log_display_write_failed();
                     }
                 }
                 DisplayEvent::ButtonPressed => {
                     if write_display_status(display, context, None).await.is_err() {
-                        crate::platform::log_display_write_failed();
+                        mcrs_firmware::platform::log_display_write_failed();
                     }
-                    crate::platform::log_fmt(format_args!("OLED display wake extended"));
+                    mcrs_firmware::platform::log_fmt(format_args!("OLED display wake extended"));
                     let action =
                         wait_for_prg_button_release_or_hold(&mut button_delay, &mut button).await;
                     show_prg_advert_message_if_sent(display, context, action).await;
@@ -209,11 +209,11 @@ where
             };
 
             if wake_result.is_ok() && write_display_status(display, context, None).await.is_ok() {
-                crate::platform::log_fmt(format_args!("OLED display woken by PRG button"));
+                mcrs_firmware::platform::log_fmt(format_args!("OLED display woken by PRG button"));
                 awake = true;
                 show_prg_advert_message_if_sent(display, context, action).await;
             } else {
-                crate::platform::log_display_write_failed();
+                mcrs_firmware::platform::log_display_write_failed();
             }
         }
     }
@@ -231,7 +231,7 @@ enum ButtonAction {
 }
 
 async fn wait_for_display_timeout_or_button(
-    display_delay: &mut crate::platform::RadioDelay,
+    display_delay: &mut mcrs_firmware::platform::RadioDelay,
     button: &mut ButtonInput,
 ) -> DisplayEvent {
     let mut timeout = pin!(display_delay.delay_ms(DISPLAY_AWAKE_MS));
@@ -256,7 +256,7 @@ async fn wait_for_prg_button_press(button: &mut ButtonInput) {
 }
 
 async fn wait_for_prg_button_action(
-    delay: &mut crate::platform::RadioDelay,
+    delay: &mut mcrs_firmware::platform::RadioDelay,
     button: &mut ButtonInput,
 ) -> ButtonAction {
     wait_for_prg_button_press(button).await;
@@ -264,7 +264,7 @@ async fn wait_for_prg_button_action(
 }
 
 async fn wait_for_prg_button_release_or_hold(
-    delay: &mut crate::platform::RadioDelay,
+    delay: &mut mcrs_firmware::platform::RadioDelay,
     button: &mut ButtonInput,
 ) -> ButtonAction {
     let mut hold = pin!(delay.delay_ms(PRG_ADVERT_HOLD_MS));
@@ -287,14 +287,14 @@ async fn wait_for_prg_button_release_or_hold(
 }
 
 async fn queue_prg_button_advert(
-    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    context: &mcrs_firmware::app::AppContext<mcrs_firmware::platform::EspStorage>,
 ) -> bool {
     let packet = context
-        .with_config(crate::app::discovery::zero_hop_advert)
+        .with_config(mcrs_firmware::app::discovery::zero_hop_advert)
         .await;
 
     let Some(packet) = packet else {
-        crate::platform::log_fmt(format_args!("PRG button: advert encode failed"));
+        mcrs_firmware::platform::log_fmt(format_args!("PRG button: advert encode failed"));
         return false;
     };
 
@@ -303,11 +303,11 @@ async fn queue_prg_button_advert(
     match context.enqueue_outbound(packet) {
         Ok(()) => {
             match region {
-                Some(region) => crate::platform::log_fmt(format_args!(
+                Some(region) => mcrs_firmware::platform::log_fmt(format_args!(
                     "PRG button: queued zero-hop advert {} bytes region={}",
                     len, region
                 )),
-                None => crate::platform::log_fmt(format_args!(
+                None => mcrs_firmware::platform::log_fmt(format_args!(
                     "PRG button: queued zero-hop advert {} bytes",
                     len
                 )),
@@ -315,15 +315,15 @@ async fn queue_prg_button_advert(
             true
         }
         Err(_) => {
-            crate::platform::log_fmt(format_args!("PRG button: advert queue full"));
+            mcrs_firmware::platform::log_fmt(format_args!("PRG button: advert queue full"));
             false
         }
     }
 }
 
 async fn show_prg_advert_message_if_sent<I2C, RESET, POWER>(
-    display: &mut crate::modules::ssd1306::Display<I2C, RESET, POWER>,
-    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    display: &mut mcrs_firmware::modules::ssd1306::Display<I2C, RESET, POWER>,
+    context: &mcrs_firmware::app::AppContext<mcrs_firmware::platform::EspStorage>,
     action: ButtonAction,
 ) where
     I2C: embedded_hal::i2c::I2c + embedded_hal::i2c::ErrorType,
@@ -342,13 +342,13 @@ async fn show_prg_advert_message_if_sent<I2C, RESET, POWER>(
         .await
         .is_err()
     {
-        crate::platform::log_display_write_failed();
+        mcrs_firmware::platform::log_display_write_failed();
     }
 }
 
 async fn write_display_status<I2C, RESET, POWER>(
-    display: &mut crate::modules::ssd1306::Display<I2C, RESET, POWER>,
-    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    display: &mut mcrs_firmware::modules::ssd1306::Display<I2C, RESET, POWER>,
+    context: &mcrs_firmware::app::AppContext<mcrs_firmware::platform::EspStorage>,
     message: Option<&str>,
 ) -> Result<(), ()>
 where
@@ -374,13 +374,13 @@ where
 }
 
 pub async fn run_board_tasks<I2C, RESET, POWER, FRONTEND>(
-    display: Option<crate::modules::ssd1306::Display<I2C, RESET, POWER>>,
+    display: Option<mcrs_firmware::modules::ssd1306::Display<I2C, RESET, POWER>>,
     prg_button: ButtonInput,
     battery: BatteryMonitor,
     radio: RadioResources<FRONTEND>,
     mut cli_serial: Option<CliSerial>,
     wifi: WifiResources,
-    context: crate::app::AppContext<crate::platform::EspStorage>,
+    context: mcrs_firmware::app::AppContext<mcrs_firmware::platform::EspStorage>,
 ) -> !
 where
     I2C: embedded_hal::i2c::I2c + embedded_hal::i2c::ErrorType,
@@ -388,15 +388,18 @@ where
     POWER: embedded_hal::digital::OutputPin,
     FRONTEND: RadioFrontend,
 {
-    let mut cli = crate::app::cli::Cli::new();
-    let mut periodic_delay = crate::platform::radio_delay();
+    let mut cli = mcrs_firmware::app::cli::Cli::new();
+    let mut periodic_delay = mcrs_firmware::platform::radio_delay();
     let mut display_future = pin!(display_task(display, prg_button, &context));
     let mut radio_future = pin!(radio_task(radio, &context));
-    let mut handler_future = pin!(crate::app::handler_loop(&context));
+    let mut handler_future = pin!(mcrs_firmware::app::handler_loop(&context));
     let mut cli_future = pin!(cli_task(&mut cli_serial, &mut cli, &context));
     let mut battery_future = pin!(battery_task(battery, &context));
     let mut ota_future = pin!(wifi_task(wifi, &context));
-    let mut periodic_future = pin!(crate::app::periodic::run(&context, &mut periodic_delay));
+    let mut periodic_future = pin!(mcrs_firmware::app::periodic::run(
+        &context,
+        &mut periodic_delay
+    ));
 
     poll_fn(|cx| {
         match display_future.as_mut().poll(cx) {
@@ -439,7 +442,7 @@ where
 
 async fn wifi_task(
     mut wifi: WifiResources,
-    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    context: &mcrs_firmware::app::AppContext<mcrs_firmware::platform::EspStorage>,
 ) -> ! {
     if context
         .with_config(|config| config.wifi().ssid().is_empty())
@@ -451,7 +454,10 @@ async fn wifi_task(
     let (controller, interfaces) = match esp_radio::wifi::new(wifi.wifi, Default::default()) {
         Ok(wifi) => wifi,
         Err(error) => {
-            crate::platform::log_fmt(format_args!("Wi-Fi: device init failed: {:?}", error));
+            mcrs_firmware::platform::log_fmt(format_args!(
+                "Wi-Fi: device init failed: {:?}",
+                error
+            ));
             core::future::pending::<()>().await;
             unreachable!()
         }
@@ -461,7 +467,7 @@ async fn wifi_task(
 
 async fn run_ota_ap_mode(
     wifi: &mut WifiResources,
-    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    context: &mcrs_firmware::app::AppContext<mcrs_firmware::platform::EspStorage>,
 ) -> ! {
     let mut stack_resources = embassy_net::StackResources::<4>::new();
     context.set_ota_address(Some(core::net::SocketAddrV4::new(OTA_AP_IP, OTA_HTTP_PORT)));
@@ -473,7 +479,7 @@ async fn run_ota_ap_mode(
                 match esp_radio::wifi::new(wifi.wifi.reborrow(), Default::default()) {
                     Ok(wifi) => wifi,
                     Err(error) => {
-                        crate::platform::log_fmt(format_args!(
+                        mcrs_firmware::platform::log_fmt(format_args!(
                             "Wi-Fi: device init failed: {:?}",
                             error
                         ));
@@ -492,7 +498,7 @@ async fn run_ota_ap_mode(
             // The network runner and controller are dropped before the next
             // session. Controller drop stops and deinitializes the Wi-Fi radio.
         }
-        crate::platform::log_fmt(format_args!("OTA: Wi-Fi adapter shut down"));
+        mcrs_firmware::platform::log_fmt(format_args!("OTA: Wi-Fi adapter shut down"));
     }
 }
 
@@ -500,7 +506,7 @@ async fn run_ota_ap_session<'a>(
     mut controller: esp_radio::wifi::WifiController<'a>,
     device: esp_radio::wifi::Interface<'a>,
     stack_resources: &mut embassy_net::StackResources<4>,
-    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    context: &mcrs_firmware::app::AppContext<mcrs_firmware::platform::EspStorage>,
 ) {
     let net_config = embassy_net::Config::ipv4_static(embassy_net::StaticConfigV4 {
         address: embassy_net::Ipv4Cidr::new(OTA_AP_IP, OTA_AP_PREFIX),
@@ -511,7 +517,7 @@ async fn run_ota_ap_session<'a>(
         device,
         net_config,
         stack_resources,
-        crate::platform::now_millis(),
+        mcrs_firmware::platform::now_millis(),
     );
     let mut runner = pin!(runner.run());
     let mut dhcp_rx_meta = [embassy_net::udp::PacketMetadata::EMPTY; 1];
@@ -526,18 +532,18 @@ async fn run_ota_ap_session<'a>(
         &mut dhcp_tx_buffer,
     );
     if dhcp_socket.bind(OTA_DHCP_SERVER_PORT).is_err() {
-        crate::platform::log_fmt(format_args!("OTA: DHCP bind failed"));
+        mcrs_firmware::platform::log_fmt(format_args!("OTA: DHCP bind failed"));
         context.request_ota_stop();
         return;
     }
     let mut dhcp = pin!(dhcp_server(&dhcp_socket));
     let ssid = ota_ssid(context).await;
     if let Err(error) = start_ota_ap(&mut controller, &ssid).await {
-        crate::platform::log_fmt(format_args!("OTA: AP start failed: {:?}", error));
+        mcrs_firmware::platform::log_fmt(format_args!("OTA: AP start failed: {:?}", error));
         context.request_ota_stop();
         return;
     }
-    crate::platform::log_fmt(format_args!(
+    mcrs_firmware::platform::log_fmt(format_args!(
         "OTA: AP started ssid={} url=http://{}/",
         ssid, OTA_AP_IP
     ));
@@ -557,18 +563,21 @@ async fn run_ota_ap_session<'a>(
 async fn run_ota_station_mode<'a>(
     mut controller: esp_radio::wifi::WifiController<'a>,
     device: esp_radio::wifi::Interface<'a>,
-    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    context: &mcrs_firmware::app::AppContext<mcrs_firmware::platform::EspStorage>,
 ) -> ! {
     // Sleep the modem between DTIM beacons while keeping the station connected.
     if let Err(error) = controller.set_power_saving(esp_radio::wifi::PowerSaveMode::Minimum) {
-        crate::platform::log_fmt(format_args!("Wi-Fi: power saving setup failed: {:?}", error));
+        mcrs_firmware::platform::log_fmt(format_args!(
+            "Wi-Fi: power saving setup failed: {:?}",
+            error
+        ));
     }
 
     // DHCP, DNS, NTP, Telnet and OTA can each hold a socket concurrently.
     #[cfg(not(feature = "mqtt"))]
     const SOCKET_COUNT: usize = 5;
     #[cfg(feature = "mqtt")]
-    const SOCKET_COUNT: usize = 5 + crate::app::config::MQTT_SERVER_COUNT;
+    const SOCKET_COUNT: usize = 5 + mcrs_firmware::app::config::MQTT_SERVER_COUNT;
     static STACK_RESOURCES: StaticCell<embassy_net::StackResources<SOCKET_COUNT>> =
         StaticCell::new();
     let stack_resources = STACK_RESOURCES.init(embassy_net::StackResources::new());
@@ -576,7 +585,7 @@ async fn run_ota_station_mode<'a>(
         device,
         embassy_net::Config::dhcpv4(Default::default()),
         stack_resources,
-        crate::platform::now_millis(),
+        mcrs_firmware::platform::now_millis(),
     );
     let mut runner = pin!(runner.run());
     let mut worker = pin!(async {
@@ -585,7 +594,7 @@ async fn run_ota_station_mode<'a>(
             let ssid = String::from(wifi.ssid());
             let password = String::from(wifi.password());
             if ssid.is_empty() {
-                crate::platform::log_fmt(format_args!("Wi-Fi: configure wifi.ssid"));
+                mcrs_firmware::platform::log_fmt(format_args!("Wi-Fi: configure wifi.ssid"));
                 embassy_time::Timer::after_secs(30).await;
                 continue;
             }
@@ -600,7 +609,7 @@ async fn run_ota_station_mode<'a>(
             if controller.set_config(&Config::Station(config)).is_err()
                 || controller.connect_async().await.is_err()
             {
-                crate::platform::log_fmt(format_args!("Wi-Fi: station connection failed"));
+                mcrs_firmware::platform::log_fmt(format_args!("Wi-Fi: station connection failed"));
                 embassy_time::Timer::after_secs(10).await;
                 continue;
             }
@@ -619,7 +628,7 @@ async fn run_ota_station_mode<'a>(
                 .await
             };
             if !configured {
-                crate::platform::log_fmt(format_args!(
+                mcrs_firmware::platform::log_fmt(format_args!(
                     "Wi-Fi: disconnected before DHCP completed; reconnecting"
                 ));
                 let _ = controller.disconnect_async().await;
@@ -627,19 +636,19 @@ async fn run_ota_station_mode<'a>(
                 continue;
             }
             if let Some(config) = stack.config_v4() {
-                crate::platform::log_fmt(format_args!(
+                mcrs_firmware::platform::log_fmt(format_args!(
                     "Wi-Fi: station connected address={} ota=http://{}:{}/",
                     config.address,
                     config.address.address(),
                     OTA_HTTP_PORT
                 ));
             } else {
-                crate::platform::log_fmt(format_args!("Wi-Fi: station connected"));
+                mcrs_firmware::platform::log_fmt(format_args!("Wi-Fi: station connected"));
             }
             {
                 let mut server = pin!(serve_ota(stack, context));
                 let mut ntp = pin!(ntp_loop(stack, context));
-                let mut telnet = pin!(crate::app::telnet::serve(stack, context));
+                let mut telnet = pin!(mcrs_firmware::app::telnet::serve(stack, context));
                 #[cfg(feature = "mqtt")]
                 let mut mqtt1 = pin!(mqtt_loop(stack, context, 0));
                 #[cfg(feature = "mqtt")]
@@ -671,22 +680,26 @@ async fn run_ota_station_mode<'a>(
                 })
                 .await;
                 #[cfg(feature = "mqtt")]
-                for index in 0..crate::app::config::MQTT_SERVER_COUNT {
-                    use crate::app::mqtt::{ConnectionError, ConnectionState};
+                for index in 0..mcrs_firmware::app::config::MQTT_SERVER_COUNT {
+                    use mcrs_firmware::app::mqtt::{ConnectionError, ConnectionState};
                     let enabled = context
                         .with_config(|config| {
                             config.mqtt(index).is_some_and(|mqtt| !mqtt.host.is_empty())
                         })
                         .await;
                     if enabled {
-                        context.set_mqtt_error(index, Some(ConnectionError::Unreachable));
-                        context.set_mqtt_state(index, ConnectionState::Disconnected);
+                        context
+                            .mqtt
+                            .set_error(index, Some(ConnectionError::Unreachable));
+                        context.mqtt.set_state(index, ConnectionState::Disconnected);
                     } else {
-                        context.set_mqtt_state(index, ConnectionState::Disabled);
+                        context.mqtt.set_state(index, ConnectionState::Disabled);
                     }
                 }
             }
-            crate::platform::log_fmt(format_args!("Wi-Fi: station disconnected; reconnecting"));
+            mcrs_firmware::platform::log_fmt(format_args!(
+                "Wi-Fi: station disconnected; reconnecting"
+            ));
             let _ = controller.disconnect_async().await;
             embassy_time::Timer::after_secs(5).await;
         }
@@ -709,34 +722,38 @@ async fn run_ota_station_mode<'a>(
 #[cfg(feature = "mqtt")]
 async fn mqtt_loop(
     stack: embassy_net::Stack<'_>,
-    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    context: &mcrs_firmware::app::AppContext<mcrs_firmware::platform::EspStorage>,
     index: usize,
 ) -> ! {
-    use crate::app::mqtt::ConnectionState;
+    use mcrs_firmware::app::mqtt::ConnectionState;
 
     loop {
-        let generation = context.mqtt_generation();
+        let generation = context.mqtt.generation();
         let mqtt = context
             .with_config(|config| config.mqtt(index).cloned())
             .await;
         let Some(mqtt) = mqtt.filter(|mqtt| !mqtt.host.is_empty()) else {
-            context.set_mqtt_state(index, ConnectionState::Disabled);
+            context.mqtt.set_state(index, ConnectionState::Disabled);
             wait_mqtt_retry_or_restart(context, index, generation, 30).await;
             continue;
         };
-        context.set_mqtt_state(index, ConnectionState::Connecting);
+        context.mqtt.set_state(index, ConnectionState::Connecting);
         // Keep the three TLS-capable session futures out of the fixed 32 KiB
         // Embassy task arena. Disabled brokers allocate no session state.
         let result =
             alloc::boxed::Box::pin(mqtt_session(stack, context, index, generation, &mqtt)).await;
         // Cancellation by an explicit restart is not a connection failure.
-        if context.mqtt_generation() == generation {
+        if context.mqtt.generation() == generation {
             if let Err(error) = result {
-                context.set_mqtt_error(index, Some(error));
-                crate::platform::log_fmt(format_args!("MQTT {}: {}", index + 1, error.as_str()));
+                context.mqtt.set_error(index, Some(error));
+                mcrs_firmware::platform::log_fmt(format_args!(
+                    "MQTT {}: {}",
+                    index + 1,
+                    error.as_str()
+                ));
             }
         }
-        context.set_mqtt_state(index, ConnectionState::Disconnected);
+        context.mqtt.set_state(index, ConnectionState::Disconnected);
         wait_mqtt_retry_or_restart(context, index, generation, 10).await;
     }
 }
@@ -744,15 +761,15 @@ async fn mqtt_loop(
 #[cfg(feature = "mqtt")]
 async fn mqtt_session(
     stack: embassy_net::Stack<'_>,
-    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    context: &mcrs_firmware::app::AppContext<mcrs_firmware::platform::EspStorage>,
     index: usize,
     generation: u32,
-    config: &crate::app::config::MqttConfig,
-) -> Result<(), crate::app::mqtt::ConnectionError> {
+    config: &mcrs_firmware::app::config::MqttConfig,
+) -> Result<(), mcrs_firmware::app::mqtt::ConnectionError> {
     use super::mqtt_transport::{SharedSocket, WifiRng};
-    use crate::app::mqtt::ConnectionError;
-    use crate::app::mqtt::transport::{self, Endpoint};
     use embedded_tls::{Aes128GcmSha256, TlsConfig, TlsConnection, TlsContext, UnsecureProvider};
+    use mcrs_firmware::app::mqtt::ConnectionError;
+    use mcrs_firmware::app::mqtt::transport::{self, Endpoint};
 
     let endpoint =
         Endpoint::parse(&config.host, config.port).map_err(|_| ConnectionError::Config)?;
@@ -854,7 +871,7 @@ async fn mqtt_session(
 
 #[cfg(feature = "mqtt")]
 async fn mqtt_status_json(
-    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    context: &mcrs_firmware::app::AppContext<mcrs_firmware::platform::EspStorage>,
     public_key: &[u8; 32],
     online: bool,
 ) -> String {
@@ -868,14 +885,14 @@ async fn mqtt_status_json(
     context
         .with_config(|config| {
             let status = context.status();
-            crate::app::mqtt::status_json(
+            mcrs_firmware::app::mqtt::status_json(
                 public_key,
                 online,
                 config.node_name(),
                 MODEL,
                 FIRMWARE_VERSION,
-                crate::platform::now_seconds(),
-                crate::app::mqtt::StatusStats {
+                mcrs_firmware::platform::now_seconds(),
+                mcrs_firmware::app::mqtt::StatusStats {
                     battery_mv: status.battery_millivolts,
                     uptime_ms: status.uptime_millis,
                 },
@@ -886,30 +903,31 @@ async fn mqtt_status_json(
 
 #[cfg(feature = "mqtt")]
 async fn mqtt_connected<R: embedded_io_async::Read, W: embedded_io_async::Write>(
-    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    context: &mcrs_firmware::app::AppContext<mcrs_firmware::platform::EspStorage>,
     index: usize,
     generation: u32,
-    config: &crate::app::config::MqttConfig,
+    config: &mcrs_firmware::app::config::MqttConfig,
     websocket: bool,
     reader: R,
     mut writer: W,
-) -> Result<(), crate::app::mqtt::ConnectionError> {
+) -> Result<(), mcrs_firmware::app::mqtt::ConnectionError> {
     use super::mqtt_transport::WifiRng;
-    use crate::app::mqtt::{self, ConnectionError, transport};
     use embassy_sync::{blocking_mutex::raw::NoopRawMutex, signal::Signal};
+    use mcrs_firmware::app::mqtt::{self, ConnectionError, transport};
 
     let (public_key, credentials) = context
         .with_identity(|identity| {
             let public_key = *identity.public_key();
-            let credentials =
-                config.credentials(&public_key, crate::platform::now_seconds(), |message| {
-                    identity.sign(message)
-                });
+            let credentials = config.credentials(
+                &public_key,
+                mcrs_firmware::platform::now_seconds(),
+                |message| identity.sign(message),
+            );
             (public_key, credentials)
         })
         .await;
     let (username, password) = credentials.map_err(|_| {
-        if crate::platform::now_seconds() < 1_704_067_200 {
+        if mcrs_firmware::platform::now_seconds() < 1_704_067_200 {
             ConnectionError::Clock
         } else {
             ConnectionError::Config
@@ -951,17 +969,19 @@ async fn mqtt_connected<R: embedded_io_async::Read, W: embedded_io_async::Write>
             mqtt_wait_ack(&mut writer, websocket, &ack, &pong, &mut rng).await
         })
         .await?;
-        context.set_mqtt_state(index, mqtt::ConnectionState::Connected);
-        crate::platform::log_fmt(format_args!("MQTT {}: connected", index + 1));
+        context
+            .mqtt
+            .set_state(index, mqtt::ConnectionState::Connected);
+        mcrs_firmware::platform::log_fmt(format_args!("MQTT {}: connected", index + 1));
         let mut next_status = embassy_time::Instant::now(); // Publish immediately after connecting.
         let mut keepalive = next_status + embassy_time::Duration::from_secs(30);
         loop {
-            let mut event = pin!(context.receive_mqtt_packet(index));
+            let mut event = pin!(context.mqtt.receive_packet(index));
             let mut idle = pin!(embassy_time::Timer::at(keepalive.min(next_status)));
             let mut control = pin!(pong.wait());
             let (packet, control) = poll_fn(|cx| {
-                context.register_mqtt_waker(index, cx.waker());
-                if context.mqtt_generation() != generation {
+                context.mqtt.register_waker(index, cx.waker());
+                if context.mqtt.generation() != generation {
                     return Poll::Ready((None, None));
                 }
                 // Deadlines take priority so busy connections still refresh status.
@@ -1038,7 +1058,7 @@ async fn mqtt_wait_ack<W: embedded_io_async::Write>(
     writer: &mut W,
     websocket: bool,
     ack: &embassy_sync::signal::Signal<embassy_sync::blocking_mutex::raw::NoopRawMutex, ()>,
-    pong: &crate::app::mqtt::transport::Pong,
+    pong: &mcrs_firmware::app::mqtt::transport::Pong,
     rng: &mut super::mqtt_transport::WifiRng,
 ) -> Result<(), ()> {
     loop {
@@ -1057,7 +1077,8 @@ async fn mqtt_wait_ack<W: embedded_io_async::Write>(
         let Some(data) = data else {
             return Ok(());
         };
-        crate::app::mqtt::transport::write(writer, websocket, 10, &data, rng.bytes()).await?;
+        mcrs_firmware::app::mqtt::transport::write(writer, websocket, 10, &data, rng.bytes())
+            .await?;
     }
 }
 
@@ -1065,7 +1086,7 @@ async fn mqtt_wait_ack<W: embedded_io_async::Write>(
 // Every error from this helper must therefore discard the connection.
 #[cfg(feature = "mqtt")]
 async fn mqtt_io<T, E>(
-    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    context: &mcrs_firmware::app::AppContext<mcrs_firmware::platform::EspStorage>,
     index: usize,
     generation: u32,
     operation: impl Future<Output = Result<T, E>>,
@@ -1073,8 +1094,8 @@ async fn mqtt_io<T, E>(
     let mut operation = pin!(operation);
     let mut timeout = pin!(embassy_time::Timer::after_secs(10));
     poll_fn(|cx| {
-        context.register_mqtt_waker(index, cx.waker());
-        if context.mqtt_generation() != generation {
+        context.mqtt.register_waker(index, cx.waker());
+        if context.mqtt.generation() != generation {
             return Poll::Ready(Err(()));
         }
         if timeout.as_mut().poll(cx).is_ready() {
@@ -1090,17 +1111,17 @@ async fn mqtt_io<T, E>(
 
 #[cfg(feature = "mqtt")]
 async fn wait_mqtt_retry_or_restart(
-    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    context: &mcrs_firmware::app::AppContext<mcrs_firmware::platform::EspStorage>,
     index: usize,
     generation: u32,
     seconds: u64,
 ) {
     let mut timer = pin!(embassy_time::Timer::after_secs(seconds));
     poll_fn(|cx| {
-        if context.mqtt_generation() != generation {
+        if context.mqtt.generation() != generation {
             return Poll::Ready(());
         }
-        context.register_mqtt_waker(index, cx.waker());
+        context.mqtt.register_waker(index, cx.waker());
         if timer.as_mut().poll(cx).is_ready() {
             Poll::Ready(())
         } else {
@@ -1112,7 +1133,7 @@ async fn wait_mqtt_retry_or_restart(
 
 async fn ntp_loop(
     stack: embassy_net::Stack<'_>,
-    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    context: &mcrs_firmware::app::AppContext<mcrs_firmware::platform::EspStorage>,
 ) -> ! {
     loop {
         let host = context
@@ -1120,8 +1141,8 @@ async fn ntp_loop(
             .await;
         let delay_seconds = match sync_ntp(stack, &host).await {
             Some(unix_seconds) => {
-                if crate::platform::set_wall_clock_if_forward(unix_seconds) {
-                    crate::platform::log_fmt(format_args!(
+                if mcrs_firmware::platform::set_wall_clock_if_forward(unix_seconds) {
+                    mcrs_firmware::platform::log_fmt(format_args!(
                         "NTP: synchronized unix={}",
                         unix_seconds
                     ));
@@ -1129,7 +1150,7 @@ async fn ntp_loop(
                 NTP_REFRESH_SECONDS
             }
             None => {
-                crate::platform::log_fmt(format_args!("NTP: sync failed; retrying"));
+                mcrs_firmware::platform::log_fmt(format_args!("NTP: sync failed; retrying"));
                 NTP_RETRY_SECONDS
             }
         };
@@ -1157,7 +1178,7 @@ async fn sync_ntp(stack: embassy_net::Stack<'_>, host: &str) -> Option<u32> {
     socket.bind(0).ok()?;
     let mut request = [0u8; 48];
     request[0] = 0x23;
-    request[40..48].copy_from_slice(&crate::platform::now_millis().to_be_bytes());
+    request[40..48].copy_from_slice(&mcrs_firmware::platform::now_millis().to_be_bytes());
     socket.send_to(&request, (address, NTP_PORT)).await.ok()?;
 
     let mut response = [0u8; 48];
@@ -1188,7 +1209,7 @@ async fn sync_ntp(stack: embassy_net::Stack<'_>, host: &str) -> Option<u32> {
 
 async fn serve_ota(
     stack: embassy_net::Stack<'_>,
-    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    context: &mcrs_firmware::app::AppContext<mcrs_firmware::platform::EspStorage>,
 ) -> ! {
     loop {
         wait_for_ota_requested_idle(context, true).await;
@@ -1198,21 +1219,24 @@ async fn serve_ota(
 
 async fn serve_ota_session(
     stack: embassy_net::Stack<'_>,
-    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    context: &mcrs_firmware::app::AppContext<mcrs_firmware::platform::EspStorage>,
 ) {
     while context.ota_requested() {
         let mut rx_buffer = [0u8; 2048];
         let mut tx_buffer = [0u8; 2048];
         let mut socket = embassy_net::tcp::TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
         if accept_ota_connection(context, &mut socket).await {
-            crate::platform::log_fmt(format_args!("OTA: client connected"));
+            mcrs_firmware::platform::log_fmt(format_args!("OTA: client connected"));
             match handle_ota_connection(context, &mut socket).await {
                 OtaConnectionResult::Complete(Ok(())) => {}
                 OtaConnectionResult::Complete(Err(error)) => {
-                    crate::platform::log_fmt(format_args!("OTA: request failed: {:?}", error));
+                    mcrs_firmware::platform::log_fmt(format_args!(
+                        "OTA: request failed: {:?}",
+                        error
+                    ));
                 }
                 OtaConnectionResult::Stopped => {
-                    crate::platform::log_fmt(format_args!("OTA: request aborted"));
+                    mcrs_firmware::platform::log_fmt(format_args!("OTA: request aborted"));
                 }
             }
         }
@@ -1221,7 +1245,7 @@ async fn serve_ota_session(
 }
 
 async fn accept_ota_connection<'a>(
-    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    context: &mcrs_firmware::app::AppContext<mcrs_firmware::platform::EspStorage>,
     socket: &mut embassy_net::tcp::TcpSocket<'a>,
 ) -> bool {
     let generation = context.ota_generation();
@@ -1241,16 +1265,16 @@ async fn accept_ota_connection<'a>(
 }
 
 enum OtaConnectionResult {
-    Complete(Result<(), crate::app::ota::HttpOtaError>),
+    Complete(Result<(), mcrs_firmware::app::ota::HttpOtaError>),
     Stopped,
 }
 
 async fn handle_ota_connection<'a>(
-    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    context: &mcrs_firmware::app::AppContext<mcrs_firmware::platform::EspStorage>,
     socket: &mut embassy_net::tcp::TcpSocket<'a>,
 ) -> OtaConnectionResult {
     let generation = context.ota_generation();
-    let mut connection = pin!(crate::app::ota::handle_connection(socket));
+    let mut connection = pin!(mcrs_firmware::app::ota::handle_connection(socket));
     poll_fn(|cx| {
         if !context.ota_requested() || context.ota_generation() != generation {
             return Poll::Ready(OtaConnectionResult::Stopped);
@@ -1278,9 +1302,9 @@ async fn start_ota_ap(
     ))
 }
 
-async fn ota_ssid<S>(context: &crate::app::AppContext<S>) -> String
+async fn ota_ssid<S>(context: &mcrs_firmware::app::AppContext<S>) -> String
 where
-    S: crate::platform::storage::Storage,
+    S: mcrs_firmware::platform::storage::Storage,
 {
     let public_key = context.public_key().await;
     format!(
@@ -1379,7 +1403,7 @@ fn append_dhcp_option(response: &mut [u8], offset: usize, code: u8, value: &[u8]
 }
 
 async fn wait_for_ota_requested_idle(
-    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    context: &mcrs_firmware::app::AppContext<mcrs_firmware::platform::EspStorage>,
     requested: bool,
 ) {
     loop {
@@ -1406,9 +1430,9 @@ async fn wait_for_ota_requested_idle(
 
 async fn battery_task(
     mut battery: BatteryMonitor,
-    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    context: &mcrs_firmware::app::AppContext<mcrs_firmware::platform::EspStorage>,
 ) -> ! {
-    let mut delay = crate::platform::radio_delay();
+    let mut delay = mcrs_firmware::platform::radio_delay();
 
     loop {
         publish_battery_sample_with_delay(&mut battery, context, &mut delay).await;
@@ -1419,16 +1443,16 @@ async fn battery_task(
 
 pub async fn publish_battery_sample(
     battery: &mut BatteryMonitor,
-    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    context: &mcrs_firmware::app::AppContext<mcrs_firmware::platform::EspStorage>,
 ) {
-    let mut delay = crate::platform::radio_delay();
+    let mut delay = mcrs_firmware::platform::radio_delay();
     publish_battery_sample_with_delay(battery, context, &mut delay).await;
 }
 
 async fn publish_battery_sample_with_delay(
     battery: &mut BatteryMonitor,
-    context: &crate::app::AppContext<crate::platform::EspStorage>,
-    delay: &mut crate::platform::RadioDelay,
+    context: &mcrs_firmware::app::AppContext<mcrs_firmware::platform::EspStorage>,
+    delay: &mut mcrs_firmware::platform::RadioDelay,
 ) {
     let Some(sample) = battery.sample(delay).await else {
         context.set_battery_millivolts(None);
@@ -1437,7 +1461,7 @@ async fn publish_battery_sample_with_delay(
     };
 
     let percent = battery_level_percent(sample.millivolts);
-    crate::platform::log_fmt(format_args!(
+    mcrs_firmware::platform::log_fmt(format_args!(
         "Battery: adc={}mV battery={}mV {}%",
         sample.adc_millivolts, sample.millivolts, percent
     ));
@@ -1459,12 +1483,14 @@ enum BatterySampleError {
 impl BatterySampleError {
     fn log(self) {
         match self {
-            Self::AdcRead => crate::platform::log_fmt(format_args!("Battery: ADC read failed")),
+            Self::AdcRead => {
+                mcrs_firmware::platform::log_fmt(format_args!("Battery: ADC read failed"))
+            }
             Self::RawZero => {
-                crate::platform::log_fmt(format_args!("Battery: ADC raw sample is zero"))
+                mcrs_firmware::platform::log_fmt(format_args!("Battery: ADC raw sample is zero"))
             }
             Self::Arithmetic => {
-                crate::platform::log_fmt(format_args!("Battery: sample conversion failed"))
+                mcrs_firmware::platform::log_fmt(format_args!("Battery: sample conversion failed"))
             }
         }
     }
@@ -1472,11 +1498,11 @@ impl BatterySampleError {
 
 async fn radio_task<FRONTEND, S>(
     radio: RadioResources<FRONTEND>,
-    context: &crate::app::AppContext<S>,
+    context: &mcrs_firmware::app::AppContext<S>,
 ) -> !
 where
     FRONTEND: RadioFrontend,
-    S: crate::platform::storage::Storage,
+    S: mcrs_firmware::platform::storage::Storage,
 {
     let RadioResources {
         spi,
@@ -1487,21 +1513,21 @@ where
         board_config,
         frontend,
     } = radio;
-    let spi = crate::modules::spi_device::BlockingExclusiveSpiDevice::new(
+    let spi = mcrs_firmware::modules::spi_device::BlockingExclusiveSpiDevice::new(
         spi,
         cs,
-        crate::platform::spi_delay(),
+        mcrs_firmware::platform::spi_delay(),
     );
     let receive_config = context
         .with_config(|config| config.radio().receive_config())
         .await;
 
-    let receiver = match crate::modules::sx1262::init_receiver(
+    let receiver = match mcrs_firmware::modules::sx1262::init_receiver(
         spi,
         reset,
         dio1,
         busy,
-        crate::platform::radio_delay(),
+        mcrs_firmware::platform::radio_delay(),
         board_config,
         receive_config,
     )
@@ -1509,15 +1535,15 @@ where
     {
         Ok(receiver) => receiver,
         Err(_) => {
-            crate::platform::log_radio_init_failed();
-            crate::platform::idle_loop();
+            mcrs_firmware::platform::log_radio_init_failed();
+            mcrs_firmware::platform::idle_loop();
         }
     };
 
-    crate::platform::log_radio_initialized();
-    let mut app_delay = crate::platform::radio_delay();
+    mcrs_firmware::platform::log_radio_initialized();
+    let mut app_delay = mcrs_firmware::platform::radio_delay();
     let mut receiver = BoardRadio { receiver, frontend };
-    crate::app::radio_loop(&mut receiver, context, &mut app_delay).await;
+    mcrs_firmware::app::radio_loop(&mut receiver, context, &mut app_delay).await;
 }
 
 struct BoardRadio<R, FRONTEND> {
@@ -1525,15 +1551,15 @@ struct BoardRadio<R, FRONTEND> {
     frontend: FRONTEND,
 }
 
-impl<R, FRONTEND> crate::modules::Receiver for BoardRadio<R, FRONTEND>
+impl<R, FRONTEND> mcrs_firmware::modules::Radio for BoardRadio<R, FRONTEND>
 where
-    R: crate::modules::Receiver,
+    R: mcrs_firmware::modules::Radio,
     FRONTEND: RadioFrontend,
 {
     async fn wait_for_read(
         &mut self,
         buffer: &mut [u8],
-    ) -> Result<crate::modules::ReceivedPacket, ()> {
+    ) -> Result<mcrs_firmware::modules::ReceivedPacket, ()> {
         self.frontend.set_rx_mode();
         self.receiver.wait_for_read(buffer).await
     }
@@ -1553,8 +1579,8 @@ where
 
 async fn cli_task(
     serial: &mut Option<CliSerial>,
-    cli: &mut crate::app::cli::Cli,
-    context: &crate::app::AppContext<crate::platform::EspStorage>,
+    cli: &mut mcrs_firmware::app::cli::Cli,
+    context: &mcrs_firmware::app::AppContext<mcrs_firmware::platform::EspStorage>,
 ) -> ! {
     loop {
         let Some(serial) = serial else {
@@ -1562,7 +1588,7 @@ async fn cli_task(
             continue;
         };
 
-        let mut byte = [0];
+        let mut byte = [0u8];
         #[cfg(feature = "board-heltec-v4")]
         let read = embedded_io_async_06::Read::read(serial, &mut byte).await;
         #[cfg(not(feature = "board-heltec-v4"))]
@@ -1571,11 +1597,11 @@ async fn cli_task(
             Ok(count) if count > 0 => {
                 let echo = cli.echo_for_byte(byte[0]);
                 match echo {
-                    crate::app::cli::SerialEcho::None => {}
-                    crate::app::cli::SerialEcho::Byte => {
+                    mcrs_firmware::app::cli::SerialEcho::None => {}
+                    mcrs_firmware::app::cli::SerialEcho::Byte => {
                         esp_println::print!("{}", byte[0] as char);
                     }
-                    crate::app::cli::SerialEcho::Bytes(bytes) => {
+                    mcrs_firmware::app::cli::SerialEcho::Bytes(bytes) => {
                         esp_println::print!("{}", core::str::from_utf8(bytes).unwrap_or(""));
                     }
                 }
@@ -1587,7 +1613,10 @@ async fn cli_task(
 }
 
 impl BatteryMonitor {
-    async fn sample(&mut self, delay: &mut crate::platform::RadioDelay) -> Option<BatterySample> {
+    async fn sample(
+        &mut self,
+        delay: &mut mcrs_firmware::platform::RadioDelay,
+    ) -> Option<BatterySample> {
         self.ctrl.set_level(self.ctrl_active_level);
         delay.delay_ms(BATTERY_STABILIZE_MS).await;
 
@@ -1668,22 +1697,22 @@ pub fn opposite_level(level: Level) -> Level {
     }
 }
 
-pub async fn log_effective_config<S>(context: &crate::app::AppContext<S>)
+pub async fn log_effective_config<S>(context: &mcrs_firmware::app::AppContext<S>)
 where
-    S: crate::platform::storage::Storage,
+    S: mcrs_firmware::platform::storage::Storage,
 {
     let mut output = alloc::string::String::new();
     context
         .with_config(|config| config.write_effective_config(&mut output))
         .await;
-    crate::platform::log_fmt(format_args!("Effective config:"));
+    mcrs_firmware::platform::log_fmt(format_args!("Effective config:"));
     for line in output.lines() {
-        crate::platform::log_fmt(format_args!("{}", line));
+        mcrs_firmware::platform::log_fmt(format_args!("{}", line));
     }
 }
 
-pub fn log_memory_profile(memory: crate::memory::MemoryProfile) {
-    crate::platform::log_fmt(format_args!(
+pub fn log_memory_profile(memory: mcrs_firmware::memory::MemoryProfile) {
+    mcrs_firmware::platform::log_fmt(format_args!(
         "Memory profile: heap={} inbound_queue={} outbound_queue={} neighbours={} seen_packets={}",
         memory.heap_size,
         memory.inbound_queue_len,
