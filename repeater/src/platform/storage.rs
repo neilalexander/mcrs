@@ -1,5 +1,5 @@
-#[path = "storage/littlefs.rs"]
 mod littlefs;
+
 pub use littlefs::LittleFsStorage;
 
 pub trait Storage {

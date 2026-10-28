@@ -1,6 +1,6 @@
-use embedded_io_async::Write as _;
-
 use super::{AppContext, cli::PostReplyAction};
+use defmt::info;
+use embedded_io_async::Write as _;
 
 const TELNET_PORT: u16 = 23;
 const LINE_BUFFER_LEN: usize = 160;
@@ -14,16 +14,16 @@ where
         core::future::pending::<()>().await;
     }
 
-    crate::platform::log_fmt(format_args!(
+    info!(
         "Wi-Fi: privileged CLI listening on telnet port {}",
         TELNET_PORT
-    ));
+    );
     loop {
         let mut rx_buffer = [0u8; 512];
         let mut tx_buffer = [0u8; 1024];
         let mut socket = embassy_net::tcp::TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
         if socket.accept(TELNET_PORT).await.is_ok() {
-            crate::platform::log_fmt(format_args!("Wi-Fi: telnet CLI client connected"));
+            info!("Wi-Fi: telnet CLI client connected");
             let _ = handle_connection(&mut socket, context).await;
         }
         socket.abort();

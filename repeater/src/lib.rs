@@ -13,3 +13,5 @@ pub mod radio_metrics;
 mod crypto_tests;
 #[cfg(test)]
 use crypto_tests::platform;
+
+pub const VERSION: &str = env!("MESHCORE_FIRMWARE_VERSION");

@@ -6,8 +6,7 @@ use crate::{
     RoutePath, RouteType, TracePath, TransportCodes,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone, PartialEq, Eq, defmt::Format)]
 pub struct Packet {
     pub route_type: RouteType,
     pub transport_codes: Option<TransportCodes>,

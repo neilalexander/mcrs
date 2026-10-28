@@ -7,8 +7,7 @@ use crate::{
     wire::{read_array, read_u32_le},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone, PartialEq, Eq, defmt::Format)]
 pub struct AdvertPayload {
     pub public_key: [u8; PUB_KEY_SIZE],
     pub timestamp: u32,

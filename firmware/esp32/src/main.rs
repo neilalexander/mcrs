@@ -1,6 +1,5 @@
 #![no_std]
 #![no_main]
-#![allow(async_fn_in_trait)]
 
 extern crate alloc;
 
@@ -21,3 +20,4 @@ compile_error!(
 compile_error!("Select only one firmware board feature");
 
 mod board;
+mod esp;

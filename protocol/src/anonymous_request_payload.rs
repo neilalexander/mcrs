@@ -5,8 +5,7 @@ use crate::{
     wire::{ensure_payload_len, read_array, read_u8},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone, PartialEq, Eq, defmt::Format)]
 pub struct AnonymousRequestPayload {
     pub destination_hash: u8,
     pub sender_pubkey: [u8; PUB_KEY_SIZE],
