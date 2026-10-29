@@ -24,45 +24,57 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
-      - name: Install Rust
-        run: |
-          rustup toolchain install stable --profile minimal --no-self-update
-          rustup default stable
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
 
+      # flake.lock pins esp-rs-nix to an SSH URL, but runners have no GitHub
+      # SSH key. The repository is public, so fetch it over HTTPS instead.
+      - name: Fetch flake inputs over HTTPS
+        run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+
+      # The toolchain comes from flake.lock, so only reuse build output built by it.
       - name: Cache Cargo
         uses: actions/cache@v6
         with:
           path: |
             ~/.cargo
             target
-          key: unit-tests-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          key: unit-tests-${{ runner.os }}-${{ hashFiles('flake.lock') }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            unit-tests-${{ runner.os }}-
+            unit-tests-${{ runner.os }}-${{ hashFiles('flake.lock') }}-
 
       - name: Run unit tests
-        run: cargo test --locked -p mcrs-protocol
+        run: nix develop --command cargo test --locked -p mcrs-protocol
 
   mqtt:
-    name: MQTT transport
+    name: Repeater
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
 
-      - name: Install Rust
-        run: |
-          rustup toolchain install stable --profile minimal --no-self-update
-          rustup default stable
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
 
+      # flake.lock pins esp-rs-nix to an SSH URL, but runners have no GitHub
+      # SSH key. The repository is public, so fetch it over HTTPS instead.
+      - name: Fetch flake inputs over HTTPS
+        run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+
+      # The toolchain comes from flake.lock, so only reuse build output built by it.
       - name: Cache Cargo
         uses: actions/cache@v6
         with:
           path: |
             ~/.cargo
             target
-          key: mqtt-tests-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          key: mqtt-tests-${{ runner.os }}-${{ hashFiles('flake.lock') }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            mqtt-tests-${{ runner.os }}-
+            mqtt-tests-${{ runner.os }}-${{ hashFiles('flake.lock') }}-
 
       - name: Run unit tests
-        run: cargo test --locked -p mcrs-firmware --lib --features mqtt
+        run: nix develop --command cargo test --locked -p mcrs-repeater --lib --features mqtt
