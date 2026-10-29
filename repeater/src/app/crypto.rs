@@ -1,5 +1,8 @@
 extern crate alloc;
 
+use crate::{Platform, app::AppContext, platform::Storage};
+
+use super::identity::Identity;
 use aes::{
     Aes128,
     cipher::{Block, BlockCipherDecrypt, BlockCipherEncrypt, KeyInit},
@@ -12,8 +15,6 @@ use mcrs_protocol::{
     TextMessagePlaintext, TextType,
 };
 use sha2::Sha256;
-
-use super::identity::Identity;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -98,7 +99,8 @@ pub fn decrypt_authenticated_direct_payload(
     None
 }
 
-pub fn encode_login_response(
+pub fn encode_login_response<P: Platform, S: Storage>(
+    context: &AppContext<P, S>,
     shared_secret: &[u8; 32],
     requester_public_key: &[u8; 32],
     responder_public_key: &[u8; 32],
@@ -106,11 +108,16 @@ pub fn encode_login_response(
     reply_path: Path,
 ) -> Option<Vec<u8>> {
     let response = RepeaterLoginResponsePlaintext {
-        server_timestamp: todo!("now seconds"),
+        server_timestamp: context.platform.now_seconds(),
         keep_alive_interval: 0,
         legacy_permissions: u8::from(acl_permissions == PERM_ACL_ADMIN),
         acl_permissions,
-        nonce: response_nonce(shared_secret, requester_public_key, responder_public_key),
+        nonce: response_nonce(
+            context,
+            shared_secret,
+            requester_public_key,
+            responder_public_key,
+        ),
         firmware_version_level: 2,
     };
 
@@ -123,7 +130,8 @@ pub fn encode_login_response(
     )
 }
 
-pub fn encode_cli_text_response(
+pub fn encode_cli_text_response<P: Platform, S: Storage>(
+    context: &AppContext<P, S>,
     shared_secret: &[u8; 32],
     requester_public_key: &[u8; 32],
     responder_public_key: &[u8; 32],
@@ -131,7 +139,7 @@ pub fn encode_cli_text_response(
     message: &[u8],
     reply_path: Path,
 ) -> Option<Vec<u8>> {
-    let mut timestamp: u32 = todo!("now seconds");
+    let mut timestamp: u32 = context.platform.now_seconds();
     if timestamp == request_timestamp {
         timestamp = timestamp.wrapping_add(1);
     }
@@ -236,16 +244,17 @@ fn encode_direct_payload(
     .ok()
 }
 
-fn response_nonce(
+fn response_nonce<P: Platform, S: Storage>(
+    context: &AppContext<P, S>,
     shared_secret: &[u8; 32],
     requester_public_key: &[u8; 32],
     responder_public_key: &[u8; 32],
 ) -> [u8; 4] {
     let Ok(mut mac) = <HmacSha256 as KeyInit>::new_from_slice(shared_secret) else {
-        return todo!("now seconds .to_le_bytes();");
+        return context.platform.now_seconds().to_le_bytes();
     };
 
-    mac.update(todo!("&crate::platform::now_millis().to_le_bytes()"));
+    mac.update(&context.platform.now_millis().to_le_bytes());
     mac.update(requester_public_key);
     mac.update(responder_public_key);
 

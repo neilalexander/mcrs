@@ -1,7 +1,6 @@
 use defmt::{debug, info};
 use mcrs_protocol::{
-    AdvertNodeType, ControlMessage, DirectEncryptedPayload, GroupEncryptedPayload, Packet, Payload,
-    PayloadKind, RoutePath, RouteType, TraceHashSize,
+    ControlMessage, DirectEncryptedPayload, GroupEncryptedPayload, Packet, Payload, RoutePath,
 };
 
 const VERBOSE_PROTOCOL_LOGS: bool = false;

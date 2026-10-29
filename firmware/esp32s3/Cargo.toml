@@ -5,3 +5,9 @@ resolver = "3"
 # The Wi-Fi driver requires optimization even in development builds.
 [profile.dev.package.esp-radio]
 opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+debug = 2

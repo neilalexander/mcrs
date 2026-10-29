@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-embassy-futures = { version = "0.1.2" }
-embassy-sync = { version = "0.8.0", features = ["defmt"] }
+mcrs-repeater = { path = "../../repeater" }
+
 embassy-executor = { version = "0.10.0", features = [
     "platform-cortex-m",
     "executor-thread",
@@ -25,7 +25,6 @@ embassy-nrf = { version = "0.11.0", features = [
     "time",
     "nfc-pins-as-gpio",
 ] }
-embedded-io-async = { version = "0.7.0", features = ["defmt"] }
 
 defmt = "1.0.1"
 defmt-rtt = "1.0.0"
@@ -37,10 +36,14 @@ cortex-m = { version = "0.7.6", features = [
 cortex-m-rt = "0.7.0"
 panic-probe = { version = "1.0.0", features = ["print-defmt"] }
 
-lora-phy = { git = "https://github.com/lora-rs/lora-rs.git", rev = "d66b4a3", features = ["defmt-03"] }
-mcrs-protocol = { path = "../../protocol" }
+# The release mcrs-repeater uses: its SX1262 board settings are lora-phy types.
+lora-phy = "3.0.1"
 embedded-hal-bus = { version = "0.3.0", features = ["async", "defmt-03"] }
 embedded-alloc = "0.7.0"
 
+
 [profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
 debug = 2

@@ -6,8 +6,9 @@
 //! every device has its own trait in this module. Devices that a standard
 //! embedded trait already describes use that trait instead: the console is an
 //! `embedded-io-async` stream and the button an `embedded-hal-async` input. A
-//! board without a console, status screen, button or battery monitor passes
-//! [`NoConsole`], [`NoDisplay`], [`NoButton`] or [`NoBattery`].
+//! board without storage, a console, status screen, button or battery monitor
+//! passes [`NoStorage`], [`NoConsole`], [`NoDisplay`], [`NoButton`] or
+//! [`NoBattery`].
 
 pub mod storage;
 
@@ -123,6 +124,20 @@ pub trait StatusDisplay {
 pub trait Battery {
     /// The battery voltage in millivolts, or `None` if the reading failed.
     fn millivolts(&mut self) -> impl Future<Output = Option<u16>>;
+}
+
+/// Storage for a board without any. Nothing is kept, so the repeater starts
+/// from its defaults with a new identity on every boot.
+pub struct NoStorage;
+
+impl Storage for NoStorage {
+    fn read(&mut self, _key: &str, _buffer: &mut [u8]) -> Result<usize, storage::Error> {
+        Err(storage::Error::NotAvailable)
+    }
+
+    fn write_atomic(&mut self, _key: &str, _data: &[u8]) -> Result<(), storage::Error> {
+        Err(storage::Error::NotAvailable)
+    }
 }
 
 /// The console for a board without one. It never receives input and discards

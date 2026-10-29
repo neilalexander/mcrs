@@ -1,13 +1,16 @@
 extern crate alloc;
 
 use crate::{
-    app::AppContext,
+    app::{
+        AppContext,
+        crypto::{encode_cli_text_response, encode_login_response},
+    },
     platform::{Platform, Storage},
 };
 use alloc::{format, string::String, vec, vec::Vec};
 use core::fmt::Write;
 use defmt::{debug, info, warn};
-use embedded_io_async::{Read, Write as _};
+use embedded_io_async::Read;
 use mcrs_protocol::{
     PERM_ACL_ADMIN, PERM_ACL_GUEST, Packet, Payload, RepeaterResponsePlaintext, RequestPlaintext,
     TextMessagePlaintext, TextType,
@@ -26,7 +29,7 @@ const REQ_TYPE_GET_OWNER_INFO: u8 = 0x07;
 const LPP_CHANNEL_SELF: u8 = 1;
 const LPP_TYPE_VOLTAGE: u8 = 116;
 const REPEATER_STATS_LEN: usize = 56;
-const FIRMWARE_VERSION: &str = concat!("MCRS ", env!("MESHCORE_FIRMWARE_VERSION"));
+const FIRMWARE_VERSION: &str = concat!("mcrs_", env!("MESHCORE_FIRMWARE_VERSION"));
 
 pub struct Cli {
     line: [u8; LINE_BUFFER_LEN],
@@ -257,7 +260,8 @@ async fn handle_anonymous_request<P: Platform, S: Storage>(
             remote_privilege_name(privilege),
             sender
         );
-        return super::crypto::encode_login_response(
+        return encode_login_response(
+            &context,
             &decrypted.shared_secret,
             &decrypted.sender_pubkey,
             &responder_public_key,
@@ -281,6 +285,7 @@ async fn handle_anonymous_request<P: Platform, S: Storage>(
         context.request_reboot_after_next_remote_reply();
     }
     encode_remote_cli_reply(
+        &context,
         &decrypted.shared_secret,
         &decrypted.sender_pubkey,
         &responder_public_key,
@@ -347,6 +352,7 @@ async fn handle_authenticated_text_message<P: Platform, S: Storage>(
         response.text.insert_str(0, prefix);
     }
     encode_remote_cli_reply(
+        &context,
         &decrypted.shared_secret,
         &decrypted.sender_pubkey,
         &responder_public_key,
@@ -1875,7 +1881,8 @@ fn on_off_text(value: bool) -> &'static str {
     if value { "on" } else { "off" }
 }
 
-fn encode_remote_cli_reply(
+fn encode_remote_cli_reply<P: Platform, S: Storage>(
+    context: &AppContext<P, S>,
     shared_secret: &[u8; 32],
     requester_public_key: &[u8; 32],
     responder_public_key: &[u8; 32],
@@ -1884,7 +1891,8 @@ fn encode_remote_cli_reply(
     reply_path: mcrs_protocol::Path,
 ) -> Option<alloc::vec::Vec<u8>> {
     truncate_to_remote_reply_len(&mut output);
-    super::crypto::encode_cli_text_response(
+    encode_cli_text_response(
+        &context,
         shared_secret,
         requester_public_key,
         responder_public_key,
