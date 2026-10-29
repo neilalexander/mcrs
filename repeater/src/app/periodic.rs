@@ -1,6 +1,5 @@
 use super::AppContext;
 use crate::platform::Platform;
-use crate::platform::storage::Storage;
 use defmt::{error, info};
 use embedded_hal_async::delay::DelayNs;
 
@@ -8,10 +7,8 @@ mod schedule;
 
 use schedule::Schedule;
 
-pub async fn run<P: Platform, S: Storage, D: DelayNs>(
-    context: &AppContext<P, S>,
-    delay: &mut D,
-) -> ! {
+pub(crate) async fn run<P: Platform>(context: &AppContext<P>) -> ! {
+    let mut delay = context.platform.delay();
     let (advert_interval, flood_interval) = context
         .with_config(|config| {
             (
@@ -31,7 +28,10 @@ pub async fn run<P: Platform, S: Storage, D: DelayNs>(
                     u64::from(config.flood_advert_interval_hours()) * 3_600_000,
                     context.platform.now_millis(),
                 ) {
-                    Some(super::discovery::flood_advert(config))
+                    Some(super::discovery::flood_advert(
+                        config,
+                        context.platform.now_seconds(),
+                    ))
                 } else {
                     None
                 }
@@ -46,7 +46,10 @@ pub async fn run<P: Platform, S: Storage, D: DelayNs>(
                     u64::from(config.advert_interval_minutes()) * 60_000,
                     context.platform.now_millis(),
                 ) {
-                    Some(super::discovery::zero_hop_advert(config))
+                    Some(super::discovery::zero_hop_advert(
+                        config,
+                        context.platform.now_seconds(),
+                    ))
                 } else {
                     None
                 }
@@ -58,8 +61,8 @@ pub async fn run<P: Platform, S: Storage, D: DelayNs>(
     }
 }
 
-async fn send_advert<P: Platform, S: Storage>(
-    context: &AppContext<P, S>,
+async fn send_advert<P: Platform>(
+    context: &AppContext<P>,
     packet: Option<alloc::vec::Vec<u8>>,
     kind: &str,
 ) {

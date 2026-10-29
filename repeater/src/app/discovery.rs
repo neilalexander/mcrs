@@ -1,6 +1,5 @@
 use crate::app::{AppContext, config::AppConfig};
 use crate::platform::Platform;
-use crate::platform::storage::Storage;
 use alloc::{string::String, vec::Vec};
 use defmt::{error, info};
 use mcrs_protocol::{
@@ -10,12 +9,12 @@ use mcrs_protocol::{
 
 pub const DISCOVER_NEIGHBOURS_TTL_MS: u64 = 60_000;
 
-pub fn zero_hop_advert(config: &AppConfig) -> Option<Vec<u8>> {
-    advert(config, RouteType::Direct)
+pub fn zero_hop_advert(config: &AppConfig, timestamp: u32) -> Option<Vec<u8>> {
+    advert(config, RouteType::Direct, timestamp)
 }
 
-pub fn flood_advert(config: &AppConfig) -> Option<Vec<u8>> {
-    let mut packet = advert_packet(config, RouteType::Flood)?;
+pub fn flood_advert(config: &AppConfig, timestamp: u32) -> Option<Vec<u8>> {
+    let mut packet = advert_packet(config, RouteType::Flood, timestamp)?;
     let default_region = config
         .regions()
         .default_region()
@@ -34,11 +33,11 @@ pub fn flood_advert(config: &AppConfig) -> Option<Vec<u8>> {
     packet.encode().ok()
 }
 
-fn advert(config: &AppConfig, route_type: RouteType) -> Option<Vec<u8>> {
-    advert_packet(config, route_type)?.encode().ok()
+fn advert(config: &AppConfig, route_type: RouteType, timestamp: u32) -> Option<Vec<u8>> {
+    advert_packet(config, route_type, timestamp)?.encode().ok()
 }
 
-fn advert_packet(config: &AppConfig, route_type: RouteType) -> Option<Packet> {
+fn advert_packet(config: &AppConfig, route_type: RouteType, timestamp: u32) -> Option<Packet> {
     info!(
         "Advert: sending {} name={}",
         route_type_name(route_type),
@@ -54,7 +53,6 @@ fn advert_packet(config: &AppConfig, route_type: RouteType) -> Option<Packet> {
         name: advert_name(config.node_name(), location.is_some()),
     };
     let app_data_bytes = app_data.encode().ok()?;
-    let timestamp: u32 = todo!(); //crate::platform::now_seconds();
     let public_key = *config.identity().public_key();
 
     let mut signed_message = Vec::new();
@@ -127,9 +125,9 @@ pub fn discover_neighbours_request(tag: u32) -> Option<Vec<u8>> {
     .ok()
 }
 
-pub async fn handle_control_packet<P: Platform, S: Storage>(
+pub async fn handle_control_packet<P: Platform>(
     packet: &Packet,
-    context: &AppContext<P, S>,
+    context: &AppContext<P>,
     rssi: i16,
     snr_quarters: i16,
     now_ms: u64,
@@ -166,24 +164,21 @@ pub async fn handle_control_packet<P: Platform, S: Storage>(
     }
 }
 
-async fn handle_discover_request<P: Platform, S: Storage>(
-    context: &AppContext<P, S>,
+async fn handle_discover_request<P: Platform>(
+    context: &AppContext<P>,
     snr_quarters: i16,
     prefix_only: bool,
     type_filter: u8,
     tag: u32,
     since: Option<u32>,
-) -> Option<Vec<u8>>
-where
-    S: crate::platform::storage::Storage,
-{
+) -> Option<Vec<u8>> {
     if !context.with_config(|config| config.repeat_enabled()).await {
         return None;
     }
     if type_filter & (1 << AdvertNodeType::Repeater.to_nibble()) == 0 {
         return None;
     }
-    if since.is_some_and(|since| since > todo!()) {
+    if since.is_some_and(|since| since > context.platform.now_seconds()) {
         return None;
     }
 
@@ -207,17 +202,15 @@ where
     .ok()
 }
 
-async fn handle_discover_response<P: Platform, S: Storage>(
-    context: &AppContext<P, S>,
+async fn handle_discover_response<P: Platform>(
+    context: &AppContext<P>,
     rssi: i16,
     snr_quarters: i16,
     now_ms: u64,
     node_type: AdvertNodeType,
     tag: u32,
     pubkey: &[u8],
-) where
-    S: crate::platform::storage::Storage,
-{
+) {
     if node_type != AdvertNodeType::Repeater || pubkey.len() != mcrs_protocol::PUB_KEY_SIZE {
         return;
     }

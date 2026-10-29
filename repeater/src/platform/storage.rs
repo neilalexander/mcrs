@@ -1,7 +1,4 @@
-pub trait Storage {
-    fn read(&mut self, key: &str, buffer: &mut [u8]) -> Result<usize, Error>;
-    fn write_atomic(&mut self, key: &str, data: &[u8]) -> Result<(), Error>;
-}
+//! Types used with [`super::Storage`].
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {

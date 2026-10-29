@@ -1,37 +1,35 @@
-use crate::{
-    CliSerial,
-    esp::{EspStorage, RadioDelay},
-};
+use crate::esp::{self, RadioDelay};
+#[cfg(feature = "mqtt")]
 use alloc::{format, string::String};
+#[cfg(feature = "mqtt")]
 use core::{
     future::{Future, poll_fn},
     pin::pin,
     task::Poll,
 };
-use defmt::{debug, error, info, warn};
+#[cfg(feature = "mqtt")]
+use defmt::info;
+use defmt::{debug, error, warn};
 use embedded_hal_async::delay::DelayNs as _;
 use esp_hal::{
     Blocking,
-    analog::adc::{Adc, AdcCalCurve, AdcPin},
-    gpio::{Flex, Input, Level, Output},
-    peripherals::{ADC1, GPIO1, RNG, WIFI},
+    analog::adc::{Adc, AdcCalCurve, AdcConfig, AdcPin, Attenuation},
+    gpio::{Flex, Input, InputConfig, Level, Output, OutputConfig},
+    peripherals::{ADC1, GPIO1, GPIO37, RNG, WIFI},
     rng::{Trng, TrngSource},
-    spi::master::Spi,
 };
 use esp_radio::wifi::{AuthenticationMethod, Config, ap::AccessPointConfig, sta::StationConfig};
+#[cfg(feature = "mqtt")]
+use mcrs_repeater::{VERSION, app::AppContext, platform::Platform};
 use mcrs_repeater::{
-    VERSION,
-    app::AppContext,
     memory::MemoryProfile,
-    platform::{Platform, storage::Storage},
+    platform::{Battery, Radio, ReceivedPacket},
 };
 use static_cell::StaticCell;
 
-pub type RadioSpi = Spi<'static, Blocking>;
 pub type RadioOutput = Output<'static>;
 pub type RadioInput = Input<'static>;
 
-pub type ButtonInput = Input<'static>;
 pub type BatteryAdc = Adc<'static, ADC1<'static>, Blocking>;
 pub type BatterySensePin = AdcPin<GPIO1<'static>, ADC1<'static>, AdcCalCurve<ADC1<'static>>>;
 
@@ -49,9 +47,6 @@ const OTA_DHCP_CLIENT_PORT: u16 = 68;
 const OTA_CLIENT_IP: embassy_net::Ipv4Address = embassy_net::Ipv4Address::new(192, 168, 4, 2);
 const DHCP_PACKET_LEN: usize = 300;
 const DHCP_COOKIE: [u8; 4] = [99, 130, 83, 99];
-const DISPLAY_AWAKE_MS: u32 = 5_000;
-const PRG_ADVERT_HOLD_MS: u32 = 2_000;
-const BATTERY_SAMPLE_INTERVAL_MS: u32 = 60_000;
 const BATTERY_STABILIZE_MS: u32 = 10;
 const BATTERY_ADC_DISCARD_SAMPLES: u32 = 8;
 const BATTERY_ADC_SAMPLES: u32 = 8;
@@ -59,8 +54,6 @@ const BATTERY_ADC_SAMPLES: u32 = 8;
 // calibrated result here matches the raw 10-bit ADC voltage term used by
 // upstream, so the same board multiplier is still required.
 const BATTERY_DIVIDER_SCALE_MILLI: u32 = 5420;
-const BATTERY_PERCENT_MIN_MV: u16 = 3300;
-const BATTERY_PERCENT_MAX_MV: u16 = 4100;
 pub(crate) const MEMORY_PROFILE: MemoryProfile = MemoryProfile::new(160 * 1024, 8, 16, 64, 256);
 pub(crate) const STORAGE_LAYOUT: mcrs_repeater::platform::storage::Layout =
     mcrs_repeater::platform::storage::Layout {
@@ -68,40 +61,6 @@ pub(crate) const STORAGE_LAYOUT: mcrs_repeater::platform::storage::Layout =
         partition_size: 256 * 1024,
         max_file_size: 4096,
     };
-
-pub struct EspPlatform {}
-
-impl Platform for EspPlatform {
-    fn reboot(&self) -> ! {
-        todo!()
-    }
-
-    fn now_millis(&self) -> u64 {
-        todo!()
-    }
-
-    fn now_seconds(&self) -> u32 {
-        todo!()
-    }
-
-    fn set_wall_clock_if_forward(&self, unix_seconds: u32) -> bool {
-        todo!()
-    }
-
-    fn random_u32(&self) -> u32 {
-        todo!()
-    }
-}
-
-pub struct RadioResources<F> {
-    pub spi: RadioSpi,
-    pub cs: RadioOutput,
-    pub reset: RadioOutput,
-    pub dio1: RadioInput,
-    pub busy: RadioInput,
-    pub board_config: mcrs_repeater::modules::sx1262::BoardConfig,
-    pub frontend: F,
-}
 
 pub struct WifiResources {
     pub wifi: WIFI<'static>,
@@ -141,328 +100,6 @@ pub fn generate_identity_seed(rng: RNG<'_>, adc: ADC1<'_>) -> [u8; 32] {
     }
 
     seed
-}
-
-async fn display_task<I2C, RESET, POWER>(
-    mut display: Option<mcrs_repeater::modules::ssd1306::Display<I2C, RESET, POWER>>,
-    mut button: ButtonInput,
-    context: &AppContext<EspPlatform, EspStorage>,
-) -> !
-where
-    I2C: embedded_hal::i2c::I2c + embedded_hal::i2c::ErrorType,
-    RESET: embedded_hal::digital::OutputPin,
-    POWER: embedded_hal::digital::OutputPin,
-{
-    let mut display_delay = crate::esp::radio_delay();
-    let mut button_delay = crate::esp::radio_delay();
-
-    let Some(display) = &mut display else {
-        loop {
-            if wait_for_prg_button_action(&mut button_delay, &mut button).await
-                == ButtonAction::LongHold
-            {
-                queue_prg_button_advert(context).await;
-            }
-        }
-    };
-
-    if display.init(&mut display_delay).await.is_err() {
-        error!("display init failed");
-        loop {
-            if wait_for_prg_button_action(&mut button_delay, &mut button).await
-                == ButtonAction::LongHold
-            {
-                queue_prg_button_advert(context).await;
-            }
-        }
-    }
-
-    if write_display_status(display, context, None).await.is_err() {
-        error!("display write failed");
-        loop {
-            if wait_for_prg_button_action(&mut button_delay, &mut button).await
-                == ButtonAction::LongHold
-            {
-                queue_prg_button_advert(context).await;
-            }
-        }
-    }
-
-    let mut awake = true;
-    loop {
-        if awake {
-            match wait_for_display_timeout_or_button(&mut display_delay, &mut button).await {
-                DisplayEvent::Timeout => {
-                    if display.sleep().is_ok() {
-                        awake = false;
-                    } else {
-                        error!("display timeout");
-                    }
-                }
-                DisplayEvent::ButtonPressed => {
-                    if write_display_status(display, context, None).await.is_err() {
-                        error!("display status error after button press");
-                    }
-                    info!("OLED display wake extended");
-                    let action =
-                        wait_for_prg_button_release_or_hold(&mut button_delay, &mut button).await;
-                    show_prg_advert_message_if_sent(display, context, action).await;
-                }
-            }
-        } else {
-            wait_for_prg_button_press(&mut button).await;
-            // Start tracking the release before restoring the OLED rail. A
-            // short press can otherwise finish during the display's 110 ms
-            // power-on/reset sequence and be misclassified as a long hold.
-            let (wake_result, action) = {
-                let mut action = pin!(wait_for_prg_button_release_or_hold(
-                    &mut button_delay,
-                    &mut button
-                ));
-                let mut wake_display = pin!(display.wake(&mut display_delay));
-                let mut completed_action = None;
-                let wake_result = poll_fn(|cx| {
-                    if completed_action.is_none()
-                        && let Poll::Ready(action) = action.as_mut().poll(cx)
-                    {
-                        completed_action = Some(action);
-                    }
-                    wake_display.as_mut().poll(cx)
-                })
-                .await;
-                let action = match completed_action {
-                    Some(action) => action,
-                    None => action.as_mut().await,
-                };
-                (wake_result, action)
-            };
-
-            if wake_result.is_ok() && write_display_status(display, context, None).await.is_ok() {
-                info!("OLED display woken by PRG button");
-                awake = true;
-                show_prg_advert_message_if_sent(display, context, action).await;
-            } else {
-                error!("display status or wake result error");
-            }
-        }
-    }
-}
-
-enum DisplayEvent {
-    Timeout,
-    ButtonPressed,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ButtonAction {
-    ShortPress,
-    LongHold,
-}
-
-async fn wait_for_display_timeout_or_button(
-    display_delay: &mut RadioDelay,
-    button: &mut ButtonInput,
-) -> DisplayEvent {
-    let mut timeout = pin!(display_delay.delay_ms(DISPLAY_AWAKE_MS));
-    let mut button_press = pin!(wait_for_prg_button_press(button));
-
-    poll_fn(|cx| {
-        if timeout.as_mut().poll(cx).is_ready() {
-            return Poll::Ready(DisplayEvent::Timeout);
-        }
-
-        if button_press.as_mut().poll(cx).is_ready() {
-            return Poll::Ready(DisplayEvent::ButtonPressed);
-        }
-
-        Poll::Pending
-    })
-    .await
-}
-
-async fn wait_for_prg_button_press(button: &mut ButtonInput) {
-    let _ = embedded_hal_async::digital::Wait::wait_for_falling_edge(button).await;
-}
-
-async fn wait_for_prg_button_action(
-    delay: &mut RadioDelay,
-    button: &mut ButtonInput,
-) -> ButtonAction {
-    wait_for_prg_button_press(button).await;
-    wait_for_prg_button_release_or_hold(delay, button).await
-}
-
-async fn wait_for_prg_button_release_or_hold(
-    delay: &mut RadioDelay,
-    button: &mut ButtonInput,
-) -> ButtonAction {
-    let mut hold = pin!(delay.delay_ms(PRG_ADVERT_HOLD_MS));
-    let mut release = pin!(embedded_hal_async::digital::Wait::wait_for_rising_edge(
-        button
-    ));
-
-    poll_fn(|cx| {
-        if release.as_mut().poll(cx).is_ready() {
-            return Poll::Ready(ButtonAction::ShortPress);
-        }
-
-        if hold.as_mut().poll(cx).is_ready() {
-            return Poll::Ready(ButtonAction::LongHold);
-        }
-
-        Poll::Pending
-    })
-    .await
-}
-
-async fn queue_prg_button_advert(context: &AppContext<EspPlatform, EspStorage>) -> bool {
-    let packet = context
-        .with_config(mcrs_repeater::app::discovery::zero_hop_advert)
-        .await;
-
-    let Some(packet) = packet else {
-        error!("PRG button: advert encode failed");
-        return false;
-    };
-
-    let len = packet.len();
-    let region = context.outbound_region_label(&packet).await;
-    match context.enqueue_outbound(packet) {
-        Ok(()) => {
-            match region {
-                Some(region) => info!(
-                    "PRG button: queued zero-hop advert {} bytes region={}",
-                    len, region
-                ),
-                None => info!("PRG button: queued zero-hop advert {} bytes", len),
-            }
-            true
-        }
-        Err(_) => {
-            error!("PRG button: advert queue full");
-            false
-        }
-    }
-}
-
-async fn show_prg_advert_message_if_sent<I2C, RESET, POWER>(
-    display: &mut mcrs_repeater::modules::ssd1306::Display<I2C, RESET, POWER>,
-    context: &AppContext<EspPlatform, EspStorage>,
-    action: ButtonAction,
-) where
-    I2C: embedded_hal::i2c::I2c + embedded_hal::i2c::ErrorType,
-    RESET: embedded_hal::digital::OutputPin,
-    POWER: embedded_hal::digital::OutputPin,
-{
-    if action != ButtonAction::LongHold {
-        return;
-    }
-
-    if !queue_prg_button_advert(context).await {
-        return;
-    }
-
-    if write_display_status(display, context, Some("Zero-hop advert sent"))
-        .await
-        .is_err()
-    {
-        error!("display write failed");
-    }
-}
-
-async fn write_display_status<I2C, RESET, POWER>(
-    display: &mut mcrs_repeater::modules::ssd1306::Display<I2C, RESET, POWER>,
-    context: &AppContext<EspPlatform, EspStorage>,
-    message: Option<&str>,
-) -> Result<(), ()>
-where
-    I2C: embedded_hal::i2c::I2c + embedded_hal::i2c::ErrorType,
-    RESET: embedded_hal::digital::OutputPin,
-    POWER: embedded_hal::digital::OutputPin,
-{
-    let status = context.status();
-    let node_name = context
-        .with_config(|config| alloc::string::String::from(config.node_name()))
-        .await;
-    display.write_status(
-        &node_name,
-        VERSION,
-        context.public_key_prefix::<3>().await,
-        status.packets_sent,
-        status.packets_received,
-        status.packet_errors,
-        status.battery_millivolts,
-        status.battery_level_percent,
-        message,
-    )
-}
-
-pub async fn run_board_tasks<I2C, RESET, POWER, FRONTEND, SERIAL>(
-    display: Option<mcrs_repeater::modules::ssd1306::Display<I2C, RESET, POWER>>,
-    prg_button: ButtonInput,
-    battery: BatteryMonitor,
-    radio: RadioResources<FRONTEND>,
-    mut cli_serial: Option<SERIAL>,
-    wifi: WifiResources,
-    context: AppContext<EspPlatform, EspStorage>,
-) -> !
-where
-    I2C: embedded_hal::i2c::I2c + embedded_hal::i2c::ErrorType,
-    RESET: embedded_hal::digital::OutputPin,
-    POWER: embedded_hal::digital::OutputPin,
-    FRONTEND: RadioFrontend,
-    SERIAL: CliSerial,
-{
-    let mut cli = mcrs_repeater::app::cli::Cli::new();
-    let mut periodic_delay = crate::esp::radio_delay();
-    let mut display_future = pin!(display_task(display, prg_button, &context));
-    let mut radio_future = pin!(radio_task(radio, &context));
-    let mut handler_future = pin!(mcrs_repeater::app::handler_loop(&context));
-    let mut cli_future = pin!(cli_task(&mut cli_serial, &mut cli, &context));
-    let mut battery_future = pin!(battery_task(battery, &context));
-    //let mut ota_future = pin!(wifi_task(wifi, &context));
-    let mut periodic_future = pin!(mcrs_repeater::app::periodic::run(
-        &context,
-        &mut periodic_delay
-    ));
-
-    poll_fn(|cx| {
-        match display_future.as_mut().poll(cx) {
-            Poll::Ready(never) => match never {},
-            Poll::Pending => {}
-        }
-
-        match cli_future.as_mut().poll(cx) {
-            Poll::Ready(never) => match never {},
-            Poll::Pending => {}
-        }
-
-        match handler_future.as_mut().poll(cx) {
-            Poll::Ready(never) => match never {},
-            Poll::Pending => {}
-        }
-
-        match battery_future.as_mut().poll(cx) {
-            Poll::Ready(never) => match never {},
-            Poll::Pending => {}
-        }
-
-        // match ota_future.as_mut().poll(cx) {
-        //     Poll::Ready(never) => match never {},
-        //     Poll::Pending => {}
-        // }
-
-        match periodic_future.as_mut().poll(cx) {
-            Poll::Ready(never) => match never {},
-            Poll::Pending => {}
-        }
-
-        match radio_future.as_mut().poll(cx) {
-            Poll::Ready(never) => match never {},
-            Poll::Pending => Poll::Pending,
-        }
-    })
-    .await
 }
 
 // async fn wifi_task(mut wifi: WifiResources, context: &AppContext<EspPlatform, EspStorage>) -> ! {
@@ -730,9 +367,9 @@ where
 // }
 
 #[cfg(feature = "mqtt")]
-async fn mqtt_loop(
+async fn mqtt_loop<P: Platform>(
     stack: embassy_net::Stack<'_>,
-    context: &AppContext<EspPlatform, EspStorage>,
+    context: &AppContext<P>,
     index: usize,
 ) -> ! {
     use mcrs_repeater::app::mqtt::ConnectionState;
@@ -765,9 +402,9 @@ async fn mqtt_loop(
 }
 
 #[cfg(feature = "mqtt")]
-async fn mqtt_session(
+async fn mqtt_session<P: Platform>(
     stack: embassy_net::Stack<'_>,
-    context: &AppContext<EspPlatform, EspStorage>,
+    context: &AppContext<P>,
     index: usize,
     generation: u32,
     config: &mcrs_repeater::app::config::MqttConfig,
@@ -876,8 +513,8 @@ async fn mqtt_session(
 }
 
 #[cfg(feature = "mqtt")]
-async fn mqtt_status_json(
-    context: &AppContext<EspPlatform, EspStorage>,
+async fn mqtt_status_json<P: Platform>(
+    context: &AppContext<P>,
     public_key: &[u8; 32],
     online: bool,
 ) -> String {
@@ -888,7 +525,7 @@ async fn mqtt_status_json(
                 public_key,
                 online,
                 config.node_name(),
-                todo!("MODEL"),
+                context.platform.model(),
                 VERSION,
                 context.platform.now_seconds(),
                 mcrs_repeater::app::mqtt::StatusStats {
@@ -901,8 +538,8 @@ async fn mqtt_status_json(
 }
 
 #[cfg(feature = "mqtt")]
-async fn mqtt_connected<R: embedded_io_async::Read, W: embedded_io_async::Write>(
-    context: &AppContext<EspPlatform, EspStorage>,
+async fn mqtt_connected<P: Platform, R: embedded_io_async::Read, W: embedded_io_async::Write>(
+    context: &AppContext<P>,
     index: usize,
     generation: u32,
     config: &mcrs_repeater::app::config::MqttConfig,
@@ -1084,8 +721,8 @@ async fn mqtt_wait_ack<W: embedded_io_async::Write>(
 // Dropping a cancelled or timed-out operation may leave a partial MQTT frame.
 // Every error from this helper must therefore discard the connection.
 #[cfg(feature = "mqtt")]
-async fn mqtt_io<T, E>(
-    context: &AppContext<EspPlatform, EspStorage>,
+async fn mqtt_io<P: Platform, T, E>(
+    context: &AppContext<P>,
     index: usize,
     generation: u32,
     operation: impl Future<Output = Result<T, E>>,
@@ -1109,8 +746,8 @@ async fn mqtt_io<T, E>(
 }
 
 #[cfg(feature = "mqtt")]
-async fn wait_mqtt_retry_or_restart(
-    context: &AppContext<EspPlatform, EspStorage>,
+async fn wait_mqtt_retry_or_restart<P: Platform>(
+    context: &AppContext<P>,
     index: usize,
     generation: u32,
     seconds: u64,
@@ -1418,47 +1055,6 @@ async fn wait_mqtt_retry_or_restart(
 //     }
 // }
 
-async fn battery_task(
-    mut battery: BatteryMonitor,
-    context: &AppContext<EspPlatform, EspStorage>,
-) -> ! {
-    let mut delay = crate::esp::radio_delay();
-
-    loop {
-        publish_battery_sample_with_delay(&mut battery, context, &mut delay).await;
-
-        delay.delay_ms(BATTERY_SAMPLE_INTERVAL_MS).await;
-    }
-}
-
-pub async fn publish_battery_sample(
-    battery: &mut BatteryMonitor,
-    context: &AppContext<EspPlatform, EspStorage>,
-) {
-    let mut delay = crate::esp::radio_delay();
-    publish_battery_sample_with_delay(battery, context, &mut delay).await;
-}
-
-async fn publish_battery_sample_with_delay(
-    battery: &mut BatteryMonitor,
-    context: &AppContext<EspPlatform, EspStorage>,
-    delay: &mut RadioDelay,
-) {
-    let Some(sample) = battery.sample(delay).await else {
-        context.set_battery_millivolts(None);
-        context.set_battery_level_percent(None);
-        return;
-    };
-
-    let percent = battery_level_percent(sample.millivolts);
-    info!(
-        "Battery: adc={}mV battery={}mV {}%",
-        sample.adc_millivolts, sample.millivolts, percent
-    );
-    context.set_battery_millivolts(Some(sample.millivolts));
-    context.set_battery_level_percent(Some(percent));
-}
-
 struct BatterySample {
     adc_millivolts: u32,
     millivolts: u16,
@@ -1480,71 +1076,24 @@ impl BatterySampleError {
     }
 }
 
-async fn radio_task<FRONTEND, P, S>(
-    radio: RadioResources<FRONTEND>,
-    context: &AppContext<P, S>,
-) -> !
-where
-    FRONTEND: RadioFrontend,
-    P: Platform,
-    S: Storage,
-{
-    let RadioResources {
-        spi,
-        cs,
-        reset,
-        dio1,
-        busy,
-        board_config,
-        frontend,
-    } = radio;
-    let spi = mcrs_repeater::modules::spi_device::BlockingExclusiveSpiDevice::new(
-        spi,
-        cs,
-        crate::esp::spi_delay(),
-    );
-    let receive_config = context
-        .with_config(|config| config.radio().receive_config())
-        .await;
-
-    let receiver = match mcrs_repeater::modules::sx1262::init_receiver(
-        spi,
-        reset,
-        dio1,
-        busy,
-        crate::esp::radio_delay(),
-        board_config,
-        receive_config,
-    )
-    .await
-    {
-        Ok(receiver) => receiver,
-        Err(e) => {
-            error!("failed to initialize sx1262: {:?}", e);
-            crate::esp::idle_loop()
-        }
-    };
-
-    debug!("radio initialized");
-    let mut app_delay = crate::esp::radio_delay();
-    let mut receiver = BoardRadio { receiver, frontend };
-    mcrs_repeater::app::radio_loop(&mut receiver, context, &mut app_delay).await;
-}
-
-struct BoardRadio<R, FRONTEND> {
+/// A radio with the board's frontend switched to match each operation.
+pub struct BoardRadio<R, FRONTEND> {
     receiver: R,
     frontend: FRONTEND,
 }
 
-impl<R, FRONTEND> mcrs_repeater::modules::Radio for BoardRadio<R, FRONTEND>
+impl<R, FRONTEND> BoardRadio<R, FRONTEND> {
+    pub fn new(receiver: R, frontend: FRONTEND) -> Self {
+        Self { receiver, frontend }
+    }
+}
+
+impl<R, FRONTEND> Radio for BoardRadio<R, FRONTEND>
 where
-    R: mcrs_repeater::modules::Radio,
+    R: Radio,
     FRONTEND: RadioFrontend,
 {
-    async fn wait_for_read(
-        &mut self,
-        buffer: &mut [u8],
-    ) -> Result<mcrs_repeater::modules::ReceivedPacket, ()> {
+    async fn wait_for_read(&mut self, buffer: &mut [u8]) -> Result<ReceivedPacket, ()> {
         self.frontend.set_rx_mode();
         self.receiver.wait_for_read(buffer).await
     }
@@ -1562,45 +1111,45 @@ where
     }
 }
 
-async fn cli_task<S: CliSerial>(
-    serial: &mut Option<S>,
-    cli: &mut mcrs_repeater::app::cli::Cli,
-    context: &AppContext<EspPlatform, EspStorage>,
-) -> ! {
-    loop {
-        let Some(serial) = serial else {
-            core::future::pending::<()>().await;
-            continue;
-        };
-
-        let mut byte = [0u8];
-
-        let read = serial.read(&mut byte).await;
-
-        // #[cfg(feature = "board-heltec-v4")]
-        // let read = embedded_io_async_06::Read::read(serial, &mut byte).await;
-        // #[cfg(not(feature = "board-heltec-v4"))]
-        // let read = serial.read_async(&mut byte).await;
-        match read {
-            Ok(count) if count > 0 => {
-                let echo = cli.echo_for_byte(byte[0]);
-                match echo {
-                    mcrs_repeater::app::cli::SerialEcho::None => {}
-                    mcrs_repeater::app::cli::SerialEcho::Byte => {
-                        esp_println::print!("{}", byte[0] as char);
-                    }
-                    mcrs_repeater::app::cli::SerialEcho::Bytes(bytes) => {
-                        esp_println::print!("{}", core::str::from_utf8(bytes).unwrap_or(""));
-                    }
-                }
-                cli.accept_byte(byte[0], context).await;
-            }
-            Ok(_) | Err(_) => {}
-        }
+impl Battery for BatteryMonitor {
+    async fn millivolts(&mut self) -> Option<u16> {
+        let mut delay = esp::radio_delay();
+        let sample = self.sample(&mut delay).await?;
+        debug!(
+            "Battery: adc={}mV battery={}mV",
+            sample.adc_millivolts, sample.millivolts
+        );
+        Some(sample.millivolts)
     }
 }
 
 impl BatteryMonitor {
+    pub fn new(adc: ADC1<'static>, sense: GPIO1<'static>, ctrl: GPIO37<'static>) -> Self {
+        let mut adc_config = AdcConfig::new();
+        let sense = adc_config.enable_pin_with_cal::<_, AdcCalCurve<_>>(sense, Attenuation::_0dB);
+        let adc = Adc::new(adc, adc_config);
+        let mut ctrl = Flex::new(ctrl);
+        ctrl.apply_input_config(&InputConfig::default());
+        ctrl.set_input_enable(true);
+        let ctrl_active_level = if ctrl.is_high() {
+            Level::Low
+        } else {
+            Level::High
+        };
+        let ctrl_inactive_level = opposite_level(ctrl_active_level);
+        ctrl.set_level(ctrl_inactive_level);
+        ctrl.apply_output_config(&OutputConfig::default());
+        ctrl.set_output_enable(true);
+        ctrl.set_input_enable(false);
+        Self {
+            adc,
+            sense,
+            ctrl,
+            ctrl_active_level,
+            ctrl_inactive_level,
+        }
+    }
+
     async fn sample(&mut self, delay: &mut RadioDelay) -> Option<BatterySample> {
         self.ctrl.set_level(self.ctrl_active_level);
         delay.delay_ms(BATTERY_STABILIZE_MS).await;
@@ -1661,47 +1210,9 @@ impl BatteryMonitor {
     }
 }
 
-fn battery_level_percent(millivolts: u16) -> u8 {
-    if millivolts <= BATTERY_PERCENT_MIN_MV {
-        return 0;
-    }
-
-    if millivolts >= BATTERY_PERCENT_MAX_MV {
-        return 100;
-    }
-
-    let range = u32::from(BATTERY_PERCENT_MAX_MV - BATTERY_PERCENT_MIN_MV);
-    let offset = u32::from(millivolts - BATTERY_PERCENT_MIN_MV);
-    ((offset * 100) / range) as u8
-}
-
 pub fn opposite_level(level: Level) -> Level {
     match level {
         Level::High => Level::Low,
         Level::Low => Level::High,
     }
-}
-
-pub async fn log_effective_config<P: Platform, S: Storage>(
-    context: &mcrs_repeater::app::AppContext<P, S>,
-) {
-    let mut output = alloc::string::String::new();
-    context
-        .with_config(|config| config.write_effective_config(&mut output))
-        .await;
-    info!("Effective config:");
-    for line in output.lines() {
-        info!("{}", line);
-    }
-}
-
-pub fn log_memory_profile(memory: mcrs_repeater::memory::MemoryProfile) {
-    info!(
-        "Memory profile: heap={} inbound_queue={} outbound_queue={} neighbours={} seen_packets={}",
-        memory.heap_size,
-        memory.inbound_queue_len,
-        memory.outbound_queue_len,
-        memory.max_neighbours,
-        memory.seen_packet_cache_len
-    );
 }

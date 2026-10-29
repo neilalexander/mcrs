@@ -1,4 +1,5 @@
-//! Platform-independent firmware transport components.
+//! Platform-independent repeater firmware. A board crate implements
+//! [`Platform`] and runs a [`Repeater`] on it.
 #![no_std]
 extern crate alloc;
 
@@ -8,5 +9,9 @@ pub mod modules;
 pub mod platform;
 
 pub mod radio_metrics;
+mod repeater;
+
+pub use platform::Platform;
+pub use repeater::Repeater;
 
 pub const VERSION: &str = env!("MESHCORE_FIRMWARE_VERSION");

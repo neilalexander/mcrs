@@ -48,11 +48,7 @@ const WALL_CLOCK_RTC_CHECK: u32 = 0xa5a5_5a5a;
 static WALL_CLOCK_OFFSET_SECONDS: Mutex<Cell<u32>> = Mutex::new(Cell::new(0));
 static RTC_CLOCK: Mutex<RefCell<Option<Rtc<'static>>>> = Mutex::new(RefCell::new(None));
 
-pub struct Platform {
-    pub peripherals: Peripherals,
-}
-
-pub fn init() -> Platform {
+pub fn init() -> Peripherals {
     init_heap();
 
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::_80MHz);
@@ -61,7 +57,7 @@ pub fn init() -> Platform {
 
     log_starting();
 
-    Platform { peripherals }
+    peripherals
 }
 
 pub fn random_u32() -> u32 {
@@ -385,7 +381,7 @@ pub struct OtaUpdate {
     saw_header: bool,
 }
 
-impl mcrs_repeater::platform::storage::Storage for EspStorage {
+impl mcrs_repeater::platform::Storage for EspStorage {
     fn read(
         &mut self,
         key: &str,

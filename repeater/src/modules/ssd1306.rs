@@ -4,6 +4,8 @@ use embedded_hal::{
 };
 use embedded_hal_async::delay::DelayNs;
 
+use crate::platform::{DisplayStatus, StatusDisplay};
+
 const I2C_ADDRESS: u8 = 0x3c;
 const WIDTH: u8 = 128;
 const PAGES: u8 = 8;
@@ -222,6 +224,39 @@ where
                 self.power.set_low().map_err(pin_error)
             }
         }
+    }
+}
+
+impl<I2C, RESET, POWER> StatusDisplay for Display<I2C, RESET, POWER>
+where
+    I2C: I2c + I2cErrorType,
+    RESET: OutputPin,
+    POWER: OutputPin,
+{
+    async fn init<D: DelayNs>(&mut self, delay: &mut D) -> Result<(), ()> {
+        Display::init(self, delay).await
+    }
+
+    fn show(&mut self, status: &DisplayStatus<'_>) -> Result<(), ()> {
+        self.write_status(
+            status.node_name,
+            status.version,
+            status.public_key_prefix,
+            status.packets_sent,
+            status.packets_received,
+            status.packet_errors,
+            status.battery_millivolts,
+            status.battery_level_percent,
+            status.message,
+        )
+    }
+
+    fn sleep(&mut self) -> Result<(), ()> {
+        Display::sleep(self)
+    }
+
+    async fn wake<D: DelayNs>(&mut self, delay: &mut D) -> Result<(), ()> {
+        Display::wake(self, delay).await
     }
 }
 

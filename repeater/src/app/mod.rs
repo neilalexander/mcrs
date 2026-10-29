@@ -1,4 +1,5 @@
 pub(crate) mod acl;
+pub(crate) mod battery;
 pub mod cli;
 pub mod config;
 mod crypto;
@@ -15,6 +16,7 @@ mod protocol_log;
 pub mod regions;
 mod remote;
 pub mod telnet;
+pub(crate) mod ui;
 
 use alloc::{string::String, vec::Vec};
 use core::{
@@ -37,7 +39,7 @@ use mcrs_protocol::{HashSize, Packet, Path, PayloadKind, RoutePath, RouteType, S
 
 #[cfg(feature = "mqtt")]
 use crate::app::mqtt::MqttContext;
-use crate::platform::{Platform, storage::Storage};
+use crate::platform::Platform;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LoopDetection {
@@ -110,10 +112,10 @@ const BATTERY_MILLIVOLTS_UNKNOWN: u16 = u16::MAX;
 
 type AppMutex<T> = Mutex<CriticalSectionRawMutex, T>;
 
-pub struct AppContext<P, S> {
+pub struct AppContext<P: Platform> {
     pub platform: P,
     config: AppMutex<config::AppConfig>,
-    storage: AppMutex<S>,
+    storage: AppMutex<P::Storage>,
     memory: crate::memory::MemoryProfile,
     neighbours: AppMutex<neighbours::NeighbourTable>,
     remote_logins: AppMutex<remote::RemoteLoginTable>,
@@ -149,14 +151,10 @@ pub struct AppContext<P, S> {
     last_snr_quarters: AtomicI16,
 }
 
-impl<P: Platform, S: Storage> AppContext<P, S> {
-    pub fn new(
-        platform: P,
-        config: config::AppConfig,
-        storage: S,
-        memory: crate::memory::MemoryProfile,
-    ) -> Self {
+impl<P: Platform> AppContext<P> {
+    pub(crate) fn new(platform: P, config: config::AppConfig, storage: P::Storage) -> Self {
         let started_at_ms = platform.now_millis();
+        let memory = platform.memory_profile();
 
         Self {
             platform,
@@ -371,12 +369,10 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
             outbound_queue_len: self.outbound.len().min(u16::MAX as usize) as u16,
             battery_level_percent: optional_battery_level(
                 self.battery_level_percent.load(Ordering::Relaxed),
-            )
-            .or_else(|| self.platform.battery_level_percent()),
+            ),
             battery_millivolts: optional_battery_millivolts(
                 self.battery_millivolts.load(Ordering::Relaxed),
-            )
-            .or_else(|| self.platform.battery_millivolts()),
+            ),
             last_rssi: self.last_rssi.load(Ordering::Relaxed),
             last_snr_quarters: self.last_snr_quarters.load(Ordering::Relaxed),
         }
@@ -816,9 +812,9 @@ impl SortedOutboundChannel {
         })
     }
 
-    fn retry_current<P: Platform, S: Storage>(
+    fn retry_current<P: Platform>(
         &self,
-        context: &AppContext<P, S>,
+        context: &AppContext<P>,
         mut queued: QueuedTransmit,
         retry_delay_ms: u32,
     ) -> Option<u32> {
@@ -926,19 +922,18 @@ struct RxEvent {
 }
 
 enum RadioWait {
-    Packet(Result<crate::modules::ReceivedPacket, ()>),
+    Packet(Result<crate::platform::ReceivedPacket, ()>),
     OutboundChanged,
     OutboundDue,
 }
 
-pub async fn radio_loop<P: Platform, R, S: Storage, D>(
+pub(crate) async fn radio_loop<P: Platform, R, D>(
     radio: &mut R,
-    context: &AppContext<P, S>,
+    context: &AppContext<P>,
     delay: &mut D,
 ) -> !
 where
-    R: crate::modules::Radio,
-    S: crate::platform::storage::Storage,
+    R: crate::platform::Radio,
     D: DelayNs,
 {
     let mut receive_buffer = [0u8; RECEIVE_BUFFER_LEN];
@@ -1006,20 +1001,14 @@ where
     }
 }
 
-pub async fn handler_loop<P: Platform, S: Storage>(context: &AppContext<P, S>) -> !
-where
-    S: crate::platform::storage::Storage,
-{
+pub(crate) async fn handler_loop<P: Platform>(context: &AppContext<P>) -> ! {
     loop {
         let event = context.receive_inbound().await;
         handle_rx_event(context, event).await;
     }
 }
 
-async fn handle_rx_event<P: Platform, S: Storage>(context: &AppContext<P, S>, event: RxEvent)
-where
-    S: crate::platform::storage::Storage,
-{
+async fn handle_rx_event<P: Platform>(context: &AppContext<P>, event: RxEvent) {
     match mcrs_protocol::Packet::decode(&event.payload) {
         Ok(protocol_packet) => {
             increment_route_counter(
@@ -1073,13 +1062,13 @@ where
     }
 }
 
-async fn transmit_eligible_outbound<P: Platform, R, S: Storage, D>(
+async fn transmit_eligible_outbound<P: Platform, R, D>(
     radio: &mut R,
-    context: &AppContext<P, S>,
+    context: &AppContext<P>,
     delay: &mut D,
     airtime_budget: &mut AirtimeBudget,
 ) where
-    R: crate::modules::Radio,
+    R: crate::platform::Radio,
     D: DelayNs,
 {
     let (radio_config, duty_cycle_percent, repeat_enabled) = context
@@ -1200,16 +1189,15 @@ async fn transmit_eligible_outbound<P: Platform, R, S: Storage, D>(
     }
 }
 
-async fn wait_for_read_or_eligible_outbound<P: Platform, R, S: Storage, D>(
+async fn wait_for_read_or_eligible_outbound<P: Platform, R, D>(
     radio: &mut R,
-    context: &AppContext<P, S>,
+    context: &AppContext<P>,
     receive_buffer: &mut [u8],
     delay: &mut D,
     airtime_budget: &mut AirtimeBudget,
 ) -> RadioWait
 where
-    R: crate::modules::Radio,
-    S: crate::platform::storage::Storage,
+    R: crate::platform::Radio,
     D: DelayNs,
 {
     let (radio_config, duty_cycle_percent) = context
@@ -1266,14 +1254,12 @@ where
     .await
 }
 
-async fn apply_repeater_rules<P: Platform, S: Storage>(
-    context: &AppContext<P, S>,
+async fn apply_repeater_rules<P: Platform>(
+    context: &AppContext<P>,
     packet: Packet,
     snr_quarters: i16,
     node_hash: &[u8],
-) where
-    S: crate::platform::storage::Storage,
-{
+) {
     match prepare_forward(context, packet, snr_quarters, node_hash).await {
         ForwardDecision::Forward { packet, signature } => {
             queue_repeater_packet(context, packet, signature, node_hash, "forward").await;
@@ -1288,15 +1274,13 @@ async fn apply_repeater_rules<P: Platform, S: Storage>(
     }
 }
 
-async fn queue_repeater_packet<P: Platform, S: Storage>(
-    context: &AppContext<P, S>,
+async fn queue_repeater_packet<P: Platform>(
+    context: &AppContext<P>,
     packet: Packet,
     signature: [u8; 8],
     node_hash: &[u8],
     action: &'static str,
-) where
-    S: crate::platform::storage::Storage,
-{
+) {
     let Ok(encoded) = packet.encode() else {
         error!("Protocol repeater: {} encode failed", action);
         return;
@@ -1341,8 +1325,8 @@ async fn queue_repeater_packet<P: Platform, S: Storage>(
     );
 }
 
-async fn prepare_forward<P: Platform, S: Storage>(
-    context: &AppContext<P, S>,
+async fn prepare_forward<P: Platform>(
+    context: &AppContext<P>,
     packet: Packet,
     snr_quarters: i16,
     node_hash: &[u8],
@@ -1367,8 +1351,8 @@ async fn prepare_forward<P: Platform, S: Storage>(
     }
 }
 
-async fn prepare_flood_forward<P: Platform, S: Storage>(
-    context: &AppContext<P, S>,
+async fn prepare_flood_forward<P: Platform>(
+    context: &AppContext<P>,
     mut packet: Packet,
     node_hash: &[u8],
 ) -> ForwardDecision {
@@ -1537,7 +1521,7 @@ async fn transmit_when_clear<R, D>(
     delay: &mut D,
 ) -> Result<(), ()>
 where
-    R: crate::modules::Radio,
+    R: crate::platform::Radio,
     D: DelayNs,
 {
     for attempt in 0..CAD_MAX_ATTEMPTS {

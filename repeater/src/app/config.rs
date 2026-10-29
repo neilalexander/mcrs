@@ -106,7 +106,7 @@ impl AppConfig {
 
     pub fn load_or_create<S>(storage: &mut S, defaults: Self) -> Self
     where
-        S: crate::platform::storage::Storage,
+        S: crate::platform::Storage,
     {
         let default_identity_label = defaults.identity_label;
         let default_stored = StoredAppConfig::from_app_config(&defaults);
@@ -541,14 +541,14 @@ impl AppConfig {
 
     pub fn save<S>(&self, storage: &mut S) -> Result<(), crate::platform::storage::Error>
     where
-        S: crate::platform::storage::Storage,
+        S: crate::platform::Storage,
     {
         write_config_file(storage, &StoredAppConfig::from_app_config(self))
     }
 
     pub fn save_unprovisioned<S>(storage: &mut S) -> Result<(), crate::platform::storage::Error>
     where
-        S: crate::platform::storage::Storage,
+        S: crate::platform::Storage,
     {
         storage.write_atomic(APP_CONFIG_KEY, UNPROVISIONED_CONFIG_TEXT)
     }
@@ -775,7 +775,7 @@ fn load_config_file<S>(
     defaults: &StoredAppConfig,
 ) -> Option<(StoredAppConfig, bool)>
 where
-    S: crate::platform::storage::Storage,
+    S: crate::platform::Storage,
 {
     let mut buffer = [0u8; APP_CONFIG_MAX_LEN];
     let len = storage.read(APP_CONFIG_KEY, &mut buffer).ok()?;
@@ -791,7 +791,7 @@ fn write_config_file<S>(
     config: &StoredAppConfig,
 ) -> Result<(), crate::platform::storage::Error>
 where
-    S: crate::platform::storage::Storage,
+    S: crate::platform::Storage,
 {
     let data = encode_config_text(config);
     if data.len() > APP_CONFIG_MAX_LEN {

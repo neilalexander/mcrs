@@ -1,12 +1,10 @@
 extern crate alloc;
 
-use crate::{
-    app::AppContext,
-    platform::{Platform, storage::Storage},
-};
+use crate::{app::AppContext, platform::Platform};
 use alloc::{format, string::String, vec, vec::Vec};
 use core::fmt::Write;
 use defmt::{debug, info, warn};
+use embedded_io_async::{Read as _, Write as _};
 use mcrs_protocol::{
     PERM_ACL_ADMIN, PERM_ACL_GUEST, Packet, Payload, RepeaterResponsePlaintext, RequestPlaintext,
     TextMessagePlaintext, TextType,
@@ -84,10 +82,10 @@ impl Cli {
         }
     }
 
-    pub async fn accept_byte<P: Platform, S: Storage>(
+    pub async fn accept_byte<P: Platform>(
         &mut self,
         byte: u8,
-        context: &AppContext<P, S>,
+        context: &AppContext<P>,
     ) {
         match byte {
             b'\r' | b'\n' => self.submit(context).await,
@@ -106,7 +104,7 @@ impl Cli {
         }
     }
 
-    async fn submit<P: Platform, S: Storage>(&mut self, context: &AppContext<P, S>) {
+    async fn submit<P: Platform>(&mut self, context: &AppContext<P>) {
         if self.len == 0 {
             return;
         }
@@ -122,16 +120,49 @@ impl Cli {
     }
 }
 
-pub async fn handle_privileged_tcp_command<P: Platform, S: Storage>(
+/// Runs the CLI on the local console, echoing what the user types.
+pub(crate) async fn serve_console<P: Platform>(
+    console: Option<P::Console>,
+    context: &AppContext<P>,
+) -> ! {
+    let Some(mut console) = console else {
+        loop {
+            core::future::pending::<()>().await;
+        }
+    };
+    let mut cli = Cli::new();
+    let mut byte = [0u8];
+
+    loop {
+        match console.read(&mut byte).await {
+            Ok(count) if count > 0 => {
+                let echo: &[u8] = match cli.echo_for_byte(byte[0]) {
+                    SerialEcho::None => &[],
+                    SerialEcho::Byte => &byte,
+                    SerialEcho::Bytes(bytes) => bytes,
+                };
+                if !echo.is_empty() {
+                    // The echo is best effort; the command runs either way.
+                    let _ = console.write_all(echo).await;
+                    let _ = console.flush().await;
+                }
+                cli.accept_byte(byte[0], context).await;
+            }
+            Ok(_) | Err(_) => {}
+        }
+    }
+}
+
+pub async fn handle_privileged_tcp_command<P: Platform>(
     command: &str,
-    context: &AppContext<P, S>,
+    context: &AppContext<P>,
 ) -> Option<CliResponse> {
     handle_command(command.trim(), context, CliRequest::tcp()).await
 }
 
-pub async fn handle_remote_packet<P: Platform, S: Storage>(
+pub async fn handle_remote_packet<P: Platform>(
     packet: &Packet,
-    context: &AppContext<P, S>,
+    context: &AppContext<P>,
 ) -> Option<alloc::vec::Vec<u8>> {
     if let Payload::AnonymousRequest(payload) = &packet.payload {
         let reply_path = if packet.route_type.is_flood() {
@@ -165,10 +196,10 @@ pub async fn handle_remote_packet<P: Platform, S: Storage>(
     }
 }
 
-async fn handle_anonymous_request<P: Platform, S: Storage>(
+async fn handle_anonymous_request<P: Platform>(
     payload: &mcrs_protocol::AnonymousRequestPayload,
     reply_path: mcrs_protocol::Path,
-    context: &AppContext<P, S>,
+    context: &AppContext<P>,
 ) -> Option<alloc::vec::Vec<u8>> {
     let (decrypted, responder_public_key) = context
         .with_identity(|identity| {
@@ -259,9 +290,9 @@ async fn handle_anonymous_request<P: Platform, S: Storage>(
     )
 }
 
-async fn handle_authenticated_text_message<P: Platform, S: Storage>(
+async fn handle_authenticated_text_message<P: Platform>(
     payload: &mcrs_protocol::DirectEncryptedPayload,
-    context: &AppContext<P, S>,
+    context: &AppContext<P>,
 ) -> Option<alloc::vec::Vec<u8>> {
     let now_ms = context.platform.now_millis();
     let sessions = context
@@ -338,10 +369,10 @@ fn split_cli_correlation_prefix(command: &str) -> (Option<&str>, &str) {
     }
 }
 
-async fn handle_authenticated_request<P: Platform, S: Storage>(
+async fn handle_authenticated_request<P: Platform>(
     packet: &Packet,
     payload: &mcrs_protocol::DirectEncryptedPayload,
-    context: &AppContext<P, S>,
+    context: &AppContext<P>,
 ) -> Option<Vec<u8>> {
     let flood_region = if packet.route_type.is_flood() {
         let region = context
@@ -395,9 +426,9 @@ async fn handle_authenticated_request<P: Platform, S: Storage>(
     )
 }
 
-async fn decrypt_authenticated_payload<P: Platform, S: Storage>(
+async fn decrypt_authenticated_payload<P: Platform>(
     payload: &mcrs_protocol::DirectEncryptedPayload,
-    context: &AppContext<P, S>,
+    context: &AppContext<P>,
     now_ms: u64,
 ) -> Option<super::crypto::AuthenticatedPlaintext> {
     let sessions = context
@@ -418,9 +449,9 @@ async fn decrypt_authenticated_payload<P: Platform, S: Storage>(
         .await
 }
 
-async fn handle_binary_request<P: Platform, S: Storage>(
+async fn handle_binary_request<P: Platform>(
     request: &RequestPlaintext,
-    context: &AppContext<P, S>,
+    context: &AppContext<P>,
     now_ms: u64,
     privilege: super::remote::RemotePrivilege,
 ) -> Option<Vec<u8>> {
@@ -475,10 +506,10 @@ async fn handle_binary_request<P: Platform, S: Storage>(
     }
 }
 
-async fn handle_anonymous_subrequest<P: Platform, S: Storage>(
+async fn handle_anonymous_subrequest<P: Platform>(
     body: &[u8],
     request_timestamp: u32,
-    context: &AppContext<P, S>,
+    context: &AppContext<P>,
 ) -> Option<Vec<u8>> {
     match body.first().copied()? {
         ANON_REQ_TYPE_BASIC => Some(
@@ -612,9 +643,9 @@ fn encode_status_binary_response(status: super::Status, out: &mut Vec<u8>) {
     write_u32(stats, &mut offset, status.packet_errors);
 }
 
-async fn handle_command<P: Platform, S: Storage>(
+async fn handle_command<P: Platform>(
     command: &str,
-    context: &AppContext<P, S>,
+    context: &AppContext<P>,
     request: CliRequest,
 ) -> Option<CliResponse> {
     if !request.allows_command(command) {
@@ -777,7 +808,10 @@ async fn handle_command<P: Platform, S: Storage>(
             if !request.privilege.is_passworded() {
                 denied_text()
             } else {
-                let packet = context.with_config(super::discovery::zero_hop_advert).await;
+                let now = context.platform.now_seconds();
+                let packet = context
+                    .with_config(|config| super::discovery::zero_hop_advert(config, now))
+                    .await;
                 enqueue_command_packet(context, packet, "OK - zerohop advert sent").await
             }
         }
@@ -785,7 +819,10 @@ async fn handle_command<P: Platform, S: Storage>(
             if !request.privilege.is_passworded() {
                 denied_text()
             } else {
-                let packet = context.with_config(super::discovery::flood_advert).await;
+                let now = context.platform.now_seconds();
+                let packet = context
+                    .with_config(|config| super::discovery::flood_advert(config, now))
+                    .await;
                 enqueue_command_packet(context, packet, "OK - Advert sent").await
             }
         }
@@ -866,9 +903,9 @@ fn command_response(request: CliRequest, text: String) -> CliResponse {
     }
 }
 
-async fn handle_get_command<P: Platform, S: Storage>(
+async fn handle_get_command<P: Platform>(
     config: &str,
-    context: &AppContext<P, S>,
+    context: &AppContext<P>,
     request: CliRequest,
 ) -> String {
     #[cfg(feature = "mqtt")]
@@ -1026,9 +1063,9 @@ async fn handle_get_command<P: Platform, S: Storage>(
     }
 }
 
-async fn handle_set_command<P: Platform, S: Storage>(
+async fn handle_set_command<P: Platform>(
     config: &str,
-    context: &AppContext<P, S>,
+    context: &AppContext<P>,
     request: CliRequest,
 ) -> String {
     if !request.privilege.is_passworded() {
@@ -1423,9 +1460,9 @@ fn parse_mqtt_setting(setting: &str) -> Option<(usize, &str)> {
     (index < super::config::MQTT_SERVER_COUNT).then_some((index, key))
 }
 
-async fn handle_unset_command<P: Platform, S: Storage>(
+async fn handle_unset_command<P: Platform>(
     setting: &str,
-    context: &AppContext<P, S>,
+    context: &AppContext<P>,
     request: CliRequest,
 ) -> String {
     if !request.privilege.is_passworded() {
@@ -1462,9 +1499,9 @@ async fn handle_unset_command<P: Platform, S: Storage>(
     }
 }
 
-async fn handle_region_command<P: Platform, S: Storage>(
+async fn handle_region_command<P: Platform>(
     command: &str,
-    context: &AppContext<P, S>,
+    context: &AppContext<P>,
     request: CliRequest,
 ) -> String {
     let mut parts = command.split_ascii_whitespace();
@@ -1625,9 +1662,9 @@ async fn handle_region_command<P: Platform, S: Storage>(
     }
 }
 
-// fn handle_ota_command<P: Platform, S: Storage>(
+// fn handle_ota_command<P: Platform>(
 //     command: &str,
-//     context: &AppContext<P, S>,
+//     context: &AppContext<P>,
 //     request: CliRequest,
 // ) -> String {
 //     let mut parts = command.split_ascii_whitespace();
@@ -1657,7 +1694,7 @@ async fn handle_region_command<P: Platform, S: Storage>(
 //     }
 // }
 
-// fn ota_status_text<P: Platform, S: Storage>(context: &AppContext<P, S>) -> String {
+// fn ota_status_text<P: Platform>(context: &AppContext<P>) -> String {
 //     let status = context.platform.ota_status();
 //     if !status.available {
 //         return String::from("OTA: unavailable");
@@ -1670,8 +1707,8 @@ async fn handle_region_command<P: Platform, S: Storage>(
 //     )
 // }
 
-fn handle_time_set_command<P: Platform, S: Storage>(
-    context: &AppContext<P, S>,
+fn handle_time_set_command<P: Platform>(
+    context: &AppContext<P>,
     seconds: &str,
     request: CliRequest,
 ) -> String {
@@ -1888,7 +1925,7 @@ fn help_text() -> String {
     )
 }
 
-fn status_text<P: Platform, S: Storage>(context: &AppContext<P, S>) -> String {
+fn status_text<P: Platform>(context: &AppContext<P>) -> String {
     let status = context.status();
     let mut output = String::new();
     let _ = writeln!(output, "Uptime: {}s", status.uptime_seconds);
@@ -1935,8 +1972,8 @@ fn status_text<P: Platform, S: Storage>(context: &AppContext<P, S>) -> String {
     }
     output
 }
-async fn enqueue_command_packet<P: Platform, S: Storage>(
-    context: &AppContext<P, S>,
+async fn enqueue_command_packet<P: Platform>(
+    context: &AppContext<P>,
     packet: Option<Vec<u8>>,
     success: &str,
 ) -> String {

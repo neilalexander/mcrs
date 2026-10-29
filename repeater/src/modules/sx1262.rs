@@ -147,7 +147,7 @@ where
     })
 }
 
-impl<SPI, CTRL, WAIT, DLY> crate::modules::Radio for Receiver<SPI, CTRL, WAIT, DLY>
+impl<SPI, CTRL, WAIT, DLY> crate::platform::Radio for Receiver<SPI, CTRL, WAIT, DLY>
 where
     SPI: SpiDevice<u8>,
     CTRL: OutputPin,
@@ -157,7 +157,7 @@ where
     async fn wait_for_read(
         &mut self,
         buffer: &mut [u8],
-    ) -> Result<crate::modules::ReceivedPacket, ()> {
+    ) -> Result<crate::platform::ReceivedPacket, ()> {
         self.radio
             .prepare_for_rx(
                 RxMode::Continuous,
@@ -179,7 +179,7 @@ where
             })?;
 
         let status = self.packet_status.take().ok_or(())?;
-        Ok(crate::modules::ReceivedPacket {
+        Ok(crate::platform::ReceivedPacket {
             len: len as usize,
             rssi: status.rssi_dbm,
             snr_quarters: status.snr_quarters,

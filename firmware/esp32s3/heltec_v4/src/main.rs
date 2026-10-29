@@ -4,25 +4,23 @@
 use defmt::info;
 use embedded_hal_async::delay::DelayNs;
 use esp_hal::{
-    Async,
     gpio::{Flex, InputConfig, Level, Output, OutputConfig},
     usb_serial_jtag::UsbSerialJtag,
 };
 use mcrs_esp32s3::{
-    CliSerial,
+    EspPlatform, Repeater,
     board::heltec::{RadioFrontend, RadioOutput},
     esp::radio_delay,
     platform::BoardConfig,
 };
 
-//    #[cfg(feature = "board-heltec-v4")]
-//     const MODEL: &str = "Heltec V4";
+const MODEL: &str = "Heltec V4";
 
 #[esp_rtos::main]
 async fn main(_spawner: embassy_executor::Spawner) -> ! {
-    let (platform, board) = mcrs_esp32s3::platform::init();
+    let (peripherals, board) = mcrs_esp32s3::platform::init();
 
-    let cli_serial = UsbSerial(UsbSerialJtag::new(board.USB_DEVICE).into_async());
+    let console = UsbSerialJtag::new(board.USB_DEVICE).into_async();
 
     let output_config = OutputConfig::default();
     let frontend = HeltecV4Frontend::detect(
@@ -34,24 +32,14 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     )
     .await;
 
-    mcrs_esp32s3::platform::run(
-        platform,
+    let platform = EspPlatform::new(
+        peripherals,
+        MODEL,
         BoardConfig::heltec_v4(),
-        Some(cli_serial),
+        Some(console),
         frontend,
-    )
-    .await
-}
-
-/// The CLI on the USB serial/JTAG port.
-struct UsbSerial(UsbSerialJtag<'static, Async>);
-
-impl CliSerial for UsbSerial {
-    type Error = <UsbSerialJtag<'static, Async> as embedded_io_async::ErrorType>::Error;
-
-    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        embedded_io_async::Read::read(&mut self.0, buf).await
-    }
+    );
+    Repeater::new(platform).run().await
 }
 
 struct HeltecV4Frontend {

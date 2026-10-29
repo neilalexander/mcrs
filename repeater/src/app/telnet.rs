@@ -1,6 +1,5 @@
 use super::{AppContext, cli::PostReplyAction};
 use crate::platform::Platform;
-use crate::platform::storage::Storage;
 use defmt::info;
 use embedded_io_async::Write as _;
 
@@ -8,10 +7,7 @@ const TELNET_PORT: u16 = 23;
 const LINE_BUFFER_LEN: usize = 160;
 const IAC: u8 = 255;
 
-pub async fn serve<P: Platform, S: Storage>(
-    stack: embassy_net::Stack<'_>,
-    context: &AppContext<P, S>,
-) -> ! {
+pub async fn serve<P: Platform>(stack: embassy_net::Stack<'_>, context: &AppContext<P>) -> ! {
     if !context.with_config(|config| config.wifi().telnet()).await {
         core::future::pending::<()>().await;
     }
@@ -32,13 +28,10 @@ pub async fn serve<P: Platform, S: Storage>(
     }
 }
 
-async fn handle_connection<P: Platform, S: Storage>(
+async fn handle_connection<P: Platform>(
     socket: &mut embassy_net::tcp::TcpSocket<'_>,
-    context: &AppContext<P, S>,
-) -> Result<(), ()>
-where
-    S: crate::platform::storage::Storage,
-{
+    context: &AppContext<P>,
+) -> Result<(), ()> {
     // WILL ECHO, WILL SUPPRESS-GO-AHEAD, DO SUPPRESS-GO-AHEAD.
     socket
         .write_all(&[IAC, 251, 1, IAC, 251, 3, IAC, 253, 3])
