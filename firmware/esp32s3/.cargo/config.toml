@@ -1,0 +1,14 @@
+[target.xtensa-esp32s3-none-elf]
+runner = "espflash flash --chip esp32s3 --flash-size 8mb --flash-mode dio --flash-freq 40mhz --partition-table partitions.csv --target-app-partition factory --erase-parts otadata --monitor"
+rustflags = [
+    "-C", "link-arg=-nostartfiles",
+    "-C", "link-arg=-Tdefmt.x",
+    "-C", "link-arg=-Tlinkall.x",
+]
+
+
+[unstable]
+build-std = ["alloc", "core"]
+
+[build]
+target = "xtensa-esp32s3-none-elf"

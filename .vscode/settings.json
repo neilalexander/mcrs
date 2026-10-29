@@ -1,8 +1,9 @@
 {
-    "rust-analyzer.cargo.features": [
-        "mqtt"
+    "rust-analyzer.check.allTargets": false,
+    "rust-analyzer.checkOnSave": true,
+    "rust-analyzer.linkedProjects": [
+        "firmware/esp32s3/Cargo.toml",
+        "firmware/nrf52840/Cargo.toml",
+        "Cargo.toml",
     ],
-    "rust-analyzer.check.targets": ["xtensa-esp32s3-none-elf"],
-    "rust-analyzer.cargo.allTargets": false,
-    "rust-analyzer.cargo.target": "xtensa-esp32s3-none-elf"
 }

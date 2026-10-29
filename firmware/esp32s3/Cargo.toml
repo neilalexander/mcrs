@@ -1,0 +1,7 @@
+[workspace]
+members = ["common", "heltec_v3", "heltec_v4"]
+resolver = "3"
+
+# The Wi-Fi driver requires optimization even in development builds.
+[profile.dev.package.esp-radio]
+opt-level = 3

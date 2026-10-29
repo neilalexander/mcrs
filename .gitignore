@@ -5,4 +5,4 @@
 /fuzz/artifacts
 /fuzz/corpus
 /fuzz/target
-/.direnv
+**/.direnv

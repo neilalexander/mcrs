@@ -3,7 +3,7 @@
 
 use defmt::error;
 use esp_hal::uart::{Config as UartConfig, Uart};
-use mcrs_esp32::{board::heltec::NoRadioFrontend, platform::BoardConfig};
+use mcrs_esp32s3::{board::heltec::NoRadioFrontend, platform::BoardConfig};
 
 const MODEL: &str = "Heltec V3";
 
@@ -12,7 +12,7 @@ const MODEL: &str = "Heltec V3";
 
 #[esp_rtos::main]
 async fn main(_spawner: embassy_executor::Spawner) -> ! {
-    let (platform, board) = mcrs_esp32::platform::init();
+    let (platform, board) = mcrs_esp32s3::platform::init();
 
     let cli_serial = match Uart::new(board.UART0, UartConfig::default()) {
         Ok(uart) => Some(
@@ -26,7 +26,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         }
     };
 
-    mcrs_esp32::platform::run(
+    mcrs_esp32s3::platform::run(
         platform,
         BoardConfig::heltec_v3(),
         cli_serial,

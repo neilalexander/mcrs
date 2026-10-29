@@ -8,7 +8,7 @@ use esp_hal::{
     gpio::{Flex, InputConfig, Level, Output, OutputConfig},
     usb_serial_jtag::UsbSerialJtag,
 };
-use mcrs_esp32::{
+use mcrs_esp32s3::{
     CliSerial,
     board::heltec::{RadioFrontend, RadioOutput},
     esp::radio_delay,
@@ -20,7 +20,7 @@ use mcrs_esp32::{
 
 #[esp_rtos::main]
 async fn main(_spawner: embassy_executor::Spawner) -> ! {
-    let (platform, board) = mcrs_esp32::platform::init();
+    let (platform, board) = mcrs_esp32s3::platform::init();
 
     let cli_serial = UsbSerial(UsbSerialJtag::new(board.USB_DEVICE).into_async());
 
@@ -34,7 +34,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     )
     .await;
 
-    mcrs_esp32::platform::run(
+    mcrs_esp32s3::platform::run(
         platform,
         BoardConfig::heltec_v4(),
         Some(cli_serial),

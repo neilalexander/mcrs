@@ -9,9 +9,4 @@ pub mod platform;
 
 pub mod radio_metrics;
 
-#[cfg(test)]
-mod crypto_tests;
-#[cfg(test)]
-use crypto_tests::platform;
-
 pub const VERSION: &str = env!("MESHCORE_FIRMWARE_VERSION");

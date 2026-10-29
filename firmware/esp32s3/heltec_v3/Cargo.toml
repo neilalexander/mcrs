@@ -1,10 +1,10 @@
 [package]
-name = "mcrs-heltec_v4"
+name = "mcrs-heltec_v3"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-mcrs-esp32 = { path = "../../esp32" }
+mcrs-esp32s3 = { path = "../common" }
 
 # esp-radio 0.18 and esp-rtos 0.3 require the HAL 1.1 series.
 esp-hal = { version = "1.1.2", features = ["esp32s3", "unstable", "defmt"] }
@@ -21,8 +21,5 @@ embassy-executor = { version = "0.10.0" }
 embassy-net = { version = "0.9.1", features = ["dhcpv4", "dns", "medium-ethernet", "proto-ipv4", "tcp", "udp"] }
 embassy-sync = "0.8.0"
 embassy-time = "0.5.1"
-
-embedded-hal-async = "1.0.0"
-embedded-io-async = "0.7.0"
 
 defmt = "1.2.0"
