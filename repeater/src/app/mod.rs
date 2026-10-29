@@ -111,7 +111,7 @@ const BATTERY_MILLIVOLTS_UNKNOWN: u16 = u16::MAX;
 type AppMutex<T> = Mutex<CriticalSectionRawMutex, T>;
 
 pub struct AppContext<P, S> {
-    platform: P,
+    pub platform: P,
     config: AppMutex<config::AppConfig>,
     storage: AppMutex<S>,
     memory: crate::memory::MemoryProfile,

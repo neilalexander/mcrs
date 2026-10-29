@@ -1,0 +1,25 @@
+[package]
+name = "mcrs-heltec_v3"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mcrs-esp32 = { path = "../../esp32" }
+
+# esp-radio 0.18 and esp-rtos 0.3 require the HAL 1.1 series.
+esp-hal = { version = "1.1.2", features = ["esp32s3", "unstable", "defmt"] }
+esp-rtos = { version = "0.3.0", features = ["esp32s3", "embassy", "esp-radio", "esp-alloc", ] }
+esp-alloc = { version = "0.10.0", features = ["global-allocator", "compat"] }
+# 0.6 pulls in esp-storage for HAL 1.2; keep this aligned with the stable radio stack.
+esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32s3"] }
+esp-backtrace = { version = "0.20.0",features = ["esp32s3", "defmt",  "custom-halt", "panic-handler"] }
+esp-println = { version = "0.18.0",  features = ["esp32s3", "defmt-espflash"] }
+esp-rom-sys = { version = "0.1.5" }
+esp-radio = { version = "0.18.0", features = ["esp32s3", "wifi", "esp-alloc", "unstable", ] }
+
+embassy-executor = { version = "0.10.0" }
+embassy-net = { version = "0.9.1", features = ["dhcpv4", "dns", "medium-ethernet", "proto-ipv4", "tcp", "udp"] }
+embassy-sync = "0.8.0"
+embassy-time = "0.5.1"
+
+defmt = "1.2.0"

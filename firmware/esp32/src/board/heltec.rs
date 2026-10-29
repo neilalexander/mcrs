@@ -1,3 +1,15 @@
+use crate::{
+    CliSerial,
+    esp::{EspStorage, RadioDelay},
+};
+use alloc::{format, string::String};
+use core::{
+    future::{Future, poll_fn},
+    pin::pin,
+    task::Poll,
+};
+use defmt::{debug, error, info, warn};
+use embedded_hal_async::delay::DelayNs as _;
 use esp_hal::{
     Blocking,
     analog::adc::{Adc, AdcCalCurve, AdcPin},
@@ -6,26 +18,18 @@ use esp_hal::{
     rng::{Trng, TrngSource},
     spi::master::Spi,
 };
-
-use alloc::{format, string::String};
-use core::{
-    future::{Future, poll_fn},
-    pin::pin,
-    task::Poll,
-};
-use embedded_hal_async::delay::DelayNs as _;
 use esp_radio::wifi::{AuthenticationMethod, Config, ap::AccessPointConfig, sta::StationConfig};
-use mcrs_repeater::{VERSION, memory::MemoryProfile};
+use mcrs_repeater::{
+    VERSION,
+    app::AppContext,
+    memory::MemoryProfile,
+    platform::{Platform, storage::Storage},
+};
 use static_cell::StaticCell;
 
 pub type RadioSpi = Spi<'static, Blocking>;
 pub type RadioOutput = Output<'static>;
 pub type RadioInput = Input<'static>;
-
-#[cfg(not(feature = "board-heltec-v4"))]
-pub type CliSerial = esp_hal::uart::Uart<'static, esp_hal::Async>;
-#[cfg(feature = "board-heltec-v4")]
-pub type CliSerial = esp_hal::usb_serial_jtag::UsbSerialJtag<'static, esp_hal::Async>;
 
 pub type ButtonInput = Input<'static>;
 pub type BatteryAdc = Adc<'static, ADC1<'static>, Blocking>;
@@ -64,6 +68,30 @@ pub(crate) const STORAGE_LAYOUT: mcrs_repeater::platform::storage::Layout =
         partition_size: 256 * 1024,
         max_file_size: 4096,
     };
+
+pub struct EspPlatform {}
+
+impl Platform for EspPlatform {
+    fn reboot(&self) -> ! {
+        todo!()
+    }
+
+    fn now_millis(&self) -> u64 {
+        todo!()
+    }
+
+    fn now_seconds(&self) -> u32 {
+        todo!()
+    }
+
+    fn set_wall_clock_if_forward(&self, unix_seconds: u32) -> bool {
+        todo!()
+    }
+
+    fn random_u32(&self) -> u32 {
+        todo!()
+    }
+}
 
 pub struct RadioResources<F> {
     pub spi: RadioSpi,
@@ -118,7 +146,7 @@ pub fn generate_identity_seed(rng: RNG<'_>, adc: ADC1<'_>) -> [u8; 32] {
 async fn display_task<I2C, RESET, POWER>(
     mut display: Option<mcrs_repeater::modules::ssd1306::Display<I2C, RESET, POWER>>,
     mut button: ButtonInput,
-    context: &mcrs_repeater::app::AppContext<mcrs_repeater::platform::EspStorage>,
+    context: &AppContext<EspPlatform, EspStorage>,
 ) -> !
 where
     I2C: embedded_hal::i2c::I2c + embedded_hal::i2c::ErrorType,
@@ -139,7 +167,7 @@ where
     };
 
     if display.init(&mut display_delay).await.is_err() {
-        mcrs_repeater::platform::log_display_init_failed();
+        error!("display init failed");
         loop {
             if wait_for_prg_button_action(&mut button_delay, &mut button).await
                 == ButtonAction::LongHold
@@ -150,7 +178,7 @@ where
     }
 
     if write_display_status(display, context, None).await.is_err() {
-        mcrs_repeater::platform::log_display_write_failed();
+        error!("display write failed");
         loop {
             if wait_for_prg_button_action(&mut button_delay, &mut button).await
                 == ButtonAction::LongHold
@@ -168,14 +196,14 @@ where
                     if display.sleep().is_ok() {
                         awake = false;
                     } else {
-                        mcrs_repeater::platform::log_display_write_failed();
+                        error!("display timeout");
                     }
                 }
                 DisplayEvent::ButtonPressed => {
                     if write_display_status(display, context, None).await.is_err() {
-                        mcrs_repeater::platform::log_display_write_failed();
+                        error!("display status error after button press");
                     }
-                    mcrs_repeater::platform::log_fmt(format_args!("OLED display wake extended"));
+                    info!("OLED display wake extended");
                     let action =
                         wait_for_prg_button_release_or_hold(&mut button_delay, &mut button).await;
                     show_prg_advert_message_if_sent(display, context, action).await;
@@ -210,11 +238,11 @@ where
             };
 
             if wake_result.is_ok() && write_display_status(display, context, None).await.is_ok() {
-                mcrs_repeater::platform::log_fmt(format_args!("OLED display woken by PRG button"));
+                info!("OLED display woken by PRG button");
                 awake = true;
                 show_prg_advert_message_if_sent(display, context, action).await;
             } else {
-                mcrs_repeater::platform::log_display_write_failed();
+                error!("display status or wake result error");
             }
         }
     }
@@ -232,7 +260,7 @@ enum ButtonAction {
 }
 
 async fn wait_for_display_timeout_or_button(
-    display_delay: &mut mcrs_repeater::platform::RadioDelay,
+    display_delay: &mut RadioDelay,
     button: &mut ButtonInput,
 ) -> DisplayEvent {
     let mut timeout = pin!(display_delay.delay_ms(DISPLAY_AWAKE_MS));
@@ -257,7 +285,7 @@ async fn wait_for_prg_button_press(button: &mut ButtonInput) {
 }
 
 async fn wait_for_prg_button_action(
-    delay: &mut mcrs_repeater::platform::RadioDelay,
+    delay: &mut RadioDelay,
     button: &mut ButtonInput,
 ) -> ButtonAction {
     wait_for_prg_button_press(button).await;
@@ -265,7 +293,7 @@ async fn wait_for_prg_button_action(
 }
 
 async fn wait_for_prg_button_release_or_hold(
-    delay: &mut mcrs_repeater::platform::RadioDelay,
+    delay: &mut RadioDelay,
     button: &mut ButtonInput,
 ) -> ButtonAction {
     let mut hold = pin!(delay.delay_ms(PRG_ADVERT_HOLD_MS));
@@ -287,15 +315,13 @@ async fn wait_for_prg_button_release_or_hold(
     .await
 }
 
-async fn queue_prg_button_advert(
-    context: &mcrs_repeater::app::AppContext<mcrs_repeater::platform::EspStorage>,
-) -> bool {
+async fn queue_prg_button_advert(context: &AppContext<EspPlatform, EspStorage>) -> bool {
     let packet = context
         .with_config(mcrs_repeater::app::discovery::zero_hop_advert)
         .await;
 
     let Some(packet) = packet else {
-        mcrs_repeater::platform::log_fmt(format_args!("PRG button: advert encode failed"));
+        error!("PRG button: advert encode failed");
         return false;
     };
 
@@ -304,19 +330,16 @@ async fn queue_prg_button_advert(
     match context.enqueue_outbound(packet) {
         Ok(()) => {
             match region {
-                Some(region) => mcrs_repeater::platform::log_fmt(format_args!(
+                Some(region) => info!(
                     "PRG button: queued zero-hop advert {} bytes region={}",
                     len, region
-                )),
-                None => mcrs_repeater::platform::log_fmt(format_args!(
-                    "PRG button: queued zero-hop advert {} bytes",
-                    len
-                )),
+                ),
+                None => info!("PRG button: queued zero-hop advert {} bytes", len),
             }
             true
         }
         Err(_) => {
-            mcrs_repeater::platform::log_fmt(format_args!("PRG button: advert queue full"));
+            error!("PRG button: advert queue full");
             false
         }
     }
@@ -324,7 +347,7 @@ async fn queue_prg_button_advert(
 
 async fn show_prg_advert_message_if_sent<I2C, RESET, POWER>(
     display: &mut mcrs_repeater::modules::ssd1306::Display<I2C, RESET, POWER>,
-    context: &mcrs_repeater::app::AppContext<mcrs_repeater::platform::EspStorage>,
+    context: &AppContext<EspPlatform, EspStorage>,
     action: ButtonAction,
 ) where
     I2C: embedded_hal::i2c::I2c + embedded_hal::i2c::ErrorType,
@@ -343,13 +366,13 @@ async fn show_prg_advert_message_if_sent<I2C, RESET, POWER>(
         .await
         .is_err()
     {
-        mcrs_repeater::platform::log_display_write_failed();
+        error!("display write failed");
     }
 }
 
 async fn write_display_status<I2C, RESET, POWER>(
     display: &mut mcrs_repeater::modules::ssd1306::Display<I2C, RESET, POWER>,
-    context: &mcrs_repeater::app::AppContext<mcrs_repeater::platform::EspStorage>,
+    context: &AppContext<EspPlatform, EspStorage>,
     message: Option<&str>,
 ) -> Result<(), ()>
 where
@@ -374,20 +397,21 @@ where
     )
 }
 
-pub async fn run_board_tasks<I2C, RESET, POWER, FRONTEND>(
+pub async fn run_board_tasks<I2C, RESET, POWER, FRONTEND, SERIAL>(
     display: Option<mcrs_repeater::modules::ssd1306::Display<I2C, RESET, POWER>>,
     prg_button: ButtonInput,
     battery: BatteryMonitor,
     radio: RadioResources<FRONTEND>,
-    mut cli_serial: Option<CliSerial>,
+    mut cli_serial: Option<SERIAL>,
     wifi: WifiResources,
-    context: mcrs_repeater::app::AppContext<mcrs_repeater::platform::EspStorage>,
+    context: AppContext<EspPlatform, EspStorage>,
 ) -> !
 where
     I2C: embedded_hal::i2c::I2c + embedded_hal::i2c::ErrorType,
     RESET: embedded_hal::digital::OutputPin,
     POWER: embedded_hal::digital::OutputPin,
     FRONTEND: RadioFrontend,
+    SERIAL: CliSerial,
 {
     let mut cli = mcrs_repeater::app::cli::Cli::new();
     let mut periodic_delay = crate::esp::radio_delay();
@@ -396,7 +420,7 @@ where
     let mut handler_future = pin!(mcrs_repeater::app::handler_loop(&context));
     let mut cli_future = pin!(cli_task(&mut cli_serial, &mut cli, &context));
     let mut battery_future = pin!(battery_task(battery, &context));
-    let mut ota_future = pin!(wifi_task(wifi, &context));
+    //let mut ota_future = pin!(wifi_task(wifi, &context));
     let mut periodic_future = pin!(mcrs_repeater::app::periodic::run(
         &context,
         &mut periodic_delay
@@ -423,10 +447,10 @@ where
             Poll::Pending => {}
         }
 
-        match ota_future.as_mut().poll(cx) {
-            Poll::Ready(never) => match never {},
-            Poll::Pending => {}
-        }
+        // match ota_future.as_mut().poll(cx) {
+        //     Poll::Ready(never) => match never {},
+        //     Poll::Pending => {}
+        // }
 
         match periodic_future.as_mut().poll(cx) {
             Poll::Ready(never) => match never {},
@@ -441,289 +465,274 @@ where
     .await
 }
 
-async fn wifi_task(
-    mut wifi: WifiResources,
-    context: &mcrs_repeater::app::AppContext<mcrs_repeater::platform::EspStorage>,
-) -> ! {
-    if context
-        .with_config(|config| config.wifi().ssid().is_empty())
-        .await
-    {
-        run_ota_ap_mode(&mut wifi, context).await
-    }
+// async fn wifi_task(mut wifi: WifiResources, context: &AppContext<EspPlatform, EspStorage>) -> ! {
+//     if context
+//         .with_config(|config| config.wifi().ssid().is_empty())
+//         .await
+//     {
+//         run_ota_ap_mode(&mut wifi, context).await
+//     }
 
-    let (controller, interfaces) = match esp_radio::wifi::new(wifi.wifi, Default::default()) {
-        Ok(wifi) => wifi,
-        Err(error) => {
-            mcrs_repeater::platform::log_fmt(format_args!(
-                "Wi-Fi: device init failed: {:?}",
-                error
-            ));
-            core::future::pending::<()>().await;
-            unreachable!()
-        }
-    };
-    run_ota_station_mode(controller, interfaces.station, context).await
-}
+//     let (controller, interfaces) = match esp_radio::wifi::new(wifi.wifi, Default::default()) {
+//         Ok(wifi) => wifi,
+//         Err(error) => {
+//             error!("Wi-Fi: device init failed: {}", Debug2Format(&error));
+//             core::future::pending::<()>().await;
+//             unreachable!()
+//         }
+//     };
+//     run_ota_station_mode(controller, interfaces.station, context).await
+// }
 
-async fn run_ota_ap_mode(
-    wifi: &mut WifiResources,
-    context: &mcrs_repeater::app::AppContext<mcrs_repeater::platform::EspStorage>,
-) -> ! {
-    let mut stack_resources = embassy_net::StackResources::<4>::new();
-    context.set_ota_address(Some(core::net::SocketAddrV4::new(OTA_AP_IP, OTA_HTTP_PORT)));
-    loop {
-        wait_for_ota_requested_idle(context, true).await;
+// async fn run_ota_ap_mode(
+//     wifi: &mut WifiResources,
+//     context: &AppContext<EspPlatform, EspStorage>,
+// ) -> ! {
+//     let mut stack_resources = embassy_net::StackResources::<4>::new();
+//     context.set_ota_address(Some(core::net::SocketAddrV4::new(OTA_AP_IP, OTA_HTTP_PORT)));
+//     loop {
+//         wait_for_ota_requested_idle(context, true).await;
 
-        {
-            let (controller, interfaces) =
-                match esp_radio::wifi::new(wifi.wifi.reborrow(), Default::default()) {
-                    Ok(wifi) => wifi,
-                    Err(error) => {
-                        mcrs_repeater::platform::log_fmt(format_args!(
-                            "Wi-Fi: device init failed: {:?}",
-                            error
-                        ));
-                        context.request_ota_stop();
-                        continue;
-                    }
-                };
+//         {
+//             let (controller, interfaces) =
+//                 match esp_radio::wifi::new(wifi.wifi.reborrow(), Default::default()) {
+//                     Ok(wifi) => wifi,
+//                     Err(error) => {
+//                         error!("Wi-Fi: device init failed: {}", Debug2Format(&error));
+//                         context.request_ota_stop();
+//                         continue;
+//                     }
+//                 };
 
-            run_ota_ap_session(
-                controller,
-                interfaces.access_point,
-                &mut stack_resources,
-                context,
-            )
-            .await;
-            // The network runner and controller are dropped before the next
-            // session. Controller drop stops and deinitializes the Wi-Fi radio.
-        }
-        mcrs_repeater::platform::log_fmt(format_args!("OTA: Wi-Fi adapter shut down"));
-    }
-}
+//             run_ota_ap_session(
+//                 controller,
+//                 interfaces.access_point,
+//                 &mut stack_resources,
+//                 context,
+//             )
+//             .await;
+//             // The network runner and controller are dropped before the next
+//             // session. Controller drop stops and deinitializes the Wi-Fi radio.
+//         }
+//         info!("OTA: Wi-Fi adapter shut down");
+//     }
+// }
 
-async fn run_ota_ap_session<'a>(
-    mut controller: esp_radio::wifi::WifiController<'a>,
-    device: esp_radio::wifi::Interface<'a>,
-    stack_resources: &mut embassy_net::StackResources<4>,
-    context: &mcrs_repeater::app::AppContext<mcrs_repeater::platform::EspStorage>,
-) {
-    let net_config = embassy_net::Config::ipv4_static(embassy_net::StaticConfigV4 {
-        address: embassy_net::Ipv4Cidr::new(OTA_AP_IP, OTA_AP_PREFIX),
-        gateway: None,
-        dns_servers: Default::default(),
-    });
-    let (stack, mut runner) = embassy_net::new(
-        device,
-        net_config,
-        stack_resources,
-        mcrs_repeater::platform::now_millis(),
-    );
-    let mut runner = pin!(runner.run());
-    let mut dhcp_rx_meta = [embassy_net::udp::PacketMetadata::EMPTY; 1];
-    let mut dhcp_tx_meta = [embassy_net::udp::PacketMetadata::EMPTY; 1];
-    let mut dhcp_rx_buffer = [0u8; 576];
-    let mut dhcp_tx_buffer = [0u8; DHCP_PACKET_LEN];
-    let mut dhcp_socket = embassy_net::udp::UdpSocket::new(
-        stack,
-        &mut dhcp_rx_meta,
-        &mut dhcp_rx_buffer,
-        &mut dhcp_tx_meta,
-        &mut dhcp_tx_buffer,
-    );
-    if dhcp_socket.bind(OTA_DHCP_SERVER_PORT).is_err() {
-        mcrs_repeater::platform::log_fmt(format_args!("OTA: DHCP bind failed"));
-        context.request_ota_stop();
-        return;
-    }
-    let mut dhcp = pin!(dhcp_server(&dhcp_socket));
-    let ssid = ota_ssid(context).await;
-    if let Err(error) = start_ota_ap(&mut controller, &ssid).await {
-        mcrs_repeater::platform::log_fmt(format_args!("OTA: AP start failed: {:?}", error));
-        context.request_ota_stop();
-        return;
-    }
-    mcrs_repeater::platform::log_fmt(format_args!(
-        "OTA: AP started ssid={} url=http://{}/",
-        ssid, OTA_AP_IP
-    ));
-    let mut session = pin!(serve_ota_session(stack, context));
-    poll_fn(|cx| {
-        let _ = runner.as_mut().poll(cx);
-        let _ = dhcp.as_mut().poll(cx);
-        match session.as_mut().poll(cx) {
-            Poll::Ready(()) => Poll::Ready(()),
-            Poll::Pending => Poll::Pending,
-        }
-    })
-    .await;
-    // Dropping the controller stops and deinitializes the AP.
-}
+// async fn run_ota_ap_session<'a>(
+//     mut controller: esp_radio::wifi::WifiController<'a>,
+//     device: esp_radio::wifi::Interface<'a>,
+//     stack_resources: &mut embassy_net::StackResources<4>,
+//     context: &AppContext<EspPlatform, EspStorage>,
+// ) {
+//     let net_config = embassy_net::Config::ipv4_static(embassy_net::StaticConfigV4 {
+//         address: embassy_net::Ipv4Cidr::new(OTA_AP_IP, OTA_AP_PREFIX),
+//         gateway: None,
+//         dns_servers: Default::default(),
+//     });
+//     let (stack, mut runner) = embassy_net::new(
+//         device,
+//         net_config,
+//         stack_resources,
+//         mcrs_repeater::platform::now_millis(),
+//     );
+//     let mut runner = pin!(runner.run());
+//     let mut dhcp_rx_meta = [embassy_net::udp::PacketMetadata::EMPTY; 1];
+//     let mut dhcp_tx_meta = [embassy_net::udp::PacketMetadata::EMPTY; 1];
+//     let mut dhcp_rx_buffer = [0u8; 576];
+//     let mut dhcp_tx_buffer = [0u8; DHCP_PACKET_LEN];
+//     let mut dhcp_socket = embassy_net::udp::UdpSocket::new(
+//         stack,
+//         &mut dhcp_rx_meta,
+//         &mut dhcp_rx_buffer,
+//         &mut dhcp_tx_meta,
+//         &mut dhcp_tx_buffer,
+//     );
+//     if dhcp_socket.bind(OTA_DHCP_SERVER_PORT).is_err() {
+//         error!("OTA: DHCP bind failed");
+//         context.request_ota_stop();
+//         return;
+//     }
+//     let mut dhcp = pin!(dhcp_server(&dhcp_socket));
+//     let ssid = ota_ssid(context).await;
+//     if let Err(error) = start_ota_ap(&mut controller, &ssid).await {
+//         error!("OTA: AP start failed: {}", Debug2Format(&error));
+//         context.request_ota_stop();
+//         return;
+//     }
+//     info!(
+//         "OTA: AP started ssid={} url=http://{}/",
+//         ssid,
+//         Display2Format(&OTA_AP_IP)
+//     );
+//     let mut session = pin!(serve_ota_session(stack, context));
+//     poll_fn(|cx| {
+//         let _ = runner.as_mut().poll(cx);
+//         let _ = dhcp.as_mut().poll(cx);
+//         match session.as_mut().poll(cx) {
+//             Poll::Ready(()) => Poll::Ready(()),
+//             Poll::Pending => Poll::Pending,
+//         }
+//     })
+//     .await;
+//     // Dropping the controller stops and deinitializes the AP.
+// }
 
-async fn run_ota_station_mode<'a>(
-    mut controller: esp_radio::wifi::WifiController<'a>,
-    device: esp_radio::wifi::Interface<'a>,
-    context: &mcrs_repeater::app::AppContext<mcrs_repeater::platform::EspStorage>,
-) -> ! {
-    // Sleep the modem between DTIM beacons while keeping the station connected.
-    if let Err(error) = controller.set_power_saving(esp_radio::wifi::PowerSaveMode::Minimum) {
-        mcrs_repeater::platform::log_fmt(format_args!(
-            "Wi-Fi: power saving setup failed: {:?}",
-            error
-        ));
-    }
+// async fn run_ota_station_mode<'a>(
+//     mut controller: esp_radio::wifi::WifiController<'a>,
+//     device: esp_radio::wifi::Interface<'a>,
+//     context: &AppContext<EspPlatform, EspStorage>,
+// ) -> ! {
+//     // Sleep the modem between DTIM beacons while keeping the station connected.
+//     if let Err(error) = controller.set_power_saving(esp_radio::wifi::PowerSaveMode::Minimum) {
+//         warn!("Wi-Fi: power saving setup failed: {}", Debug2Format(&error));
+//     }
 
-    // DHCP, DNS, NTP, Telnet and OTA can each hold a socket concurrently.
-    #[cfg(not(feature = "mqtt"))]
-    const SOCKET_COUNT: usize = 5;
-    #[cfg(feature = "mqtt")]
-    const SOCKET_COUNT: usize = 5 + mcrs_repeater::app::config::MQTT_SERVER_COUNT;
-    static STACK_RESOURCES: StaticCell<embassy_net::StackResources<SOCKET_COUNT>> =
-        StaticCell::new();
-    let stack_resources = STACK_RESOURCES.init(embassy_net::StackResources::new());
-    let (stack, mut runner) = embassy_net::new(
-        device,
-        embassy_net::Config::dhcpv4(Default::default()),
-        stack_resources,
-        mcrs_repeater::platform::now_millis(),
-    );
-    let mut runner = pin!(runner.run());
-    let mut worker = pin!(async {
-        loop {
-            let wifi = context.with_config(|config| config.wifi().clone()).await;
-            let ssid = String::from(wifi.ssid());
-            let password = String::from(wifi.password());
-            if ssid.is_empty() {
-                mcrs_repeater::platform::log_fmt(format_args!("Wi-Fi: configure wifi.ssid"));
-                embassy_time::Timer::after_secs(30).await;
-                continue;
-            }
-            let config = StationConfig::default()
-                .with_ssid(ssid.as_str())
-                .with_password(password.clone())
-                .with_auth_method(if password.is_empty() {
-                    AuthenticationMethod::None
-                } else {
-                    AuthenticationMethod::Wpa2Personal
-                });
-            if controller.set_config(&Config::Station(config)).is_err()
-                || controller.connect_async().await.is_err()
-            {
-                mcrs_repeater::platform::log_fmt(format_args!("Wi-Fi: station connection failed"));
-                embassy_time::Timer::after_secs(10).await;
-                continue;
-            }
-            let configured = {
-                let mut wait_config = pin!(stack.wait_config_up());
-                let mut disconnected = pin!(controller.wait_for_disconnect_async());
-                poll_fn(|cx| {
-                    if wait_config.as_mut().poll(cx).is_ready() {
-                        Poll::Ready(true)
-                    } else if disconnected.as_mut().poll(cx).is_ready() {
-                        Poll::Ready(false)
-                    } else {
-                        Poll::Pending
-                    }
-                })
-                .await
-            };
-            if !configured {
-                mcrs_repeater::platform::log_fmt(format_args!(
-                    "Wi-Fi: disconnected before DHCP completed; reconnecting"
-                ));
-                let _ = controller.disconnect_async().await;
-                embassy_time::Timer::after_secs(5).await;
-                continue;
-            }
-            if let Some(config) = stack.config_v4() {
-                mcrs_repeater::platform::log_fmt(format_args!(
-                    "Wi-Fi: station connected address={} ota=http://{}:{}/",
-                    config.address,
-                    config.address.address(),
-                    OTA_HTTP_PORT
-                ));
-            } else {
-                mcrs_repeater::platform::log_fmt(format_args!("Wi-Fi: station connected"));
-            }
-            {
-                let mut server = pin!(serve_ota(stack, context));
-                let mut ntp = pin!(ntp_loop(stack, context));
-                let mut telnet = pin!(mcrs_repeater::app::telnet::serve(stack, context));
-                #[cfg(feature = "mqtt")]
-                let mut mqtt1 = pin!(mqtt_loop(stack, context, 0));
-                #[cfg(feature = "mqtt")]
-                let mut mqtt2 = pin!(mqtt_loop(stack, context, 1));
-                #[cfg(feature = "mqtt")]
-                let mut mqtt3 = pin!(mqtt_loop(stack, context, 2));
-                let mut disconnected = pin!(controller.wait_for_disconnect_async());
-                poll_fn(|cx| {
-                    if let Poll::Ready(never) = server.as_mut().poll(cx) {
-                        match never {}
-                    }
-                    if let Poll::Ready(never) = ntp.as_mut().poll(cx) {
-                        match never {}
-                    }
-                    if let Poll::Ready(never) = telnet.as_mut().poll(cx) {
-                        match never {}
-                    }
-                    #[cfg(feature = "mqtt")]
-                    for mqtt in [&mut mqtt1, &mut mqtt2, &mut mqtt3] {
-                        if let Poll::Ready(never) = mqtt.as_mut().poll(cx) {
-                            match never {}
-                        }
-                    }
-                    if disconnected.as_mut().poll(cx).is_ready() {
-                        Poll::Ready(())
-                    } else {
-                        Poll::Pending
-                    }
-                })
-                .await;
-                #[cfg(feature = "mqtt")]
-                for index in 0..mcrs_repeater::app::config::MQTT_SERVER_COUNT {
-                    use mcrs_repeater::app::mqtt::{ConnectionError, ConnectionState};
-                    let enabled = context
-                        .with_config(|config| {
-                            config.mqtt(index).is_some_and(|mqtt| !mqtt.host.is_empty())
-                        })
-                        .await;
-                    if enabled {
-                        context
-                            .mqtt
-                            .set_error(index, Some(ConnectionError::Unreachable));
-                        context.mqtt.set_state(index, ConnectionState::Disconnected);
-                    } else {
-                        context.mqtt.set_state(index, ConnectionState::Disabled);
-                    }
-                }
-            }
-            mcrs_repeater::platform::log_fmt(format_args!(
-                "Wi-Fi: station disconnected; reconnecting"
-            ));
-            let _ = controller.disconnect_async().await;
-            embassy_time::Timer::after_secs(5).await;
-        }
-    });
-    poll_fn(|cx| {
-        let _ = runner.as_mut().poll(cx);
-        context.set_ota_address(
-            stack.config_v4().map(|config| {
-                core::net::SocketAddrV4::new(config.address.address(), OTA_HTTP_PORT)
-            }),
-        );
-        match worker.as_mut().poll(cx) {
-            Poll::Ready(never) => match never {},
-            Poll::Pending => Poll::Pending,
-        }
-    })
-    .await
-}
+//     // DHCP, DNS, NTP, Telnet and OTA can each hold a socket concurrently.
+//     #[cfg(not(feature = "mqtt"))]
+//     const SOCKET_COUNT: usize = 5;
+//     #[cfg(feature = "mqtt")]
+//     const SOCKET_COUNT: usize = 5 + mcrs_repeater::app::config::MQTT_SERVER_COUNT;
+//     static STACK_RESOURCES: StaticCell<embassy_net::StackResources<SOCKET_COUNT>> =
+//         StaticCell::new();
+//     let stack_resources = STACK_RESOURCES.init(embassy_net::StackResources::new());
+//     let (stack, mut runner) = embassy_net::new(
+//         device,
+//         embassy_net::Config::dhcpv4(Default::default()),
+//         stack_resources,
+//         mcrs_repeater::platform::now_millis(),
+//     );
+//     let mut runner = pin!(runner.run());
+//     let mut worker = pin!(async {
+//         loop {
+//             let wifi = context.with_config(|config| config.wifi().clone()).await;
+//             let ssid = String::from(wifi.ssid());
+//             let password = String::from(wifi.password());
+//             if ssid.is_empty() {
+//                 warn!("Wi-Fi: configure wifi.ssid");
+//                 embassy_time::Timer::after_secs(30).await;
+//                 continue;
+//             }
+//             let config = StationConfig::default()
+//                 .with_ssid(ssid.as_str())
+//                 .with_password(password.clone())
+//                 .with_auth_method(if password.is_empty() {
+//                     AuthenticationMethod::None
+//                 } else {
+//                     AuthenticationMethod::Wpa2Personal
+//                 });
+//             if controller.set_config(&Config::Station(config)).is_err()
+//                 || controller.connect_async().await.is_err()
+//             {
+//                 warn!("Wi-Fi: station connection failed");
+//                 embassy_time::Timer::after_secs(10).await;
+//                 continue;
+//             }
+//             let configured = {
+//                 let mut wait_config = pin!(stack.wait_config_up());
+//                 let mut disconnected = pin!(controller.wait_for_disconnect_async());
+//                 poll_fn(|cx| {
+//                     if wait_config.as_mut().poll(cx).is_ready() {
+//                         Poll::Ready(true)
+//                     } else if disconnected.as_mut().poll(cx).is_ready() {
+//                         Poll::Ready(false)
+//                     } else {
+//                         Poll::Pending
+//                     }
+//                 })
+//                 .await
+//             };
+//             if !configured {
+//                 warn!("Wi-Fi: disconnected before DHCP completed; reconnecting");
+//                 let _ = controller.disconnect_async().await;
+//                 embassy_time::Timer::after_secs(5).await;
+//                 continue;
+//             }
+//             if let Some(config) = stack.config_v4() {
+//                 info!(
+//                     "Wi-Fi: station connected address={} ota=http://{}:{}/",
+//                     Display2Format(&config.address),
+//                     Display2Format(&config.address.address()),
+//                     OTA_HTTP_PORT
+//                 );
+//             } else {
+//                 info!("Wi-Fi: station connected");
+//             }
+//             {
+//                 let mut server = pin!(serve_ota(stack, context));
+//                 let mut ntp = pin!(ntp_loop(stack, context));
+//                 let mut telnet = pin!(mcrs_repeater::app::telnet::serve(stack, context));
+//                 #[cfg(feature = "mqtt")]
+//                 let mut mqtt1 = pin!(mqtt_loop(stack, context, 0));
+//                 #[cfg(feature = "mqtt")]
+//                 let mut mqtt2 = pin!(mqtt_loop(stack, context, 1));
+//                 #[cfg(feature = "mqtt")]
+//                 let mut mqtt3 = pin!(mqtt_loop(stack, context, 2));
+//                 let mut disconnected = pin!(controller.wait_for_disconnect_async());
+//                 poll_fn(|cx| {
+//                     if let Poll::Ready(never) = server.as_mut().poll(cx) {
+//                         match never {}
+//                     }
+//                     if let Poll::Ready(never) = ntp.as_mut().poll(cx) {
+//                         match never {}
+//                     }
+//                     if let Poll::Ready(never) = telnet.as_mut().poll(cx) {
+//                         match never {}
+//                     }
+//                     #[cfg(feature = "mqtt")]
+//                     for mqtt in [&mut mqtt1, &mut mqtt2, &mut mqtt3] {
+//                         if let Poll::Ready(never) = mqtt.as_mut().poll(cx) {
+//                             match never {}
+//                         }
+//                     }
+//                     if disconnected.as_mut().poll(cx).is_ready() {
+//                         Poll::Ready(())
+//                     } else {
+//                         Poll::Pending
+//                     }
+//                 })
+//                 .await;
+//                 #[cfg(feature = "mqtt")]
+//                 for index in 0..mcrs_repeater::app::config::MQTT_SERVER_COUNT {
+//                     use mcrs_repeater::app::mqtt::{ConnectionError, ConnectionState};
+//                     let enabled = context
+//                         .with_config(|config| {
+//                             config.mqtt(index).is_some_and(|mqtt| !mqtt.host.is_empty())
+//                         })
+//                         .await;
+//                     if enabled {
+//                         context
+//                             .mqtt
+//                             .set_error(index, Some(ConnectionError::Unreachable));
+//                         context.mqtt.set_state(index, ConnectionState::Disconnected);
+//                     } else {
+//                         context.mqtt.set_state(index, ConnectionState::Disabled);
+//                     }
+//                 }
+//             }
+//             warn!("Wi-Fi: station disconnected; reconnecting");
+//             let _ = controller.disconnect_async().await;
+//             embassy_time::Timer::after_secs(5).await;
+//         }
+//     });
+//     poll_fn(|cx| {
+//         let _ = runner.as_mut().poll(cx);
+//         context.set_ota_address(
+//             stack.config_v4().map(|config| {
+//                 core::net::SocketAddrV4::new(config.address.address(), OTA_HTTP_PORT)
+//             }),
+//         );
+//         match worker.as_mut().poll(cx) {
+//             Poll::Ready(never) => match never {},
+//             Poll::Pending => Poll::Pending,
+//         }
+//     })
+//     .await
+// }
 
 #[cfg(feature = "mqtt")]
 async fn mqtt_loop(
     stack: embassy_net::Stack<'_>,
-    context: &mcrs_repeater::app::AppContext<mcrs_repeater::platform::EspStorage>,
+    context: &AppContext<EspPlatform, EspStorage>,
     index: usize,
 ) -> ! {
     use mcrs_repeater::app::mqtt::ConnectionState;
@@ -747,11 +756,7 @@ async fn mqtt_loop(
         if context.mqtt.generation() == generation {
             if let Err(error) = result {
                 context.mqtt.set_error(index, Some(error));
-                mcrs_repeater::platform::log_fmt(format_args!(
-                    "MQTT {}: {}",
-                    index + 1,
-                    error.as_str()
-                ));
+                warn!("MQTT {}: {}", index + 1, error.as_str());
             }
         }
         context.mqtt.set_state(index, ConnectionState::Disconnected);
@@ -762,7 +767,7 @@ async fn mqtt_loop(
 #[cfg(feature = "mqtt")]
 async fn mqtt_session(
     stack: embassy_net::Stack<'_>,
-    context: &mcrs_repeater::app::AppContext<mcrs_repeater::platform::EspStorage>,
+    context: &AppContext<EspPlatform, EspStorage>,
     index: usize,
     generation: u32,
     config: &mcrs_repeater::app::config::MqttConfig,
@@ -872,17 +877,10 @@ async fn mqtt_session(
 
 #[cfg(feature = "mqtt")]
 async fn mqtt_status_json(
-    context: &mcrs_repeater::app::AppContext<mcrs_repeater::platform::EspStorage>,
+    context: &AppContext<EspPlatform, EspStorage>,
     public_key: &[u8; 32],
     online: bool,
 ) -> String {
-    #[cfg(feature = "board-heltec-v3")]
-    const MODEL: &str = "Heltec V3";
-    #[cfg(feature = "board-heltec-v4")]
-    const MODEL: &str = "Heltec V4";
-    #[cfg(feature = "board-heltec-wsl3")]
-    const MODEL: &str = "Heltec Wireless Stick Lite V3";
-
     context
         .with_config(|config| {
             let status = context.status();
@@ -890,9 +888,9 @@ async fn mqtt_status_json(
                 public_key,
                 online,
                 config.node_name(),
-                MODEL,
+                todo!("MODEL"),
                 VERSION,
-                mcrs_repeater::platform::now_seconds(),
+                context.platform.now_seconds(),
                 mcrs_repeater::app::mqtt::StatusStats {
                     battery_mv: status.battery_millivolts,
                     uptime_ms: status.uptime_millis,
@@ -904,7 +902,7 @@ async fn mqtt_status_json(
 
 #[cfg(feature = "mqtt")]
 async fn mqtt_connected<R: embedded_io_async::Read, W: embedded_io_async::Write>(
-    context: &mcrs_repeater::app::AppContext<mcrs_repeater::platform::EspStorage>,
+    context: &AppContext<EspPlatform, EspStorage>,
     index: usize,
     generation: u32,
     config: &mcrs_repeater::app::config::MqttConfig,
@@ -919,16 +917,15 @@ async fn mqtt_connected<R: embedded_io_async::Read, W: embedded_io_async::Write>
     let (public_key, credentials) = context
         .with_identity(|identity| {
             let public_key = *identity.public_key();
-            let credentials = config.credentials(
-                &public_key,
-                mcrs_repeater::platform::now_seconds(),
-                |message| identity.sign(message),
-            );
+            let credentials =
+                config.credentials(&public_key, context.platform.now_seconds(), |message| {
+                    identity.sign(message)
+                });
             (public_key, credentials)
         })
         .await;
     let (username, password) = credentials.map_err(|_| {
-        if mcrs_repeater::platform::now_seconds() < 1_704_067_200 {
+        if context.platform.now_seconds() < 1_704_067_200 {
             ConnectionError::Clock
         } else {
             ConnectionError::Config
@@ -973,7 +970,7 @@ async fn mqtt_connected<R: embedded_io_async::Read, W: embedded_io_async::Write>
         context
             .mqtt
             .set_state(index, mqtt::ConnectionState::Connected);
-        mcrs_repeater::platform::log_fmt(format_args!("MQTT {}: connected", index + 1));
+        info!("MQTT {}: connected", index + 1);
         let mut next_status = embassy_time::Instant::now(); // Publish immediately after connecting.
         let mut keepalive = next_status + embassy_time::Duration::from_secs(30);
         loop {
@@ -1087,7 +1084,7 @@ async fn mqtt_wait_ack<W: embedded_io_async::Write>(
 // Every error from this helper must therefore discard the connection.
 #[cfg(feature = "mqtt")]
 async fn mqtt_io<T, E>(
-    context: &mcrs_repeater::app::AppContext<mcrs_repeater::platform::EspStorage>,
+    context: &AppContext<EspPlatform, EspStorage>,
     index: usize,
     generation: u32,
     operation: impl Future<Output = Result<T, E>>,
@@ -1112,7 +1109,7 @@ async fn mqtt_io<T, E>(
 
 #[cfg(feature = "mqtt")]
 async fn wait_mqtt_retry_or_restart(
-    context: &mcrs_repeater::app::AppContext<mcrs_repeater::platform::EspStorage>,
+    context: &AppContext<EspPlatform, EspStorage>,
     index: usize,
     generation: u32,
     seconds: u64,
@@ -1132,306 +1129,297 @@ async fn wait_mqtt_retry_or_restart(
     .await
 }
 
-async fn ntp_loop(
-    stack: embassy_net::Stack<'_>,
-    context: &mcrs_repeater::app::AppContext<mcrs_repeater::platform::EspStorage>,
-) -> ! {
-    loop {
-        let host = context
-            .with_config(|config| String::from(config.ntp()))
-            .await;
-        let delay_seconds = match sync_ntp(stack, &host).await {
-            Some(unix_seconds) => {
-                if mcrs_repeater::platform::set_wall_clock_if_forward(unix_seconds) {
-                    mcrs_repeater::platform::log_fmt(format_args!(
-                        "NTP: synchronized unix={}",
-                        unix_seconds
-                    ));
-                }
-                NTP_REFRESH_SECONDS
-            }
-            None => {
-                mcrs_repeater::platform::log_fmt(format_args!("NTP: sync failed; retrying"));
-                NTP_RETRY_SECONDS
-            }
-        };
-        embassy_time::Timer::after_secs(delay_seconds).await;
-    }
-}
+// async fn ntp_loop(
+//     stack: embassy_net::Stack<'_>,
+//     context: &AppContext<EspPlatform, EspStorage>,
+// ) -> ! {
+//     loop {
+//         let host = context
+//             .with_config(|config| String::from(config.ntp()))
+//             .await;
+//         let delay_seconds = match sync_ntp(stack, &host).await {
+//             Some(unix_seconds) => {
+//                 if mcrs_repeater::platform::set_wall_clock_if_forward(unix_seconds) {
+//                     info!("NTP: synchronized unix={}", unix_seconds);
+//                 }
+//                 NTP_REFRESH_SECONDS
+//             }
+//             None => {
+//                 warn!("NTP: sync failed; retrying");
+//                 NTP_RETRY_SECONDS
+//             }
+//         };
+//         embassy_time::Timer::after_secs(delay_seconds).await;
+//     }
+// }
 
-async fn sync_ntp(stack: embassy_net::Stack<'_>, host: &str) -> Option<u32> {
-    let addresses = stack
-        .dns_query(host, embassy_net::dns::DnsQueryType::A)
-        .await
-        .ok()?;
-    let address = addresses.first().copied()?;
-    let mut rx_meta = [embassy_net::udp::PacketMetadata::EMPTY; 1];
-    let mut tx_meta = [embassy_net::udp::PacketMetadata::EMPTY; 1];
-    let mut rx_buffer = [0u8; 48];
-    let mut tx_buffer = [0u8; 48];
-    let mut socket = embassy_net::udp::UdpSocket::new(
-        stack,
-        &mut rx_meta,
-        &mut rx_buffer,
-        &mut tx_meta,
-        &mut tx_buffer,
-    );
-    socket.bind(0).ok()?;
-    let mut request = [0u8; 48];
-    request[0] = 0x23;
-    request[40..48].copy_from_slice(&mcrs_repeater::platform::now_millis().to_be_bytes());
-    socket.send_to(&request, (address, NTP_PORT)).await.ok()?;
+// async fn sync_ntp(stack: embassy_net::Stack<'_>, host: &str) -> Option<u32> {
+//     let addresses = stack
+//         .dns_query(host, embassy_net::dns::DnsQueryType::A)
+//         .await
+//         .ok()?;
+//     let address = addresses.first().copied()?;
+//     let mut rx_meta = [embassy_net::udp::PacketMetadata::EMPTY; 1];
+//     let mut tx_meta = [embassy_net::udp::PacketMetadata::EMPTY; 1];
+//     let mut rx_buffer = [0u8; 48];
+//     let mut tx_buffer = [0u8; 48];
+//     let mut socket = embassy_net::udp::UdpSocket::new(
+//         stack,
+//         &mut rx_meta,
+//         &mut rx_buffer,
+//         &mut tx_meta,
+//         &mut tx_buffer,
+//     );
+//     socket.bind(0).ok()?;
+//     let mut request = [0u8; 48];
+//     request[0] = 0x23;
+//     request[40..48].copy_from_slice(&mcrs_repeater::platform::now_millis().to_be_bytes());
+//     socket.send_to(&request, (address, NTP_PORT)).await.ok()?;
 
-    let mut response = [0u8; 48];
-    let mut timeout = pin!(embassy_time::Timer::after_secs(10));
-    let len = poll_fn(|cx| match socket.poll_recv_from(&mut response, cx) {
-        Poll::Ready(Ok((len, _))) => Poll::Ready(Some(len)),
-        Poll::Ready(Err(_)) => Poll::Ready(None),
-        Poll::Pending if timeout.as_mut().poll(cx).is_ready() => Poll::Ready(None),
-        Poll::Pending => Poll::Pending,
-    })
-    .await?;
-    if len < response.len() {
-        return None;
-    }
-    let leap = response[0] >> 6;
-    let mode = response[0] & 0x07;
-    let stratum = response[1];
-    if leap == 3
-        || !matches!(mode, 4 | 5)
-        || !(1..=15).contains(&stratum)
-        || response[24..32] != request[40..48]
-    {
-        return None;
-    }
-    let ntp_seconds = u32::from_be_bytes(response[40..44].try_into().ok()?);
-    ntp_seconds.checked_sub(NTP_UNIX_EPOCH_OFFSET)
-}
+//     let mut response = [0u8; 48];
+//     let mut timeout = pin!(embassy_time::Timer::after_secs(10));
+//     let len = poll_fn(|cx| match socket.poll_recv_from(&mut response, cx) {
+//         Poll::Ready(Ok((len, _))) => Poll::Ready(Some(len)),
+//         Poll::Ready(Err(_)) => Poll::Ready(None),
+//         Poll::Pending if timeout.as_mut().poll(cx).is_ready() => Poll::Ready(None),
+//         Poll::Pending => Poll::Pending,
+//     })
+//     .await?;
+//     if len < response.len() {
+//         return None;
+//     }
+//     let leap = response[0] >> 6;
+//     let mode = response[0] & 0x07;
+//     let stratum = response[1];
+//     if leap == 3
+//         || !matches!(mode, 4 | 5)
+//         || !(1..=15).contains(&stratum)
+//         || response[24..32] != request[40..48]
+//     {
+//         return None;
+//     }
+//     let ntp_seconds = u32::from_be_bytes(response[40..44].try_into().ok()?);
+//     ntp_seconds.checked_sub(NTP_UNIX_EPOCH_OFFSET)
+// }
 
-async fn serve_ota(
-    stack: embassy_net::Stack<'_>,
-    context: &mcrs_repeater::app::AppContext<mcrs_repeater::platform::EspStorage>,
-) -> ! {
-    loop {
-        wait_for_ota_requested_idle(context, true).await;
-        serve_ota_session(stack, context).await;
-    }
-}
+// async fn serve_ota(
+//     stack: embassy_net::Stack<'_>,
+//     context: &AppContext<EspPlatform, EspStorage>,
+// ) -> ! {
+//     loop {
+//         wait_for_ota_requested_idle(context, true).await;
+//         serve_ota_session(stack, context).await;
+//     }
+// }
 
-async fn serve_ota_session(
-    stack: embassy_net::Stack<'_>,
-    context: &mcrs_repeater::app::AppContext<mcrs_repeater::platform::EspStorage>,
-) {
-    while context.ota_requested() {
-        let mut rx_buffer = [0u8; 2048];
-        let mut tx_buffer = [0u8; 2048];
-        let mut socket = embassy_net::tcp::TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-        if accept_ota_connection(context, &mut socket).await {
-            mcrs_repeater::platform::log_fmt(format_args!("OTA: client connected"));
-            match handle_ota_connection(context, &mut socket).await {
-                OtaConnectionResult::Complete(Ok(())) => {}
-                OtaConnectionResult::Complete(Err(error)) => {
-                    mcrs_repeater::platform::log_fmt(format_args!(
-                        "OTA: request failed: {:?}",
-                        error
-                    ));
-                }
-                OtaConnectionResult::Stopped => {
-                    mcrs_repeater::platform::log_fmt(format_args!("OTA: request aborted"));
-                }
-            }
-        }
-        socket.abort();
-    }
-}
+// async fn serve_ota_session(
+//     stack: embassy_net::Stack<'_>,
+//     context: &AppContext<EspPlatform, EspStorage>,
+// ) {
+//     while context.ota_requested() {
+//         let mut rx_buffer = [0u8; 2048];
+//         let mut tx_buffer = [0u8; 2048];
+//         let mut socket = embassy_net::tcp::TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
+//         if accept_ota_connection(context, &mut socket).await {
+//             info!("OTA: client connected");
+//             match handle_ota_connection(context, &mut socket).await {
+//                 OtaConnectionResult::Complete(Ok(())) => {}
+//                 OtaConnectionResult::Complete(Err(error)) => {
+//                     error!("OTA: request failed: {}", Debug2Format(&error));
+//                 }
+//                 OtaConnectionResult::Stopped => {
+//                     warn!("OTA: request aborted");
+//                 }
+//             }
+//         }
+//         socket.abort();
+//     }
+// }
 
-async fn accept_ota_connection<'a>(
-    context: &mcrs_repeater::app::AppContext<mcrs_repeater::platform::EspStorage>,
-    socket: &mut embassy_net::tcp::TcpSocket<'a>,
-) -> bool {
-    let generation = context.ota_generation();
-    let mut accept = pin!(socket.accept(OTA_HTTP_PORT));
-    poll_fn(|cx| {
-        if !context.ota_requested() || context.ota_generation() != generation {
-            return Poll::Ready(false);
-        }
-        context.register_ota_waker(cx.waker());
-        match accept.as_mut().poll(cx) {
-            Poll::Ready(Ok(())) => Poll::Ready(true),
-            Poll::Ready(Err(_)) => Poll::Ready(false),
-            Poll::Pending => Poll::Pending,
-        }
-    })
-    .await
-}
+// async fn accept_ota_connection<'a>(
+//     context: &AppContext<EspPlatform, EspStorage>,
+//     socket: &mut embassy_net::tcp::TcpSocket<'a>,
+// ) -> bool {
+//     let generation = context.ota_generation();
+//     let mut accept = pin!(socket.accept(OTA_HTTP_PORT));
+//     poll_fn(|cx| {
+//         if !context.ota_requested() || context.ota_generation() != generation {
+//             return Poll::Ready(false);
+//         }
+//         context.register_ota_waker(cx.waker());
+//         match accept.as_mut().poll(cx) {
+//             Poll::Ready(Ok(())) => Poll::Ready(true),
+//             Poll::Ready(Err(_)) => Poll::Ready(false),
+//             Poll::Pending => Poll::Pending,
+//         }
+//     })
+//     .await
+// }
 
-enum OtaConnectionResult {
-    Complete(Result<(), mcrs_repeater::app::ota::HttpOtaError>),
-    Stopped,
-}
+// enum OtaConnectionResult {
+//     Complete(Result<(), mcrs_repeater::app::ota::HttpOtaError>),
+//     Stopped,
+// }
 
-async fn handle_ota_connection<'a>(
-    context: &mcrs_repeater::app::AppContext<mcrs_repeater::platform::EspStorage>,
-    socket: &mut embassy_net::tcp::TcpSocket<'a>,
-) -> OtaConnectionResult {
-    let generation = context.ota_generation();
-    let mut connection = pin!(mcrs_repeater::app::ota::handle_connection(socket));
-    poll_fn(|cx| {
-        if !context.ota_requested() || context.ota_generation() != generation {
-            return Poll::Ready(OtaConnectionResult::Stopped);
-        }
-        context.register_ota_waker(cx.waker());
-        match connection.as_mut().poll(cx) {
-            Poll::Ready(result) => Poll::Ready(OtaConnectionResult::Complete(result)),
-            Poll::Pending => Poll::Pending,
-        }
-    })
-    .await
-}
+// async fn handle_ota_connection<'a>(
+//     context: &AppContext<EspPlatform, EspStorage>,
+//     socket: &mut embassy_net::tcp::TcpSocket<'a>,
+// ) -> OtaConnectionResult {
+//     let generation = context.ota_generation();
+//     let mut connection = pin!(mcrs_repeater::app::ota::handle_connection(socket));
+//     poll_fn(|cx| {
+//         if !context.ota_requested() || context.ota_generation() != generation {
+//             return Poll::Ready(OtaConnectionResult::Stopped);
+//         }
+//         context.register_ota_waker(cx.waker());
+//         match connection.as_mut().poll(cx) {
+//             Poll::Ready(result) => Poll::Ready(OtaConnectionResult::Complete(result)),
+//             Poll::Pending => Poll::Pending,
+//         }
+//     })
+//     .await
+// }
 
-async fn start_ota_ap(
-    controller: &mut esp_radio::wifi::WifiController<'_>,
-    ssid: &str,
-) -> Result<(), esp_radio::wifi::WifiError> {
-    controller.set_config(&Config::AccessPoint(
-        AccessPointConfig::default()
-            .with_ssid(ssid)
-            .with_ssid_hidden(false)
-            .with_channel(1)
-            .with_auth_method(AuthenticationMethod::None)
-            .with_max_connections(1),
-    ))
-}
+// async fn start_ota_ap(
+//     controller: &mut esp_radio::wifi::WifiController<'_>,
+//     ssid: &str,
+// ) -> Result<(), esp_radio::wifi::WifiError> {
+//     controller.set_config(&Config::AccessPoint(
+//         AccessPointConfig::default()
+//             .with_ssid(ssid)
+//             .with_ssid_hidden(false)
+//             .with_channel(1)
+//             .with_auth_method(AuthenticationMethod::None)
+//             .with_max_connections(1),
+//     ))
+// }
 
-async fn ota_ssid<S>(context: &mcrs_repeater::app::AppContext<S>) -> String
-where
-    S: mcrs_repeater::platform::storage::Storage,
-{
-    let public_key = context.public_key().await;
-    format!(
-        "meshcore-ota-{:02x}{:02x}{:02x}",
-        public_key[0], public_key[1], public_key[2]
-    )
-}
+// async fn ota_ssid<P: Platform, S: Storage>(context: &AppContext<P, S>) -> String {
+//     let public_key = context.public_key().await;
+//     format!(
+//         "meshcore-ota-{:02x}{:02x}{:02x}",
+//         public_key[0], public_key[1], public_key[2]
+//     )
+// }
 
-async fn dhcp_server(socket: &embassy_net::udp::UdpSocket<'_>) -> ! {
-    let mut request = [0u8; 576];
-    let mut response = [0u8; DHCP_PACKET_LEN];
-    loop {
-        let Ok((len, _)) = socket.recv_from(&mut request).await else {
-            continue;
-        };
-        let Some(response_len) = build_dhcp_response(&request[..len], &mut response) else {
-            continue;
-        };
-        let destination = embassy_net::IpEndpoint::new(
-            embassy_net::IpAddress::Ipv4(embassy_net::Ipv4Address::BROADCAST),
-            OTA_DHCP_CLIENT_PORT,
-        );
-        let _ = socket.send_to(&response[..response_len], destination).await;
-    }
-}
+// async fn dhcp_server(socket: &embassy_net::udp::UdpSocket<'_>) -> ! {
+//     let mut request = [0u8; 576];
+//     let mut response = [0u8; DHCP_PACKET_LEN];
+//     loop {
+//         let Ok((len, _)) = socket.recv_from(&mut request).await else {
+//             continue;
+//         };
+//         let Some(response_len) = build_dhcp_response(&request[..len], &mut response) else {
+//             continue;
+//         };
+//         let destination = embassy_net::IpEndpoint::new(
+//             embassy_net::IpAddress::Ipv4(embassy_net::Ipv4Address::BROADCAST),
+//             OTA_DHCP_CLIENT_PORT,
+//         );
+//         let _ = socket.send_to(&response[..response_len], destination).await;
+//     }
+// }
 
-fn build_dhcp_response(request: &[u8], response: &mut [u8; DHCP_PACKET_LEN]) -> Option<usize> {
-    if request.len() < 240
-        || request[0] != 1
-        || request[1] != 1
-        || request[2] != 6
-        || request[236..240] != DHCP_COOKIE
-    {
-        return None;
-    }
+// fn build_dhcp_response(request: &[u8], response: &mut [u8; DHCP_PACKET_LEN]) -> Option<usize> {
+//     if request.len() < 240
+//         || request[0] != 1
+//         || request[1] != 1
+//         || request[2] != 6
+//         || request[236..240] != DHCP_COOKIE
+//     {
+//         return None;
+//     }
 
-    let message_type = dhcp_message_type(&request[240..])?;
-    let reply_type = match message_type {
-        1 => 2, // DISCOVER -> OFFER
-        3 => 5, // REQUEST -> ACK
-        _ => return None,
-    };
+//     let message_type = dhcp_message_type(&request[240..])?;
+//     let reply_type = match message_type {
+//         1 => 2, // DISCOVER -> OFFER
+//         3 => 5, // REQUEST -> ACK
+//         _ => return None,
+//     };
 
-    response.fill(0);
-    response[0] = 2;
-    response[1..4].copy_from_slice(&request[1..4]);
-    response[4..8].copy_from_slice(&request[4..8]);
-    response[10..12].copy_from_slice(&request[10..12]);
-    response[16..20].copy_from_slice(&OTA_CLIENT_IP.octets());
-    response[20..24].copy_from_slice(&OTA_AP_IP.octets());
-    response[24..28].copy_from_slice(&request[24..28]);
-    response[28..44].copy_from_slice(&request[28..44]);
-    response[236..240].copy_from_slice(&DHCP_COOKIE);
+//     response.fill(0);
+//     response[0] = 2;
+//     response[1..4].copy_from_slice(&request[1..4]);
+//     response[4..8].copy_from_slice(&request[4..8]);
+//     response[10..12].copy_from_slice(&request[10..12]);
+//     response[16..20].copy_from_slice(&OTA_CLIENT_IP.octets());
+//     response[20..24].copy_from_slice(&OTA_AP_IP.octets());
+//     response[24..28].copy_from_slice(&request[24..28]);
+//     response[28..44].copy_from_slice(&request[28..44]);
+//     response[236..240].copy_from_slice(&DHCP_COOKIE);
 
-    let mut offset = 240;
-    offset = append_dhcp_option(response, offset, 53, &[reply_type])?;
-    offset = append_dhcp_option(response, offset, 54, &OTA_AP_IP.octets())?;
-    offset = append_dhcp_option(response, offset, 51, &3600u32.to_be_bytes())?;
-    offset = append_dhcp_option(response, offset, 1, &[255, 255, 255, 0])?;
-    offset = append_dhcp_option(response, offset, 3, &OTA_AP_IP.octets())?;
-    response[offset] = 255;
-    Some(DHCP_PACKET_LEN)
-}
+//     let mut offset = 240;
+//     offset = append_dhcp_option(response, offset, 53, &[reply_type])?;
+//     offset = append_dhcp_option(response, offset, 54, &OTA_AP_IP.octets())?;
+//     offset = append_dhcp_option(response, offset, 51, &3600u32.to_be_bytes())?;
+//     offset = append_dhcp_option(response, offset, 1, &[255, 255, 255, 0])?;
+//     offset = append_dhcp_option(response, offset, 3, &OTA_AP_IP.octets())?;
+//     response[offset] = 255;
+//     Some(DHCP_PACKET_LEN)
+// }
 
-fn dhcp_message_type(mut options: &[u8]) -> Option<u8> {
-    while let Some((&code, rest)) = options.split_first() {
-        options = rest;
-        match code {
-            0 => continue,
-            255 => return None,
-            _ => {
-                let (&len, rest) = options.split_first()?;
-                let len = len as usize;
-                if rest.len() < len {
-                    return None;
-                }
-                if code == 53 && len == 1 {
-                    return Some(rest[0]);
-                }
-                options = &rest[len..];
-            }
-        }
-    }
-    None
-}
+// fn dhcp_message_type(mut options: &[u8]) -> Option<u8> {
+//     while let Some((&code, rest)) = options.split_first() {
+//         options = rest;
+//         match code {
+//             0 => continue,
+//             255 => return None,
+//             _ => {
+//                 let (&len, rest) = options.split_first()?;
+//                 let len = len as usize;
+//                 if rest.len() < len {
+//                     return None;
+//                 }
+//                 if code == 53 && len == 1 {
+//                     return Some(rest[0]);
+//                 }
+//                 options = &rest[len..];
+//             }
+//         }
+//     }
+//     None
+// }
 
-fn append_dhcp_option(response: &mut [u8], offset: usize, code: u8, value: &[u8]) -> Option<usize> {
-    let end = offset.checked_add(2)?.checked_add(value.len())?;
-    if end >= response.len() || value.len() > u8::MAX as usize {
-        return None;
-    }
-    response[offset] = code;
-    response[offset + 1] = value.len() as u8;
-    response[offset + 2..end].copy_from_slice(value);
-    Some(end)
-}
+// fn append_dhcp_option(response: &mut [u8], offset: usize, code: u8, value: &[u8]) -> Option<usize> {
+//     let end = offset.checked_add(2)?.checked_add(value.len())?;
+//     if end >= response.len() || value.len() > u8::MAX as usize {
+//         return None;
+//     }
+//     response[offset] = code;
+//     response[offset + 1] = value.len() as u8;
+//     response[offset + 2..end].copy_from_slice(value);
+//     Some(end)
+// }
 
-async fn wait_for_ota_requested_idle(
-    context: &mcrs_repeater::app::AppContext<mcrs_repeater::platform::EspStorage>,
-    requested: bool,
-) {
-    loop {
-        if context.ota_requested() == requested {
-            return;
-        }
+// async fn wait_for_ota_requested_idle(
+//     context: &AppContext<EspPlatform, EspStorage>,
+//     requested: bool,
+// ) {
+//     loop {
+//         if context.ota_requested() == requested {
+//             return;
+//         }
 
-        let generation = context.ota_generation();
-        poll_fn(|cx| {
-            if context.ota_requested() == requested || context.ota_generation() != generation {
-                return Poll::Ready(());
-            }
+//         let generation = context.ota_generation();
+//         poll_fn(|cx| {
+//             if context.ota_requested() == requested || context.ota_generation() != generation {
+//                 return Poll::Ready(());
+//             }
 
-            context.register_ota_waker(cx.waker());
-            if context.ota_requested() == requested || context.ota_generation() != generation {
-                Poll::Ready(())
-            } else {
-                Poll::Pending
-            }
-        })
-        .await;
-    }
-}
+//             context.register_ota_waker(cx.waker());
+//             if context.ota_requested() == requested || context.ota_generation() != generation {
+//                 Poll::Ready(())
+//             } else {
+//                 Poll::Pending
+//             }
+//         })
+//         .await;
+//     }
+// }
 
 async fn battery_task(
     mut battery: BatteryMonitor,
-    context: &mcrs_repeater::app::AppContext<mcrs_repeater::platform::EspStorage>,
+    context: &AppContext<EspPlatform, EspStorage>,
 ) -> ! {
     let mut delay = crate::esp::radio_delay();
 
@@ -1444,7 +1432,7 @@ async fn battery_task(
 
 pub async fn publish_battery_sample(
     battery: &mut BatteryMonitor,
-    context: &mcrs_repeater::app::AppContext<mcrs_repeater::platform::EspStorage>,
+    context: &AppContext<EspPlatform, EspStorage>,
 ) {
     let mut delay = crate::esp::radio_delay();
     publish_battery_sample_with_delay(battery, context, &mut delay).await;
@@ -1452,8 +1440,8 @@ pub async fn publish_battery_sample(
 
 async fn publish_battery_sample_with_delay(
     battery: &mut BatteryMonitor,
-    context: &mcrs_repeater::app::AppContext<mcrs_repeater::platform::EspStorage>,
-    delay: &mut mcrs_repeater::platform::RadioDelay,
+    context: &AppContext<EspPlatform, EspStorage>,
+    delay: &mut RadioDelay,
 ) {
     let Some(sample) = battery.sample(delay).await else {
         context.set_battery_millivolts(None);
@@ -1462,10 +1450,10 @@ async fn publish_battery_sample_with_delay(
     };
 
     let percent = battery_level_percent(sample.millivolts);
-    mcrs_repeater::platform::log_fmt(format_args!(
+    info!(
         "Battery: adc={}mV battery={}mV {}%",
         sample.adc_millivolts, sample.millivolts, percent
-    ));
+    );
     context.set_battery_millivolts(Some(sample.millivolts));
     context.set_battery_level_percent(Some(percent));
 }
@@ -1484,26 +1472,21 @@ enum BatterySampleError {
 impl BatterySampleError {
     fn log(self) {
         match self {
-            Self::AdcRead => {
-                mcrs_repeater::platform::log_fmt(format_args!("Battery: ADC read failed"))
-            }
-            Self::RawZero => {
-                mcrs_repeater::platform::log_fmt(format_args!("Battery: ADC raw sample is zero"))
-            }
-            Self::Arithmetic => {
-                mcrs_repeater::platform::log_fmt(format_args!("Battery: sample conversion failed"))
-            }
+            Self::AdcRead => error!("Battery: ADC read failed"),
+            Self::RawZero => warn!("Battery: ADC raw sample is zero"),
+            Self::Arithmetic => error!("Battery: sample conversion failed"),
         }
     }
 }
 
-async fn radio_task<FRONTEND, S>(
+async fn radio_task<FRONTEND, P, S>(
     radio: RadioResources<FRONTEND>,
-    context: &mcrs_repeater::app::AppContext<S>,
+    context: &AppContext<P, S>,
 ) -> !
 where
     FRONTEND: RadioFrontend,
-    S: mcrs_repeater::platform::storage::Storage,
+    P: Platform,
+    S: Storage,
 {
     let RadioResources {
         spi,
@@ -1517,7 +1500,7 @@ where
     let spi = mcrs_repeater::modules::spi_device::BlockingExclusiveSpiDevice::new(
         spi,
         cs,
-        mcrs_repeater::platform::spi_delay(),
+        crate::esp::spi_delay(),
     );
     let receive_config = context
         .with_config(|config| config.radio().receive_config())
@@ -1535,13 +1518,13 @@ where
     .await
     {
         Ok(receiver) => receiver,
-        Err(_) => {
-            mcrs_repeater::platform::log_radio_init_failed();
-            mcrs_repeater::platform::idle_loop();
+        Err(e) => {
+            error!("failed to initialize sx1262: {:?}", e);
+            crate::esp::idle_loop()
         }
     };
 
-    mcrs_repeater::platform::log_radio_initialized();
+    debug!("radio initialized");
     let mut app_delay = crate::esp::radio_delay();
     let mut receiver = BoardRadio { receiver, frontend };
     mcrs_repeater::app::radio_loop(&mut receiver, context, &mut app_delay).await;
@@ -1578,10 +1561,10 @@ where
     }
 }
 
-async fn cli_task(
-    serial: &mut Option<CliSerial>,
+async fn cli_task<S: CliSerial>(
+    serial: &mut Option<S>,
     cli: &mut mcrs_repeater::app::cli::Cli,
-    context: &mcrs_repeater::app::AppContext<mcrs_repeater::platform::EspStorage>,
+    context: &AppContext<EspPlatform, EspStorage>,
 ) -> ! {
     loop {
         let Some(serial) = serial else {
@@ -1590,10 +1573,13 @@ async fn cli_task(
         };
 
         let mut byte = [0u8];
-        #[cfg(feature = "board-heltec-v4")]
-        let read = embedded_io_async_06::Read::read(serial, &mut byte).await;
-        #[cfg(not(feature = "board-heltec-v4"))]
-        let read = serial.read_async(&mut byte).await;
+
+        let read = serial.read(&mut byte).await;
+
+        // #[cfg(feature = "board-heltec-v4")]
+        // let read = embedded_io_async_06::Read::read(serial, &mut byte).await;
+        // #[cfg(not(feature = "board-heltec-v4"))]
+        // let read = serial.read_async(&mut byte).await;
         match read {
             Ok(count) if count > 0 => {
                 let echo = cli.echo_for_byte(byte[0]);
@@ -1614,10 +1600,7 @@ async fn cli_task(
 }
 
 impl BatteryMonitor {
-    async fn sample(
-        &mut self,
-        delay: &mut mcrs_repeater::platform::RadioDelay,
-    ) -> Option<BatterySample> {
+    async fn sample(&mut self, delay: &mut RadioDelay) -> Option<BatterySample> {
         self.ctrl.set_level(self.ctrl_active_level);
         delay.delay_ms(BATTERY_STABILIZE_MS).await;
 
@@ -1698,27 +1681,26 @@ pub fn opposite_level(level: Level) -> Level {
     }
 }
 
-pub async fn log_effective_config<S>(context: &mcrs_repeater::app::AppContext<S>)
-where
-    S: mcrs_repeater::platform::storage::Storage,
-{
+pub async fn log_effective_config<P: Platform, S: Storage>(
+    context: &mcrs_repeater::app::AppContext<P, S>,
+) {
     let mut output = alloc::string::String::new();
     context
         .with_config(|config| config.write_effective_config(&mut output))
         .await;
-    mcrs_repeater::platform::log_fmt(format_args!("Effective config:"));
+    info!("Effective config:");
     for line in output.lines() {
-        mcrs_repeater::platform::log_fmt(format_args!("{}", line));
+        info!("{}", line);
     }
 }
 
 pub fn log_memory_profile(memory: mcrs_repeater::memory::MemoryProfile) {
-    mcrs_repeater::platform::log_fmt(format_args!(
+    info!(
         "Memory profile: heap={} inbound_queue={} outbound_queue={} neighbours={} seen_packets={}",
         memory.heap_size,
         memory.inbound_queue_len,
         memory.outbound_queue_len,
         memory.max_neighbours,
         memory.seen_packet_cache_len
-    ));
+    );
 }
