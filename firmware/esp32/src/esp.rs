@@ -6,6 +6,7 @@ use core::{
 
 use alloc::vec;
 use critical_section::Mutex;
+use defmt::{Debug2Format, error, info, warn};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use embedded_hal::delay::DelayNs as BlockingDelayNs;
 use embedded_hal_async::delay::DelayNs;
@@ -91,7 +92,7 @@ pub fn init_storage(layout: mcrs_repeater::platform::storage::Layout) -> EspStor
                     ) {
                         Ok(storage) => Some(storage),
                         Err(error) => {
-                            log_fmt(format_args!("LittleFS initialization failed: {:?}", error));
+                            error!("LittleFS initialization failed: {}", Debug2Format(&error));
                             None
                         }
                     }
@@ -100,19 +101,19 @@ pub fn init_storage(layout: mcrs_repeater::platform::storage::Layout) -> EspStor
 
     match inner {
         Some(storage) => {
-            log_fmt(format_args!(
+            info!(
                 "LittleFS ready: partition={} max_file_size={}",
                 layout.partition_label, layout.max_file_size
-            ));
+            );
             EspStorage {
                 inner: Some(storage),
             }
         }
         None => {
-            log_fmt(format_args!(
+            warn!(
                 "Storage unavailable: partition={} partition_size={} max_file_size={}",
                 layout.partition_label, layout.partition_size, layout.max_file_size
-            ));
+            );
             EspStorage { inner: None }
         }
     }
@@ -156,12 +157,12 @@ pub fn begin_ota_update() -> Result<OtaUpdate, OtaError> {
         .next_partition()
         .map_err(|_| OtaError::NotAvailable)?;
     let (offset, capacity) = find_app_partition(slot).ok_or(OtaError::NotAvailable)?;
-    log_fmt(format_args!(
+    info!(
         "OTA: writing {} at offset=0x{:x} size={}",
         app_partition_name(slot),
         offset,
         capacity
-    ));
+    );
     Ok(OtaUpdate {
         slot,
         offset,
@@ -193,17 +194,17 @@ pub fn finish_ota_update(mut update: OtaUpdate) -> Result<(), OtaError> {
         .selected_partition()
         .map_err(|_| OtaError::Storage)?;
     if selected != update.slot {
-        log_fmt(format_args!(
+        error!(
             "OTA: activation readback mismatch: wanted={} selected={}",
             app_partition_name(update.slot),
             app_partition_name(selected)
-        ));
+        );
         return Err(OtaError::Storage);
     }
-    log_fmt(format_args!(
+    info!(
         "OTA: activated {} and verified selection, reboot to apply",
         app_partition_name(selected)
-    ));
+    );
     Ok(())
 }
 
@@ -848,76 +849,4 @@ fn init_heap() {
 fn log_starting() {
     println!("MCRS firmware {} starting on ESP", VERSION);
     esp_rom_sys::rom::ets_delay_us(10_000);
-}
-
-fn log_fmt(args: fmt::Arguments<'_>) {
-    println!("{}", args);
-}
-
-fn log_hex_line(label: &str, bytes: &[u8], max_len: usize) {
-    print!("{}", label);
-    for byte in bytes.iter().take(max_len) {
-        print!(" {:02x}", byte);
-    }
-    if bytes.len() > max_len {
-        print!(" ...");
-    }
-    println!();
-}
-
-fn log_i8_line(label: &str, values: &[i8], max_len: usize) {
-    print!("{}", label);
-    for value in values.iter().take(max_len) {
-        print!(" {}", value);
-    }
-    if values.len() > max_len {
-        print!(" ...");
-    }
-    println!();
-}
-
-fn log_radio_spi_config_failed() {
-    println!("Failed to configure SX1262 SPI bus");
-}
-
-fn log_display_i2c_config_failed() {
-    println!("Failed to configure OLED I2C bus");
-}
-
-#[cfg(not(feature = "board-heltec-v4"))]
-fn log_cli_uart_config_failed() {
-    println!("Failed to configure CLI UART");
-}
-
-fn log_display_init_failed() {
-    println!("Failed to initialize OLED display");
-}
-
-fn log_display_write_failed() {
-    println!("Failed to write OLED display");
-}
-
-fn log_radio_initialized() {
-    println!("SX1262 initialized");
-}
-
-fn log_radio_init_failed() {
-    println!("Failed to initialize SX1262");
-}
-
-fn log_radio_packet_received(len: usize, rssi: i16, snr_quarters: i16, _payload: &[u8]) {
-    println!(
-        "SX1262 received packet: {} bytes, RSSI {}, SNR {}",
-        len,
-        rssi,
-        SnrDb(snr_quarters)
-    );
-}
-
-fn log_radio_receive_failed() {
-    println!("SX1262 receive failed");
-}
-
-fn log_radio_receive_error(stage: &str, error: &str) {
-    println!("SX1262 receive {} error: {}", stage, error);
 }
