@@ -1,5 +1,5 @@
 [workspace]
-members = ["common", "heltec_v3", "heltec_v4"]
+members = ["common", "heltec_v3", "heltec_v4", "heltec_wsl3"]
 resolver = "3"
 
 # The Wi-Fi driver requires optimization even in development builds.

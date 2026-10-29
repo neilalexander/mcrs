@@ -1830,6 +1830,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "mcrs-heltec_wsl3"
+version = "0.1.0"
+dependencies = [
+ "defmt 1.2.0",
+ "embassy-executor",
+ "embassy-net",
+ "embassy-sync 0.8.0",
+ "embassy-time",
+ "esp-alloc",
+ "esp-backtrace",
+ "esp-bootloader-esp-idf",
+ "esp-hal",
+ "esp-println",
+ "esp-radio",
+ "esp-rom-sys",
+ "esp-rtos",
+ "mcrs-esp32s3",
+]
+
+[[package]]
 name = "mcrs-protocol"
 version = "0.1.0"
 dependencies = [
