@@ -39,7 +39,7 @@ use mcrs_protocol::{HashSize, Packet, Path, PayloadKind, RoutePath, RouteType, S
 
 #[cfg(feature = "mqtt")]
 use crate::app::mqtt::MqttContext;
-use crate::platform::Platform;
+use crate::platform::{Platform, Storage};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LoopDetection {
@@ -112,10 +112,10 @@ const BATTERY_MILLIVOLTS_UNKNOWN: u16 = u16::MAX;
 
 type AppMutex<T> = Mutex<CriticalSectionRawMutex, T>;
 
-pub struct AppContext<P: Platform> {
+pub struct AppContext<P, S> {
     pub platform: P,
     config: AppMutex<config::AppConfig>,
-    storage: AppMutex<P::Storage>,
+    storage: AppMutex<S>,
     memory: crate::memory::MemoryProfile,
     neighbours: AppMutex<neighbours::NeighbourTable>,
     remote_logins: AppMutex<remote::RemoteLoginTable>,
@@ -151,8 +151,8 @@ pub struct AppContext<P: Platform> {
     last_snr_quarters: AtomicI16,
 }
 
-impl<P: Platform> AppContext<P> {
-    pub(crate) fn new(platform: P, config: config::AppConfig, storage: P::Storage) -> Self {
+impl<P: Platform, S: Storage> AppContext<P, S> {
+    pub(crate) fn new(platform: P, config: config::AppConfig, storage: S) -> Self {
         let started_at_ms = platform.now_millis();
         let memory = platform.memory_profile();
 
@@ -812,9 +812,9 @@ impl SortedOutboundChannel {
         })
     }
 
-    fn retry_current<P: Platform>(
+    fn retry_current<P: Platform, S: Storage>(
         &self,
-        context: &AppContext<P>,
+        context: &AppContext<P, S>,
         mut queued: QueuedTransmit,
         retry_delay_ms: u32,
     ) -> Option<u32> {
@@ -927,9 +927,9 @@ enum RadioWait {
     OutboundDue,
 }
 
-pub(crate) async fn radio_loop<P: Platform, R, D>(
+pub(crate) async fn radio_loop<P: Platform, S: Storage, R, D>(
     radio: &mut R,
-    context: &AppContext<P>,
+    context: &AppContext<P, S>,
     delay: &mut D,
 ) -> !
 where
@@ -1001,14 +1001,14 @@ where
     }
 }
 
-pub(crate) async fn handler_loop<P: Platform>(context: &AppContext<P>) -> ! {
+pub(crate) async fn handler_loop<P: Platform, S: Storage>(context: &AppContext<P, S>) -> ! {
     loop {
         let event = context.receive_inbound().await;
         handle_rx_event(context, event).await;
     }
 }
 
-async fn handle_rx_event<P: Platform>(context: &AppContext<P>, event: RxEvent) {
+async fn handle_rx_event<P: Platform, S: Storage>(context: &AppContext<P, S>, event: RxEvent) {
     match mcrs_protocol::Packet::decode(&event.payload) {
         Ok(protocol_packet) => {
             increment_route_counter(
@@ -1062,9 +1062,9 @@ async fn handle_rx_event<P: Platform>(context: &AppContext<P>, event: RxEvent) {
     }
 }
 
-async fn transmit_eligible_outbound<P: Platform, R, D>(
+async fn transmit_eligible_outbound<P: Platform, S: Storage, R, D>(
     radio: &mut R,
-    context: &AppContext<P>,
+    context: &AppContext<P, S>,
     delay: &mut D,
     airtime_budget: &mut AirtimeBudget,
 ) where
@@ -1189,9 +1189,9 @@ async fn transmit_eligible_outbound<P: Platform, R, D>(
     }
 }
 
-async fn wait_for_read_or_eligible_outbound<P: Platform, R, D>(
+async fn wait_for_read_or_eligible_outbound<P: Platform, S: Storage, R, D>(
     radio: &mut R,
-    context: &AppContext<P>,
+    context: &AppContext<P, S>,
     receive_buffer: &mut [u8],
     delay: &mut D,
     airtime_budget: &mut AirtimeBudget,
@@ -1254,8 +1254,8 @@ where
     .await
 }
 
-async fn apply_repeater_rules<P: Platform>(
-    context: &AppContext<P>,
+async fn apply_repeater_rules<P: Platform, S: Storage>(
+    context: &AppContext<P, S>,
     packet: Packet,
     snr_quarters: i16,
     node_hash: &[u8],
@@ -1274,8 +1274,8 @@ async fn apply_repeater_rules<P: Platform>(
     }
 }
 
-async fn queue_repeater_packet<P: Platform>(
-    context: &AppContext<P>,
+async fn queue_repeater_packet<P: Platform, S: Storage>(
+    context: &AppContext<P, S>,
     packet: Packet,
     signature: [u8; 8],
     node_hash: &[u8],
@@ -1325,8 +1325,8 @@ async fn queue_repeater_packet<P: Platform>(
     );
 }
 
-async fn prepare_forward<P: Platform>(
-    context: &AppContext<P>,
+async fn prepare_forward<P: Platform, S: Storage>(
+    context: &AppContext<P, S>,
     packet: Packet,
     snr_quarters: i16,
     node_hash: &[u8],
@@ -1351,8 +1351,8 @@ async fn prepare_forward<P: Platform>(
     }
 }
 
-async fn prepare_flood_forward<P: Platform>(
-    context: &AppContext<P>,
+async fn prepare_flood_forward<P: Platform, S: Storage>(
+    context: &AppContext<P, S>,
     mut packet: Packet,
     node_hash: &[u8],
 ) -> ForwardDecision {

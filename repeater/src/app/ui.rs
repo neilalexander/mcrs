@@ -7,29 +7,28 @@ use core::{
     task::Poll,
 };
 
-use defmt::{error, info};
+use defmt::{debug, error, info};
 use embedded_hal_async::{delay::DelayNs, digital::Wait};
 
 use super::AppContext;
-use crate::platform::{DisplayStatus, Platform, StatusDisplay};
+use crate::platform::{DisplayStatus, Platform, StatusDisplay, Storage};
 
 const DISPLAY_AWAKE_MS: u32 = 5_000;
 const ADVERT_HOLD_MS: u32 = 2_000;
 
-pub(crate) async fn run<P: Platform>(
-    display: Option<P::Display>,
-    button: Option<P::Button>,
-    context: &AppContext<P>,
-) -> ! {
+pub(crate) async fn run<P, S, D, B>(mut display: D, button: B, context: &AppContext<P, S>) -> !
+where
+    P: Platform,
+    S: Storage,
+    D: StatusDisplay,
+    B: Wait,
+{
     let mut button = Button {
         input: button,
         delay: context.platform.delay(),
     };
     let mut delay = context.platform.delay();
 
-    let Some(mut display) = display else {
-        handle_button(&mut button, context).await
-    };
     if display.init(&mut delay).await.is_err() {
         error!("display init failed");
         handle_button(&mut button, context).await
@@ -54,7 +53,7 @@ pub(crate) async fn run<P: Platform>(
                     if show_status(&mut display, context, None).await.is_err() {
                         error!("display status error after button press");
                     }
-                    info!("Display wake extended");
+                    debug!("Display wake extended");
                     let action = button.release_or_hold().await;
                     show_advert_message_if_sent(&mut display, context, action).await;
                 }
@@ -85,7 +84,7 @@ pub(crate) async fn run<P: Platform>(
             };
 
             if wake_result.is_ok() && show_status(&mut display, context, None).await.is_ok() {
-                info!("Display woken by button");
+                debug!("Display woken by button");
                 awake = true;
                 show_advert_message_if_sent(&mut display, context, action).await;
             } else {
@@ -96,10 +95,13 @@ pub(crate) async fn run<P: Platform>(
 }
 
 /// Without a working display, the button only sends adverts.
-async fn handle_button<P: Platform>(
-    button: &mut Button<P::Button, P::Delay>,
-    context: &AppContext<P>,
-) -> ! {
+async fn handle_button<P, S, B, D>(button: &mut Button<B, D>, context: &AppContext<P, S>) -> !
+where
+    P: Platform,
+    S: Storage,
+    B: Wait,
+    D: DelayNs,
+{
     loop {
         if button.action().await == ButtonAction::LongHold {
             queue_advert(context).await;
@@ -118,29 +120,20 @@ enum ButtonAction {
     LongHold,
 }
 
-/// The user button, if there is one, with a delay for timing holds.
+/// The user button, with a delay for timing holds.
 struct Button<B, D> {
-    input: Option<B>,
+    input: B,
     delay: D,
 }
 
 impl<B: Wait, D: DelayNs> Button<B, D> {
-    /// Waits for a press, which never comes without a button.
     async fn press(&mut self) {
-        match &mut self.input {
-            Some(input) => {
-                let _ = input.wait_for_falling_edge().await;
-            }
-            None => core::future::pending().await,
-        }
+        let _ = self.input.wait_for_falling_edge().await;
     }
 
     async fn release_or_hold(&mut self) -> ButtonAction {
-        let Some(input) = &mut self.input else {
-            return core::future::pending().await;
-        };
         let mut hold = pin!(self.delay.delay_ms(ADVERT_HOLD_MS));
-        let mut release = pin!(input.wait_for_rising_edge());
+        let mut release = pin!(self.input.wait_for_rising_edge());
 
         poll_fn(|cx| {
             if release.as_mut().poll(cx).is_ready() {
@@ -183,7 +176,7 @@ async fn wait_for_timeout_or_press<B: Wait, D: DelayNs>(
     .await
 }
 
-async fn queue_advert<P: Platform>(context: &AppContext<P>) -> bool {
+async fn queue_advert<P: Platform, S: Storage>(context: &AppContext<P, S>) -> bool {
     let now = context.platform.now_seconds();
     let packet = context
         .with_config(|config| super::discovery::zero_hop_advert(config, now))
@@ -214,11 +207,15 @@ async fn queue_advert<P: Platform>(context: &AppContext<P>) -> bool {
     }
 }
 
-async fn show_advert_message_if_sent<P: Platform>(
-    display: &mut P::Display,
-    context: &AppContext<P>,
+async fn show_advert_message_if_sent<P, S, D>(
+    display: &mut D,
+    context: &AppContext<P, S>,
     action: ButtonAction,
-) {
+) where
+    P: Platform,
+    S: Storage,
+    D: StatusDisplay,
+{
     if action != ButtonAction::LongHold {
         return;
     }
@@ -235,11 +232,16 @@ async fn show_advert_message_if_sent<P: Platform>(
     }
 }
 
-async fn show_status<P: Platform>(
-    display: &mut P::Display,
-    context: &AppContext<P>,
+async fn show_status<P, S, D>(
+    display: &mut D,
+    context: &AppContext<P, S>,
     message: Option<&str>,
-) -> Result<(), ()> {
+) -> Result<(), ()>
+where
+    P: Platform,
+    S: Storage,
+    D: StatusDisplay,
+{
     let status = context.status();
     let node_name = context
         .with_config(|config| String::from(config.node_name()))

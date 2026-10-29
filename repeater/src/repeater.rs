@@ -1,52 +1,90 @@
-//! Starts the repeater on a [`Platform`] and runs its tasks.
+//! Starts the repeater on a board's devices and runs its tasks.
+use crate::{
+    app::{self, AppContext, battery, cli, config::AppConfig, periodic, ui},
+    memory::MemoryProfile,
+    platform::{Battery, Platform, Radio, RadioHardware, StatusDisplay, Storage},
+};
 use alloc::string::String;
 use core::{
     future::{Future, poll_fn},
     pin::pin,
     task::Poll,
 };
-
 use defmt::{error, info};
+use embedded_hal_async::digital::Wait;
+use embedded_io_async::{Read, Write};
 
-use crate::{
-    app::{self, AppContext, battery, cli, config::AppConfig, periodic, ui},
-    memory::MemoryProfile,
-    platform::Platform,
-};
-
-/// The repeater for one board.
-pub struct Repeater<P> {
-    platform: P,
+/// The repeater for one board, with the devices it drives.
+pub struct Repeater<PLATFORM, STORAGE, RADIO, CONSOLE, DISPLAY, BUTTON, BATTERY> {
+    platform: PLATFORM,
+    storage: STORAGE,
+    radio: RADIO,
+    console: CONSOLE,
+    display: DISPLAY,
+    button: BUTTON,
+    battery: BATTERY,
 }
 
-impl<P: Platform> Repeater<P> {
-    pub fn new(platform: P) -> Self {
-        Self { platform }
+impl<PLATFORM, STORAGE, RADIO, CONSOLE, DISPLAY, BUTTON, BATTERY>
+    Repeater<PLATFORM, STORAGE, RADIO, CONSOLE, DISPLAY, BUTTON, BATTERY>
+where
+    PLATFORM: Platform,
+    STORAGE: Storage,
+    RADIO: RadioHardware,
+    CONSOLE: Read + Write,
+    DISPLAY: StatusDisplay,
+    BUTTON: Wait,
+    BATTERY: Battery,
+{
+    /// `console` serves the local CLI, and a press of `button` pulls its input
+    /// low. For a device the board doesn't have, pass the matching `No*` type
+    /// from [`crate::platform`].
+    pub fn new(
+        platform: PLATFORM,
+        storage: STORAGE,
+        radio: RADIO,
+        console: CONSOLE,
+        display: DISPLAY,
+        button: BUTTON,
+        battery: BATTERY,
+    ) -> Self {
+        Self {
+            platform,
+            storage,
+            radio,
+            console,
+            display,
+            button,
+            battery,
+        }
     }
 
-    /// Loads the configuration, starts the board's devices and runs the
-    /// repeater. It only stops when the board reboots.
+    /// Loads the configuration, starts the radio and runs the repeater. It
+    /// only stops when the board reboots.
     pub async fn run(self) -> ! {
-        let mut platform = self.platform;
+        let Self {
+            platform,
+            mut storage,
+            radio,
+            console,
+            display,
+            button,
+            battery,
+        } = self;
         log_memory_profile(platform.memory_profile());
 
-        let mut storage = platform.take_storage();
         let defaults = AppConfig::generated_defaults(platform.identity_seed());
         let config = AppConfig::load_or_create(&mut storage, defaults);
         log_effective_config(&config);
 
         // Without a radio the CLI keeps running, so the settings can be fixed.
-        let radio = match platform.start_radio(config.radio()).await {
+        let radio = match radio.start(config.radio()).await {
             Ok(radio) => Some(radio),
             Err(()) => {
                 error!("Radio: start failed");
                 None
             }
         };
-        let console = platform.take_console();
-        let display = platform.take_display();
-        let button = platform.take_button();
-        let battery = platform.take_battery();
 
         let context = AppContext::new(platform, config, storage);
         let mut ui_future = pin!(ui::run(display, button, &context));
@@ -91,7 +129,12 @@ impl<P: Platform> Repeater<P> {
     }
 }
 
-async fn radio_task<P: Platform>(radio: Option<P::Radio>, context: &AppContext<P>) -> ! {
+async fn radio_task<P, S, R>(radio: Option<R>, context: &AppContext<P, S>) -> !
+where
+    P: Platform,
+    S: Storage,
+    R: Radio,
+{
     let Some(mut radio) = radio else {
         loop {
             core::future::pending::<()>().await;

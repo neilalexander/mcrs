@@ -20,7 +20,11 @@ use esp_hal::{
 };
 use esp_radio::wifi::{AuthenticationMethod, Config, ap::AccessPointConfig, sta::StationConfig};
 #[cfg(feature = "mqtt")]
-use mcrs_repeater::{VERSION, app::AppContext, platform::Platform};
+use mcrs_repeater::{
+    VERSION,
+    app::AppContext,
+    platform::{Platform, Storage},
+};
 use mcrs_repeater::{
     memory::MemoryProfile,
     platform::{Battery, Radio, ReceivedPacket},
@@ -367,9 +371,9 @@ pub fn generate_identity_seed(rng: RNG<'_>, adc: ADC1<'_>) -> [u8; 32] {
 // }
 
 #[cfg(feature = "mqtt")]
-async fn mqtt_loop<P: Platform>(
+async fn mqtt_loop<P: Platform, S: Storage>(
     stack: embassy_net::Stack<'_>,
-    context: &AppContext<P>,
+    context: &AppContext<P, S>,
     index: usize,
 ) -> ! {
     use mcrs_repeater::app::mqtt::ConnectionState;
@@ -402,9 +406,9 @@ async fn mqtt_loop<P: Platform>(
 }
 
 #[cfg(feature = "mqtt")]
-async fn mqtt_session<P: Platform>(
+async fn mqtt_session<P: Platform, S: Storage>(
     stack: embassy_net::Stack<'_>,
-    context: &AppContext<P>,
+    context: &AppContext<P, S>,
     index: usize,
     generation: u32,
     config: &mcrs_repeater::app::config::MqttConfig,
@@ -513,8 +517,8 @@ async fn mqtt_session<P: Platform>(
 }
 
 #[cfg(feature = "mqtt")]
-async fn mqtt_status_json<P: Platform>(
-    context: &AppContext<P>,
+async fn mqtt_status_json<P: Platform, S: Storage>(
+    context: &AppContext<P, S>,
     public_key: &[u8; 32],
     online: bool,
 ) -> String {
@@ -538,8 +542,13 @@ async fn mqtt_status_json<P: Platform>(
 }
 
 #[cfg(feature = "mqtt")]
-async fn mqtt_connected<P: Platform, R: embedded_io_async::Read, W: embedded_io_async::Write>(
-    context: &AppContext<P>,
+async fn mqtt_connected<
+    P: Platform,
+    S: Storage,
+    R: embedded_io_async::Read,
+    W: embedded_io_async::Write,
+>(
+    context: &AppContext<P, S>,
     index: usize,
     generation: u32,
     config: &mcrs_repeater::app::config::MqttConfig,
@@ -721,8 +730,8 @@ async fn mqtt_wait_ack<W: embedded_io_async::Write>(
 // Dropping a cancelled or timed-out operation may leave a partial MQTT frame.
 // Every error from this helper must therefore discard the connection.
 #[cfg(feature = "mqtt")]
-async fn mqtt_io<P: Platform, T, E>(
-    context: &AppContext<P>,
+async fn mqtt_io<P: Platform, S: Storage, T, E>(
+    context: &AppContext<P, S>,
     index: usize,
     generation: u32,
     operation: impl Future<Output = Result<T, E>>,
@@ -746,8 +755,8 @@ async fn mqtt_io<P: Platform, T, E>(
 }
 
 #[cfg(feature = "mqtt")]
-async fn wait_mqtt_retry_or_restart<P: Platform>(
-    context: &AppContext<P>,
+async fn wait_mqtt_retry_or_restart<P: Platform, S: Storage>(
+    context: &AppContext<P, S>,
     index: usize,
     generation: u32,
     seconds: u64,

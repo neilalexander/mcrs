@@ -8,10 +8,10 @@ use esp_hal::{
     usb_serial_jtag::UsbSerialJtag,
 };
 use mcrs_esp32s3::{
-    EspPlatform, Repeater,
+    Repeater,
     board::heltec::{RadioFrontend, RadioOutput},
     esp::radio_delay,
-    platform::BoardConfig,
+    platform::{BoardConfig, Devices},
 };
 
 const MODEL: &str = "Heltec V4";
@@ -32,14 +32,18 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     )
     .await;
 
-    let platform = EspPlatform::new(
-        peripherals,
-        MODEL,
-        BoardConfig::heltec_v4(),
-        Some(console),
-        frontend,
-    );
-    Repeater::new(platform).run().await
+    let devices = Devices::new(peripherals, MODEL, BoardConfig::heltec_v4(), frontend);
+    Repeater::new(
+        devices.platform,
+        devices.storage,
+        devices.radio,
+        console,
+        devices.display,
+        devices.button,
+        devices.battery,
+    )
+    .run()
+    .await
 }
 
 struct HeltecV4Frontend {

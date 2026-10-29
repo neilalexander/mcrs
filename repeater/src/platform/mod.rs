@@ -1,13 +1,13 @@
 //! The boundary between the repeater and the hardware it runs on.
 //!
-//! A board crate implements [`Platform`] and passes it to [`crate::Repeater`].
-//! `Platform` covers the board as a whole: clocks, randomness, rebooting, and
-//! handing each device to the repeater as it starts. Every device the repeater
-//! drives has its own trait in this module, and `Platform` names the board's
-//! implementation of each one as an associated type. Devices that a standard
+//! A board crate implements [`Platform`] for the services the whole board
+//! provides: clocks, randomness, delays and rebooting. It passes that to
+//! [`crate::Repeater::new`] along with each device the repeater drives, and
+//! every device has its own trait in this module. Devices that a standard
 //! embedded trait already describes use that trait instead: the console is an
-//! `embedded-io-async` stream, and the button and delays come from
-//! `embedded-hal-async`.
+//! `embedded-io-async` stream and the button an `embedded-hal-async` input. A
+//! board without a console, status screen, button or battery monitor passes
+//! [`NoConsole`], [`NoDisplay`], [`NoButton`] or [`NoBattery`].
 
 pub mod storage;
 
@@ -18,24 +18,9 @@ use embedded_io_async::{Read, Write};
 
 use crate::{app::config::RadioConfig, memory::MemoryProfile};
 
-/// A board the repeater runs on.
-///
-/// While it starts, [`crate::Repeater`] calls each `&mut self` method once.
-/// After that it shares the platform between its tasks, which only use the
-/// `&self` methods.
+/// The services the whole board provides. The repeater shares the platform
+/// between its tasks.
 pub trait Platform {
-    /// Where the configuration is kept.
-    type Storage: Storage;
-    /// The LoRa radio.
-    type Radio: Radio;
-    /// The serial port for the local CLI.
-    type Console: Read + Write;
-    /// The status screen, or [`Absent`].
-    type Display: StatusDisplay;
-    /// The user button, or [`Absent`]. A press pulls the input low.
-    type Button: Wait;
-    /// The battery monitor, or [`Absent`].
-    type Battery: Battery;
     /// Delays for the repeater's timers.
     type Delay: DelayNs;
 
@@ -46,29 +31,7 @@ pub trait Platform {
     fn memory_profile(&self) -> MemoryProfile;
 
     /// Random bytes for a new identity, used when storage holds none.
-    fn identity_seed(&mut self) -> [u8; 32];
-
-    fn take_storage(&mut self) -> Self::Storage;
-
-    /// Starts the radio with the stored radio settings.
-    fn start_radio(
-        &mut self,
-        config: RadioConfig,
-    ) -> impl Future<Output = Result<Self::Radio, ()>>;
-
-    fn take_console(&mut self) -> Option<Self::Console>;
-
-    fn take_display(&mut self) -> Option<Self::Display> {
-        None
-    }
-
-    fn take_button(&mut self) -> Option<Self::Button> {
-        None
-    }
-
-    fn take_battery(&mut self) -> Option<Self::Battery> {
-        None
-    }
+    fn identity_seed(&self) -> [u8; 32];
 
     /// A new delay. Each task that waits gets its own.
     fn delay(&self) -> Self::Delay;
@@ -96,6 +59,14 @@ pub trait Storage {
     /// Replaces the file `key`. A power cut leaves either the old or the new
     /// contents.
     fn write_atomic(&mut self, key: &str, data: &[u8]) -> Result<(), storage::Error>;
+}
+
+/// Radio hardware that the repeater starts once it has loaded the radio
+/// settings.
+pub trait RadioHardware {
+    type Radio: Radio;
+
+    fn start(self, config: RadioConfig) -> impl Future<Output = Result<Self::Radio, ()>>;
 }
 
 /// A packet that [`Radio::wait_for_read`] copied into the caller's buffer.
@@ -154,56 +125,87 @@ pub trait Battery {
     fn millivolts(&mut self) -> impl Future<Output = Option<u16>>;
 }
 
-/// Stands in for a device the board doesn't have. It has no values, so the
-/// board's `take_*` method for that device returns `None`.
-pub enum Absent {}
+/// The console for a board without one. It never receives input and discards
+/// output.
+pub struct NoConsole;
 
-impl StatusDisplay for Absent {
-    async fn init<D: DelayNs>(&mut self, _delay: &mut D) -> Result<(), ()> {
-        match *self {}
-    }
-
-    fn show(&mut self, _status: &DisplayStatus<'_>) -> Result<(), ()> {
-        match *self {}
-    }
-
-    fn sleep(&mut self) -> Result<(), ()> {
-        match *self {}
-    }
-
-    async fn wake<D: DelayNs>(&mut self, _delay: &mut D) -> Result<(), ()> {
-        match *self {}
-    }
-}
-
-impl embedded_hal::digital::ErrorType for Absent {
+impl embedded_io_async::ErrorType for NoConsole {
     type Error = Infallible;
 }
 
-impl Wait for Absent {
-    async fn wait_for_high(&mut self) -> Result<(), Self::Error> {
-        match *self {}
-    }
-
-    async fn wait_for_low(&mut self) -> Result<(), Self::Error> {
-        match *self {}
-    }
-
-    async fn wait_for_rising_edge(&mut self) -> Result<(), Self::Error> {
-        match *self {}
-    }
-
-    async fn wait_for_falling_edge(&mut self) -> Result<(), Self::Error> {
-        match *self {}
-    }
-
-    async fn wait_for_any_edge(&mut self) -> Result<(), Self::Error> {
-        match *self {}
+impl Read for NoConsole {
+    async fn read(&mut self, _buf: &mut [u8]) -> Result<usize, Self::Error> {
+        core::future::pending().await
     }
 }
 
-impl Battery for Absent {
+impl Write for NoConsole {
+    async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        Ok(buf.len())
+    }
+
+    async fn flush(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+/// The status screen for a board without one. Every operation succeeds and
+/// shows nothing.
+pub struct NoDisplay;
+
+impl StatusDisplay for NoDisplay {
+    async fn init<D: DelayNs>(&mut self, _delay: &mut D) -> Result<(), ()> {
+        Ok(())
+    }
+
+    fn show(&mut self, _status: &DisplayStatus<'_>) -> Result<(), ()> {
+        Ok(())
+    }
+
+    fn sleep(&mut self) -> Result<(), ()> {
+        Ok(())
+    }
+
+    async fn wake<D: DelayNs>(&mut self, _delay: &mut D) -> Result<(), ()> {
+        Ok(())
+    }
+}
+
+/// The user button for a board without one. Its input stays high, as if the
+/// button were never pressed.
+pub struct NoButton;
+
+impl embedded_hal::digital::ErrorType for NoButton {
+    type Error = Infallible;
+}
+
+impl Wait for NoButton {
+    async fn wait_for_high(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    async fn wait_for_low(&mut self) -> Result<(), Self::Error> {
+        core::future::pending().await
+    }
+
+    async fn wait_for_rising_edge(&mut self) -> Result<(), Self::Error> {
+        core::future::pending().await
+    }
+
+    async fn wait_for_falling_edge(&mut self) -> Result<(), Self::Error> {
+        core::future::pending().await
+    }
+
+    async fn wait_for_any_edge(&mut self) -> Result<(), Self::Error> {
+        core::future::pending().await
+    }
+}
+
+/// The battery monitor for a board without one. It never has a reading.
+pub struct NoBattery;
+
+impl Battery for NoBattery {
     async fn millivolts(&mut self) -> Option<u16> {
-        match *self {}
+        None
     }
 }

@@ -1,8 +1,14 @@
-//! The repeater platform shared by the Heltec ESP32-S3 boards. A board supplies
-//! only what differs: its console, its SX1262 configuration and its radio
-//! frontend.
+//! The repeater platform and devices shared by the Heltec ESP32-S3 boards. A
+//! board supplies only what differs: its console, its SX1262 configuration and
+//! its radio frontend.
+use crate::{
+    board::heltec::{
+        self, BatteryMonitor, BoardRadio, MEMORY_PROFILE, RadioFrontend, STORAGE_LAYOUT,
+        WifiResources,
+    },
+    esp::{self, EspStorage, RadioDelay, SpiDelay},
+};
 use defmt::{debug, error};
-use embedded_io_async::{Read, Write};
 use esp_hal::{
     Blocking,
     gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull},
@@ -28,26 +34,18 @@ use mcrs_repeater::{
         ssd1306::{self, PowerActiveLevel},
         sx1262,
     },
-    platform::Platform,
+    platform::{Platform, RadioHardware},
 };
 
 pub use mcrs_repeater::modules::sx1262::BoardConfig;
 
-use crate::{
-    board::heltec::{
-        self, BatteryMonitor, BoardRadio, MEMORY_PROFILE, RadioFrontend, STORAGE_LAYOUT,
-        WifiResources,
-    },
-    esp::{self, EspStorage, RadioDelay, SpiDelay},
-};
-
-type RadioReceiver = sx1262::Receiver<
+pub type RadioReceiver = sx1262::Receiver<
     BlockingExclusiveSpiDevice<Spi<'static, Blocking>, Output<'static>, SpiDelay>,
     Output<'static>,
     Input<'static>,
     RadioDelay,
 >;
-type OledDisplay = ssd1306::Display<I2c<'static, Blocking>, Output<'static>, Output<'static>>;
+pub type OledDisplay = ssd1306::Display<I2c<'static, Blocking>, Output<'static>, Output<'static>>;
 
 /// The peripherals that every Heltec board wires the same way.
 pub struct CommonPeripherals {
@@ -87,7 +85,7 @@ pub struct BoardPeripherals {
 }
 
 /// Initializes the chip and the scheduler, then splits the peripherals between
-/// the shared platform and the board.
+/// the shared devices and the board.
 pub fn init() -> (CommonPeripherals, BoardPeripherals) {
     let peripherals = esp::init();
     let timg0 = TimerGroup::new(peripherals.TIMG0);
@@ -128,43 +126,26 @@ pub fn init() -> (CommonPeripherals, BoardPeripherals) {
     (common, board)
 }
 
-/// A Heltec ESP32-S3 board, ready to run a [`mcrs_repeater::Repeater`].
-pub struct EspPlatform<C, F> {
-    model: &'static str,
-    identity_seed: [u8; 32],
-    storage: Option<EspStorage>,
-    radio: Option<RadioParts<F>>,
-    console: Option<C>,
-    display: Option<OledDisplay>,
-    button: Option<Input<'static>>,
-    battery: Option<BatteryMonitor>,
+/// The devices that every Heltec board wires the same way. A board passes
+/// them to [`mcrs_repeater::Repeater::new`] with its console.
+pub struct Devices<F> {
+    pub platform: EspPlatform,
+    pub storage: EspStorage,
+    pub radio: HeltecRadio<F>,
+    pub display: OledDisplay,
+    pub button: Input<'static>,
+    pub battery: BatteryMonitor,
     /// Reserved for the Wi-Fi tasks.
-    _wifi: WifiResources,
+    pub wifi: WifiResources,
 }
 
-/// The SX1262 and its frontend, until the repeater starts the radio.
-struct RadioParts<F> {
-    spi: Spi<'static, Blocking>,
-    cs: Output<'static>,
-    reset: Output<'static>,
-    dio1: Input<'static>,
-    busy: Input<'static>,
-    board_config: BoardConfig,
-    frontend: F,
-}
-
-impl<C, F> EspPlatform<C, F>
-where
-    C: Read + Write,
-    F: RadioFrontend,
-{
+impl<F: RadioFrontend> Devices<F> {
     /// Sets up the shared hardware. `model` names the board in MQTT status
     /// reports.
     pub fn new(
         peripherals: CommonPeripherals,
         model: &'static str,
         board_config: BoardConfig,
-        console: Option<C>,
         frontend: F,
     ) -> Self {
         let CommonPeripherals {
@@ -192,27 +173,19 @@ where
         let output_config = OutputConfig::default();
         let input_config = InputConfig::default();
 
-        let radio = match Spi::new(
+        let spi = match Spi::new(
             radio_spi,
             SpiConfig::default()
                 .with_frequency(Rate::from_mhz(4))
                 .with_mode(Mode::_0),
         ) {
-            Ok(spi) => Some(RadioParts {
-                spi: spi
-                    .with_sck(radio_sck)
-                    .with_mosi(radio_mosi)
-                    .with_miso(radio_miso),
-                cs: Output::new(radio_cs, Level::High, output_config),
-                reset: Output::new(radio_reset, Level::High, output_config),
-                dio1: Input::new(radio_dio1, input_config),
-                busy: Input::new(radio_busy, input_config),
-                board_config,
-                frontend,
-            }),
+            Ok(spi) => spi
+                .with_sck(radio_sck)
+                .with_mosi(radio_mosi)
+                .with_miso(radio_miso),
             Err(e) => {
                 error!("Failed to configure sx1262 SPI bus: {}", e);
-                None
+                esp::idle_loop();
             }
         };
 
@@ -225,48 +198,59 @@ where
                 let reset = Output::new(display_reset, Level::High, output_config);
                 let i2c = i2c.with_sda(display_sda).with_scl(display_scl);
 
-                Some(ssd1306::Display::new_with_power_active_level(
+                ssd1306::Display::new_with_power_active_level(
                     i2c,
                     reset,
                     power,
                     PowerActiveLevel::Low,
-                ))
+                )
             }
             Err(e) => {
                 error!("Failed to configure OLED I2C bus: {:?}", e);
-                None
+                esp::idle_loop();
             }
         };
 
-        let button = Input::new(button, InputConfig::default().with_pull(Pull::Up));
         let identity_seed = heltec::generate_identity_seed(rng, adc.reborrow());
-        let battery = BatteryMonitor::new(adc, battery_sense, battery_ctrl);
 
         Self {
-            model,
-            identity_seed,
-            storage: Some(esp::init_storage(STORAGE_LAYOUT)),
-            radio,
-            console,
+            platform: EspPlatform::new(model, identity_seed),
+            storage: esp::init_storage(STORAGE_LAYOUT),
+            radio: HeltecRadio {
+                spi,
+                cs: Output::new(radio_cs, Level::High, output_config),
+                reset: Output::new(radio_reset, Level::High, output_config),
+                dio1: Input::new(radio_dio1, input_config),
+                busy: Input::new(radio_busy, input_config),
+                board_config,
+                frontend,
+            },
             display,
-            button: Some(button),
-            battery: Some(battery),
-            _wifi: WifiResources { wifi },
+            button: Input::new(button, InputConfig::default().with_pull(Pull::Up)),
+            battery: BatteryMonitor::new(adc, battery_sense, battery_ctrl),
+            wifi: WifiResources { wifi },
         }
     }
 }
 
-impl<C, F> Platform for EspPlatform<C, F>
-where
-    C: Read + Write,
-    F: RadioFrontend,
-{
-    type Storage = EspStorage;
-    type Radio = BoardRadio<RadioReceiver, F>;
-    type Console = C;
-    type Display = OledDisplay;
-    type Button = Input<'static>;
-    type Battery = BatteryMonitor;
+/// The services every Heltec board provides.
+pub struct EspPlatform {
+    model: &'static str,
+    identity_seed: [u8; 32],
+}
+
+impl EspPlatform {
+    /// `model` names the board in MQTT status reports, and `identity_seed`
+    /// seeds the identity created on first boot.
+    pub fn new(model: &'static str, identity_seed: [u8; 32]) -> Self {
+        Self {
+            model,
+            identity_seed,
+        }
+    }
+}
+
+impl Platform for EspPlatform {
     type Delay = RadioDelay;
 
     fn model(&self) -> &'static str {
@@ -277,65 +261,8 @@ where
         MEMORY_PROFILE
     }
 
-    fn identity_seed(&mut self) -> [u8; 32] {
+    fn identity_seed(&self) -> [u8; 32] {
         self.identity_seed
-    }
-
-    fn take_storage(&mut self) -> Self::Storage {
-        self.storage.take().expect("storage is taken once")
-    }
-
-    async fn start_radio(&mut self, config: RadioConfig) -> Result<Self::Radio, ()> {
-        let Some(RadioParts {
-            spi,
-            cs,
-            reset,
-            dio1,
-            busy,
-            board_config,
-            frontend,
-        }) = self.radio.take()
-        else {
-            return Err(());
-        };
-        let spi = BlockingExclusiveSpiDevice::new(spi, cs, esp::spi_delay());
-
-        match sx1262::init_receiver(
-            spi,
-            reset,
-            dio1,
-            busy,
-            esp::radio_delay(),
-            board_config,
-            config.receive_config(),
-        )
-        .await
-        {
-            Ok(receiver) => {
-                debug!("radio initialized");
-                Ok(BoardRadio::new(receiver, frontend))
-            }
-            Err(e) => {
-                error!("failed to initialize sx1262: {:?}", e);
-                Err(())
-            }
-        }
-    }
-
-    fn take_console(&mut self) -> Option<Self::Console> {
-        self.console.take()
-    }
-
-    fn take_display(&mut self) -> Option<Self::Display> {
-        self.display.take()
-    }
-
-    fn take_button(&mut self) -> Option<Self::Button> {
-        self.button.take()
-    }
-
-    fn take_battery(&mut self) -> Option<Self::Battery> {
-        self.battery.take()
     }
 
     fn delay(&self) -> Self::Delay {
@@ -360,5 +287,54 @@ where
 
     fn reboot(&self) -> ! {
         esp::reboot()
+    }
+}
+
+/// The SX1262 and its frontend, until the repeater starts them.
+pub struct HeltecRadio<F> {
+    spi: Spi<'static, Blocking>,
+    cs: Output<'static>,
+    reset: Output<'static>,
+    dio1: Input<'static>,
+    busy: Input<'static>,
+    board_config: BoardConfig,
+    frontend: F,
+}
+
+impl<F: RadioFrontend> RadioHardware for HeltecRadio<F> {
+    type Radio = BoardRadio<RadioReceiver, F>;
+
+    async fn start(self, config: RadioConfig) -> Result<Self::Radio, ()> {
+        let Self {
+            spi,
+            cs,
+            reset,
+            dio1,
+            busy,
+            board_config,
+            frontend,
+        } = self;
+        let spi = BlockingExclusiveSpiDevice::new(spi, cs, esp::spi_delay());
+
+        match sx1262::init_receiver(
+            spi,
+            reset,
+            dio1,
+            busy,
+            esp::radio_delay(),
+            board_config,
+            config.receive_config(),
+        )
+        .await
+        {
+            Ok(receiver) => {
+                debug!("radio initialized");
+                Ok(BoardRadio::new(receiver, frontend))
+            }
+            Err(e) => {
+                error!("failed to initialize sx1262: {:?}", e);
+                Err(())
+            }
+        }
     }
 }

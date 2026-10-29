@@ -1,6 +1,6 @@
 //! Samples the battery for the status screen, telemetry and MQTT.
 use crate::app::AppContext;
-use crate::platform::{Battery, Platform};
+use crate::platform::{Battery, Platform, Storage};
 use defmt::info;
 use embedded_hal_async::delay::DelayNs;
 
@@ -8,12 +8,12 @@ const SAMPLE_INTERVAL_MS: u32 = 60_000;
 const PERCENT_MIN_MV: u16 = 3300;
 const PERCENT_MAX_MV: u16 = 4100;
 
-pub(crate) async fn run<P: Platform>(battery: Option<P::Battery>, context: &AppContext<P>) -> ! {
-    let Some(mut battery) = battery else {
-        loop {
-            core::future::pending::<()>().await;
-        }
-    };
+pub(crate) async fn run<P, S, B>(mut battery: B, context: &AppContext<P, S>) -> !
+where
+    P: Platform,
+    S: Storage,
+    B: Battery,
+{
     let mut delay = context.platform.delay();
 
     loop {

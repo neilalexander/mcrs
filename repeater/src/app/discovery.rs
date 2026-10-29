@@ -1,5 +1,5 @@
 use crate::app::{AppContext, config::AppConfig};
-use crate::platform::Platform;
+use crate::platform::{Platform, Storage};
 use alloc::{string::String, vec::Vec};
 use defmt::{error, info};
 use mcrs_protocol::{
@@ -125,9 +125,9 @@ pub fn discover_neighbours_request(tag: u32) -> Option<Vec<u8>> {
     .ok()
 }
 
-pub async fn handle_control_packet<P: Platform>(
+pub async fn handle_control_packet<P: Platform, S: Storage>(
     packet: &Packet,
-    context: &AppContext<P>,
+    context: &AppContext<P, S>,
     rssi: i16,
     snr_quarters: i16,
     now_ms: u64,
@@ -164,8 +164,8 @@ pub async fn handle_control_packet<P: Platform>(
     }
 }
 
-async fn handle_discover_request<P: Platform>(
-    context: &AppContext<P>,
+async fn handle_discover_request<P: Platform, S: Storage>(
+    context: &AppContext<P, S>,
     snr_quarters: i16,
     prefix_only: bool,
     type_filter: u8,
@@ -202,8 +202,8 @@ async fn handle_discover_request<P: Platform>(
     .ok()
 }
 
-async fn handle_discover_response<P: Platform>(
-    context: &AppContext<P>,
+async fn handle_discover_response<P: Platform, S: Storage>(
+    context: &AppContext<P, S>,
     rssi: i16,
     snr_quarters: i16,
     now_ms: u64,

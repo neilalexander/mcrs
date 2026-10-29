@@ -1,5 +1,5 @@
 use super::AppContext;
-use crate::platform::Platform;
+use crate::platform::{Platform, Storage};
 use defmt::{error, info};
 use embedded_hal_async::delay::DelayNs;
 
@@ -7,7 +7,7 @@ mod schedule;
 
 use schedule::Schedule;
 
-pub(crate) async fn run<P: Platform>(context: &AppContext<P>) -> ! {
+pub(crate) async fn run<P: Platform, S: Storage>(context: &AppContext<P, S>) -> ! {
     let mut delay = context.platform.delay();
     let (advert_interval, flood_interval) = context
         .with_config(|config| {
@@ -61,8 +61,8 @@ pub(crate) async fn run<P: Platform>(context: &AppContext<P>) -> ! {
     }
 }
 
-async fn send_advert<P: Platform>(
-    context: &AppContext<P>,
+async fn send_advert<P: Platform, S: Storage>(
+    context: &AppContext<P, S>,
     packet: Option<alloc::vec::Vec<u8>>,
     kind: &str,
 ) {
