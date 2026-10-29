@@ -1,0 +1,170 @@
+name: Build Images
+
+on:
+  push:
+    branches: [main]
+    tags: ["v[0-9]*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      REF:
+        description: "Build ref (tag, branch or commit SHA)"
+        required: false
+        default: ""
+        type: string
+      PROFILE:
+        description: "Profile (filename in profiles/ or repository-relative path)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-images-${{ github.workflow }}-${{ inputs.REF || github.ref }}-${{ inputs.PROFILE || '' }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Read by repeater/build.rs. Empty builds the default configuration.
+  MCRS_PROFILE: ${{ inputs.PROFILE || '' }}
+
+jobs:
+  esp32s3:
+    name: ${{ matrix.board.name }}${{ matrix.variant.name_suffix }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        board:
+          - id: heltec-v3
+            name: Heltec V3
+            package: mcrs-heltec_v3
+          - id: heltec-v4
+            name: Heltec V4
+            package: mcrs-heltec_v4
+        variant:
+          - id: standard
+            name_suffix: ""
+            artifact_suffix: ""
+            features: ""
+          - id: mqtt
+            name_suffix: " MQTT"
+            artifact_suffix: -mqtt
+            # The board crates have no features of their own.
+            features: "--features mcrs-esp32s3/mqtt"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.REF || '' }}
+          fetch-depth: 0
+
+      # The version the firmware reports (see repeater/build.rs).
+      - name: Determine image version
+        id: version
+        run: |
+          package=$(sed -n 's/^version = "\(.*\)"$/\1/p' repeater/Cargo.toml | head -n 1)
+          echo "version=$package+$(git rev-parse --short=8 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      # flake.lock pins esp-rs-nix to an SSH URL, but runners have no GitHub
+      # SSH key. The repository is public, so fetch it over HTTPS instead.
+      - name: Fetch flake inputs over HTTPS
+        run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+
+      # The toolchain comes from flake.lock, so only reuse build output built by it.
+      - name: Cache Cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo
+            firmware/esp32s3/target
+          key: ${{ matrix.board.id }}${{ matrix.variant.artifact_suffix }}-${{ runner.os }}-${{ hashFiles('firmware/esp32s3/flake.lock') }}-${{ hashFiles('firmware/esp32s3/Cargo.lock') }}
+          restore-keys: |
+            ${{ matrix.board.id }}${{ matrix.variant.artifact_suffix }}-${{ runner.os }}-${{ hashFiles('firmware/esp32s3/flake.lock') }}-
+
+      - name: Build firmware
+        working-directory: firmware/esp32s3
+        run: nix develop --command cargo build --release --locked -p ${{ matrix.board.package }} ${{ matrix.variant.features }}
+
+      # Uses the flash settings of the espflash runner in .cargo/config.toml.
+      - name: Build images
+        working-directory: firmware/esp32s3
+        env:
+          PACKAGE: ${{ matrix.board.package }}
+          IMAGE: ${{ matrix.board.id }}${{ matrix.variant.artifact_suffix }}-${{ steps.version.outputs.version }}
+        run: |
+          elf="target/xtensa-esp32s3-none-elf/release/$PACKAGE"
+          dist="$GITHUB_WORKSPACE/dist"
+          flash=(--chip esp32s3 --flash-size 8mb --flash-mode dio --flash-freq 40mhz)
+          mkdir -p "$dist"
+          # The application alone, for the OTA upload page.
+          nix develop --command espflash save-image "${flash[@]}" "$elf" "$dist/$IMAGE-upgrade.bin"
+          # Bootloader, partition table and application, written at 0x0 over USB.
+          nix develop --command espflash save-image "${flash[@]}" --merge --partition-table partitions.csv "$elf" "$dist/$IMAGE-merged.bin"
+
+      - name: Upload images
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.board.id }}${{ matrix.variant.artifact_suffix }}-firmware-${{ steps.version.outputs.version }}
+          path: dist/*.bin
+          if-no-files-found: error
+
+  nrf52840:
+    name: nRF52840
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.REF || '' }}
+          fetch-depth: 0
+
+      # The version the firmware reports (see repeater/build.rs).
+      - name: Determine image version
+        id: version
+        run: |
+          package=$(sed -n 's/^version = "\(.*\)"$/\1/p' repeater/Cargo.toml | head -n 1)
+          echo "version=$package+$(git rev-parse --short=8 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      # The toolchain comes from flake.lock, so only reuse build output built by it.
+      - name: Cache Cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo
+            firmware/nrf52840/target
+          key: nrf52840-${{ runner.os }}-${{ hashFiles('firmware/nrf52840/flake.lock') }}-${{ hashFiles('firmware/nrf52840/Cargo.lock') }}
+          restore-keys: |
+            nrf52840-${{ runner.os }}-${{ hashFiles('firmware/nrf52840/flake.lock') }}-
+
+      - name: Build firmware
+        working-directory: firmware/nrf52840
+        run: nix develop --command cargo build --release --locked
+
+      - name: Collect image
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p dist
+          cp firmware/nrf52840/target/thumbv7em-none-eabi/release/mcrs-nrf "dist/nrf52840-$VERSION.elf"
+
+      - name: Upload image
+        uses: actions/upload-artifact@v7
+        with:
+          name: nrf52840-firmware-${{ steps.version.outputs.version }}
+          path: dist/*.elf
+          if-no-files-found: error
