@@ -500,7 +500,7 @@ mod tests {
 
     #[test]
     fn device_credentials_match_meshcore_format_and_verify_for_both_key_formats() {
-        use crate::crypto_tests::identity::{Identity, PrivateKey};
+        use crate::app::identity::{Identity, PrivateKey};
         use ed25519_dalek::{Signature, VerifyingKey};
         let expanded = PrivateKey::from_hex("28ad39fefd7fa3e200a9c626eef599e61a2d055c48a8288a4e7e4c4bca3928789c7d6db3506d65dbac7c052aaee4857425210c9bc54030c826e54055983452a5").unwrap();
         let mut previous = None;
