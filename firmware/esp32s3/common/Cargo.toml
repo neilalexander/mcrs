@@ -68,10 +68,10 @@ esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32s3"] }
 esp-backtrace = { version = "0.20.0",features = ["esp32s3", "defmt",  "custom-halt", "panic-handler"] }
 esp-println = { version = "0.18.0",  features = ["esp32s3", "defmt-espflash", ] }
 esp-rom-sys = { version = "0.1.5" }
-esp-radio = { version = "0.18.0", features = ["esp32s3", "wifi", "esp-alloc", "unstable", ] }
+esp-radio = { version = "0.18.0", features = ["esp32s3", "wifi", "esp-alloc", "unstable", "defmt"] }
 
 embassy-executor = { version = "0.10.0" }
-embassy-net = { version = "0.9.1", features = ["dhcpv4", "dns", "medium-ethernet", "proto-ipv4", "tcp", "udp"] }
+embassy-net = { version = "0.9.1", features = ["dhcpv4", "dns", "medium-ethernet", "proto-ipv4", "tcp", "udp", "defmt"] }
 embassy-sync = "0.8.0"
 embassy-time = "0.5.1"
 

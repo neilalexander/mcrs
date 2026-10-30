@@ -355,7 +355,7 @@ pub struct OtaStatus {
     pub next_size: usize,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, defmt::Format)]
 pub enum OtaError {
     NotAvailable,
     Storage,

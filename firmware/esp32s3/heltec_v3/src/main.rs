@@ -3,6 +3,7 @@
 
 use defmt::error;
 use esp_hal::uart::{Config as UartConfig, Uart};
+use mcrs_esp32s3::board::heltec::wifi_task;
 use mcrs_esp32s3::{
     Repeater,
     board::heltec::NoRadioFrontend,
@@ -42,6 +43,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         devices.button,
         devices.battery,
     )
+    .with_task(|app_context| wifi_task(devices.wifi, app_context))
     .run()
     .await
 }

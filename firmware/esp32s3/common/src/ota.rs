@@ -1,4 +1,12 @@
 use embedded_io_async::{Read, Write};
+use mcrs_repeater::{Platform as _, VERSION, app::AppContext};
+
+use crate::{
+    EspPlatform,
+    esp::{
+        EspStorage, OtaError, begin_ota_update, finish_ota_update, ota_status, write_ota_update,
+    },
+};
 
 const HEADER_BUFFER_LEN: usize = 1024;
 const BODY_BUFFER_LEN: usize = 1024;
@@ -62,20 +70,23 @@ refreshPartitions();
 </html>
 "#;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, defmt::Format)]
 pub enum HttpOtaError {
     Io,
     BadRequest,
-    Ota(crate::platform::OtaError),
+    Ota(OtaError),
 }
 
-impl From<crate::platform::OtaError> for HttpOtaError {
-    fn from(error: crate::platform::OtaError) -> Self {
+impl From<OtaError> for HttpOtaError {
+    fn from(error: OtaError) -> Self {
         Self::Ota(error)
     }
 }
 
-pub async fn handle_connection<C>(connection: &mut C) -> Result<(), HttpOtaError>
+pub async fn handle_connection<C>(
+    context: &AppContext<EspPlatform, EspStorage>,
+    connection: &mut C,
+) -> Result<(), HttpOtaError>
 where
     C: Read + Write,
 {
@@ -89,10 +100,10 @@ where
     }
 
     if request.starts_with(b"GET /status ") {
-        let status = crate::platform::ota_status();
+        let status = ota_status();
         let body = alloc::format!(
             "Current firmware: MCRS {}\nSelected for next boot: {}\nNext upload partition: {}\nUpload capacity: {} bytes\n",
-            env!("MESHCORE_FIRMWARE_VERSION"),
+            VERSION,
             status.selected,
             status.next.unwrap_or("unavailable"),
             status.next_size,
@@ -170,9 +181,9 @@ async fn receive_update<C>(
 where
     C: Read,
 {
-    let mut update = crate::platform::begin_ota_update()?;
+    let mut update = begin_ota_update()?;
     let mut received = first_body.len().min(content_len);
-    crate::platform::write_ota_update(&mut update, &first_body[..received])?;
+    write_ota_update(&mut update, &first_body[..received])?;
 
     let mut buffer = [0u8; BODY_BUFFER_LEN];
     while received < content_len {
@@ -182,11 +193,11 @@ where
         if count == 0 {
             return Err(HttpOtaError::BadRequest);
         }
-        crate::platform::write_ota_update(&mut update, &buffer[..count])?;
+        write_ota_update(&mut update, &buffer[..count])?;
         received += count;
     }
 
-    crate::platform::finish_ota_update(update)?;
+    finish_ota_update(update)?;
     Ok(received)
 }
 
@@ -321,10 +332,10 @@ fn ota_error_body(error: HttpOtaError) -> &'static [u8] {
     match error {
         HttpOtaError::Io => b"Error - connection failed\n",
         HttpOtaError::BadRequest => b"Error - bad request\n",
-        HttpOtaError::Ota(crate::platform::OtaError::NotAvailable) => b"Error - OTA unavailable\n",
-        HttpOtaError::Ota(crate::platform::OtaError::Storage) => b"Error - flash write failed\n",
-        HttpOtaError::Ota(crate::platform::OtaError::TooLarge) => b"Error - image too large\n",
-        HttpOtaError::Ota(crate::platform::OtaError::InvalidImage) => b"Error - invalid image\n",
+        HttpOtaError::Ota(OtaError::NotAvailable) => b"Error - OTA unavailable\n",
+        HttpOtaError::Ota(OtaError::Storage) => b"Error - flash write failed\n",
+        HttpOtaError::Ota(OtaError::TooLarge) => b"Error - image too large\n",
+        HttpOtaError::Ota(OtaError::InvalidImage) => b"Error - invalid image\n",
     }
 }
 
