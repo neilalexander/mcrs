@@ -1,4 +1,6 @@
-use crate::radio_metrics::{PacketStatus, StatusSpi};
+use crate::platform::ReceivedPacket;
+use crate::radio_metrics::PacketMetrics;
+use defmt::Debug2Format;
 use defmt::error;
 use embedded_hal::digital::OutputPin;
 use embedded_hal_async::{delay::DelayNs, digital::Wait, spi::SpiDevice};
@@ -166,20 +168,27 @@ where
             )
             .await
             .map_err(|error| {
-                error!("prepare: {}", error);
+                error!("prepare: {}", Debug2Format(&error));
             })?;
 
-        self.packet_status.take();
-        let (len, _rounded_status) = self
-            .radio
-            .rx(&self.rx_packet_params, buffer)
-            .await
-            .map_err(|error| {
-                error!("rx: {}", error);
-            })?;
-
-        let status = self.packet_status.take().ok_or(())?;
-        Ok(crate::platform::ReceivedPacket {
+        let (len, status) = loop {
+            match self.radio.rx(&self.rx_packet_params, buffer).await {
+                Ok(packet) => break packet,
+                Err(error @ (RadioError::CrcError | RadioError::HeaderError)) => {
+                    // Returning Err(()) triggers the app's one-second radio-failure
+                    // backoff. Discard corrupt packets and immediately retry instead.
+                    //
+                    // todo: remove debug2format, likely caused by different defmt versions
+                    error!("sx1262 receive error: {:?}", Debug2Format(&error));
+                }
+                Err(error) => {
+                    error!("sx1262 receive error: {:?}", Debug2Format(&error));
+                    return Err(());
+                }
+            }
+        };
+        let status = PacketMetrics::from(status);
+        Ok(ReceivedPacket {
             len: len as usize,
             rssi: status.rssi_dbm,
             snr_quarters: status.snr_quarters,
@@ -191,14 +200,14 @@ where
             .prepare_for_cad(&self.modulation_params)
             .await
             .map_err(|error| {
-                error!("CAD prepare: {}", error);
+                error!("CAD prepare: {}", Debug2Format(&error));
             })?;
 
         self.radio
             .cad(&self.modulation_params)
             .await
             .map_err(|error| {
-                error!("CAD: {}", error);
+                error!("CAD: {}", Debug2Format(&error));
             })
     }
 
@@ -212,11 +221,42 @@ where
             )
             .await
             .map_err(|error| {
-                error!("tx-prepare: {}", error);
+                error!("tx-prepare: {}", Debug2Format(&error));
             })?;
 
         self.radio.tx().await.map_err(|error| {
-            error!("tx: {}", error);
+            error!("tx: {}", Debug2Format(&error));
         })
+    }
+}
+
+fn radio_error_name(error: &RadioError) -> &'static str {
+    match error {
+        RadioError::SPI => "spi",
+        RadioError::Reset => "reset",
+        RadioError::RfSwitchRx => "rf-switch-rx",
+        RadioError::RfSwitchTx => "rf-switch-tx",
+        RadioError::Busy => "busy",
+        RadioError::Irq => "irq",
+        RadioError::DIO1 => "dio1",
+        RadioError::InvalidConfiguration => "invalid-configuration",
+        RadioError::InvalidSyncWord => "invalid-sync-word",
+        RadioError::CrcError => "crc-error",
+        RadioError::HeaderError => "header-error",
+        RadioError::TimedSingleRxUnsupported => "timed-single-rx-unsupported",
+        RadioError::InvalidRadioMode => "invalid-radio-mode",
+        RadioError::OpError(_) => "op-error",
+        RadioError::InvalidBaseAddress(_, _) => "invalid-base-address",
+        RadioError::PayloadSizeUnexpected(_) => "payload-size-unexpected",
+        RadioError::PayloadSizeMismatch(_, _) => "payload-size-mismatch",
+        RadioError::UnavailableSpreadingFactor => "unavailable-spreading-factor",
+        RadioError::UnavailableBandwidth => "unavailable-bandwidth",
+        RadioError::InvalidBandwidthForFrequency => "invalid-bandwidth-for-frequency",
+        RadioError::InvalidSF6ExplicitHeaderRequest => "invalid-sf6-explicit-header-request",
+        RadioError::InvalidOutputPowerForFrequency => "invalid-output-power-for-frequency",
+        RadioError::TransmitTimeout => "transmit-timeout",
+        RadioError::ReceiveTimeout => "receive-timeout",
+        RadioError::DutyCycleUnsupported => "duty-cycle-unsupported",
+        RadioError::RngUnsupported => "rng-unsupported",
     }
 }

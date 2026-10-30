@@ -260,15 +260,6 @@ dependencies = [
 
 [[package]]
 name = "defmt"
-version = "0.3.101"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4deef977660e373c458df605a913d4ab121db0ccd18d1ad6976dff7d37cddb53"
-dependencies = [
- "defmt 1.2.0",
-]
-
-[[package]]
-name = "defmt"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4a0795ac740cb54d7b3775c9c17345f6aaecf884c01733b39d6017738e0e3e1"
@@ -399,6 +390,12 @@ dependencies = [
  "subtle",
  "zeroize",
 ]
+
+[[package]]
+name = "embassy-futures"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc2d050bdc5c21e0862a89256ed8029ae6c290a93aecefc73084b3002cdebb01"
 
 [[package]]
 name = "embassy-net"
@@ -768,7 +765,7 @@ dependencies = [
 name = "mcrs-protocol"
 version = "0.1.0"
 dependencies = [
- "defmt 1.2.0",
+ "defmt",
  "ed25519-dalek",
  "hmac 0.13.0",
  "sha2 0.11.0",
@@ -782,7 +779,7 @@ dependencies = [
  "base64",
  "critical-section",
  "curve25519-dalek",
- "defmt 1.2.0",
+ "defmt",
  "ed25519-dalek",
  "embassy-net",
  "embassy-sync",

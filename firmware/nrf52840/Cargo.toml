@@ -37,7 +37,8 @@ cortex-m-rt = "0.7.0"
 panic-probe = { version = "1.0.0", features = ["print-defmt"] }
 
 # The release mcrs-repeater uses: its SX1262 board settings are lora-phy types.
-lora-phy = "3.0.1"
+# todo remove this dep
+lora-phy = { git = "https://github.com/lora-rs/lora-rs", rev = "15332dab3b4dd39d809990b712cf3ce1f73b14a9" }
 embedded-hal-bus = { version = "0.3.0", features = ["async", "defmt-03"] }
 embedded-alloc = "0.7.0"
 

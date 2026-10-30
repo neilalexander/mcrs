@@ -24,7 +24,7 @@ embassy-sync = "0.8.0"
 
 embedded-storage = "0.3.1"
 
-lora-phy = "3.0.1"
+lora-phy = { git = "https://github.com/lora-rs/lora-rs", rev = "15332dab3b4dd39d809990b712cf3ce1f73b14a9" }
 
 # MQTT reporting, WebSocket framing and TLS 1.3 (only in MQTT builds).
 base64 = { version = "0.23.1", default-features = false, features = ["alloc"], optional = true }

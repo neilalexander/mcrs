@@ -30,6 +30,7 @@ pub struct PacketMetrics {
     pub rssi_dbm: i16,
     pub snr_quarters: i16,
 }
+
 impl From<lora_phy::mod_params::PacketStatus> for PacketMetrics {
     fn from(status: lora_phy::mod_params::PacketStatus) -> Self {
         Self {
