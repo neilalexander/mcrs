@@ -1918,16 +1918,15 @@ dependencies = [
 [[package]]
 name = "lora-modulation"
 version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c96c4a41a1f1ad04de765306e1829c7007a37898fe4033204fa82cf2e055624"
+source = "git+https://github.com/lora-rs/lora-rs?rev=15332dab3b4dd39d809990b712cf3ce1f73b14a9#15332dab3b4dd39d809990b712cf3ce1f73b14a9"
 
 [[package]]
 name = "lora-phy"
-version = "3.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61471c3b2909789e3332083577f6cf6c41a4fcf37674ef15156bcbb20504ac65"
+version = "3.0.2-alpha"
+source = "git+https://github.com/lora-rs/lora-rs?rev=15332dab3b4dd39d809990b712cf3ce1f73b14a9#15332dab3b4dd39d809990b712cf3ce1f73b14a9"
 dependencies = [
- "defmt 0.3.101",
+ "document-features",
+ "embassy-futures",
  "embedded-hal 1.0.0",
  "embedded-hal-async",
  "lora-modulation",
