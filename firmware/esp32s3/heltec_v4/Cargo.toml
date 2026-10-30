@@ -18,6 +18,7 @@ esp-rom-sys = { version = "0.1.5" }
 esp-radio = { version = "0.18.0", features = ["esp32s3", "wifi", "esp-alloc", "unstable", ] }
 
 embassy-executor = { version = "0.10.0" }
+embassy-futures = "0.1.1"
 embassy-net = { version = "0.9.1", features = ["dhcpv4", "dns", "medium-ethernet", "proto-ipv4", "tcp", "udp"] }
 embassy-sync = "0.8.0"
 embassy-time = "0.5.1"

@@ -2,11 +2,13 @@
 #![no_main]
 
 use defmt::info;
+use embassy_futures::join::join;
 use embedded_hal_async::delay::DelayNs;
 use esp_hal::{
     gpio::{Flex, InputConfig, Level, Output, OutputConfig},
     usb_serial_jtag::UsbSerialJtag,
 };
+use mcrs_esp32s3::board::heltec::wifi_task;
 use mcrs_esp32s3::{
     Repeater,
     board::heltec::{RadioFrontend, RadioOutput},
@@ -33,7 +35,8 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     .await;
 
     let devices = Devices::new(peripherals, MODEL, BoardConfig::heltec_v4(), frontend);
-    Repeater::new(
+
+    let repeater = Repeater::new(
         devices.platform,
         devices.storage,
         devices.radio,
@@ -41,9 +44,10 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         devices.display,
         devices.button,
         devices.battery,
-    )
-    .run()
-    .await
+    );
+    let context = repeater.context();
+    let (never, _) = join(repeater.run(), wifi_task(devices.wifi, context)).await;
+    never
 }
 
 struct HeltecV4Frontend {

@@ -2,7 +2,9 @@
 #![no_main]
 
 use defmt::error;
+use embassy_futures::join::join;
 use esp_hal::uart::{Config as UartConfig, Uart};
+use mcrs_esp32s3::board::heltec::wifi_task;
 use mcrs_esp32s3::{
     Repeater,
     board::heltec::NoRadioFrontend,
@@ -33,7 +35,8 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         BoardConfig::heltec_v3(),
         NoRadioFrontend,
     );
-    Repeater::new(
+
+    let repeater = Repeater::new(
         devices.platform,
         devices.storage,
         devices.radio,
@@ -41,7 +44,8 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         devices.display,
         devices.button,
         devices.battery,
-    )
-    .run()
-    .await
+    );
+    let context = repeater.context();
+    let (never, _) = join(repeater.run(), wifi_task(devices.wifi, context)).await;
+    never
 }
