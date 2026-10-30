@@ -18,63 +18,51 @@ env:
 
 jobs:
   test:
-    name: Test
+    name: Protocol
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
-        with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
 
-      # flake.lock pins esp-rs-nix to an SSH URL, but runners have no GitHub
-      # SSH key. The repository is public, so fetch it over HTTPS instead.
-      - name: Fetch flake inputs over HTTPS
-        run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
-
-      # The toolchain comes from flake.lock, so only reuse build output built by it.
       - name: Cache Cargo
         uses: actions/cache@v6
         with:
           path: |
             ~/.cargo
             target
-          key: unit-tests-${{ runner.os }}-${{ hashFiles('flake.lock') }}-${{ hashFiles('Cargo.lock') }}
+          key: unit-tests-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            unit-tests-${{ runner.os }}-${{ hashFiles('flake.lock') }}-
+            unit-tests-${{ runner.os }}-
 
       - name: Run unit tests
-        run: nix develop --command cargo test --locked
+        run: cargo test --locked -p mcrs-protocol
 
   mqtt:
-    name: MQTT
+    name: MQTT transport
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
-        with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
 
-      # flake.lock pins esp-rs-nix to an SSH URL, but runners have no GitHub
-      # SSH key. The repository is public, so fetch it over HTTPS instead.
-      - name: Fetch flake inputs over HTTPS
-        run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
-
-      # The toolchain comes from flake.lock, so only reuse build output built by it.
       - name: Cache Cargo
         uses: actions/cache@v6
         with:
           path: |
             ~/.cargo
             target
-          key: mqtt-tests-${{ runner.os }}-${{ hashFiles('flake.lock') }}-${{ hashFiles('Cargo.lock') }}
+          key: mqtt-tests-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            mqtt-tests-${{ runner.os }}-${{ hashFiles('flake.lock') }}-
+            mqtt-tests-${{ runner.os }}-
 
       - name: Run unit tests
-        run: nix develop --command cargo test --locked --features mqtt
+        run: cargo test --locked -p mcrs-firmware --lib --features mqtt
