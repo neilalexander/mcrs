@@ -42,7 +42,7 @@ MCRS supports the following features:
 * Optional MQTT packet reporting to up to three brokers over Wi-Fi. This is only
   present in firmware compiled with the Cargo feature `mqtt`.
 
-Note: The storage format is different to the official MeshCore firmware, so a repeater that is switched to this firmware will come up with a fresh configuration and will need to be reconfigured. The default admin password is `meshcore`. 
+Note: The storage format is different to the official MeshCore firmware, so a repeater that is switched to this firmware will come up with a fresh configuration and will need to be reconfigured. The default admin password is `meshcore`.
 
 Note: MCRS currently defaults to the UK frequency 869.618MHz at 62.5KHz BW, SF8, CR6. Overriding this at build-time is still to be done.
 
@@ -72,16 +72,26 @@ Install the flashing/image tool:
 cargo install espflash --locked
 ```
 
-Useful build commands for e.g. the Heltec v3:
+#### Examples
+
+To run all `protocol` and `repeater` tests:
 
 ```sh
-cargo test -p mcrs-protocol
-cargo test -p mcrs-firmware --lib --features mqtt
-cargo +esp check-heltec-v3
-cargo +esp check-heltec-v3-mqtt
-make heltec-v3-build
-make heltec-v3-flash
-make heltec-v3-bins
+cargo test
+```
+
+Building the Heltec v3 firmware:
+
+```sh
+cd firmware/esp32s3
+cargo +esp build --release --bin mcrs-heltec_v3
+```
+
+Building and flashing the Heltec v3 firmware:
+
+```sh
+cd firmware/esp32s3
+cargo +esp run --release --bin mcrs-heltec_v3
 ```
 
 For Heltec v4 and WSL3, use the corresponding `heltec-v4-*` and `heltec-wsl3-*` Make targets.

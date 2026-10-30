@@ -30,7 +30,7 @@ env:
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
-  build:
+  build_esp32:
     name: ${{ matrix.board.name }}${{ matrix.variant.name_suffix }}
     runs-on: ubuntu-latest
     strategy:
@@ -102,4 +102,49 @@ jobs:
         with:
           name: ${{ matrix.board.id }}${{ matrix.variant.artifact_suffix }}-firmware-${{ steps.version.outputs.version }}
           path: dist/*.bin
+          if-no-files-found: error
+
+  build_nrf52840:
+    name: nRF52840
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.REF || '' }}
+          fetch-depth: 0
+
+      # The version the firmware reports (see repeater/build.rs).
+      - name: Determine image version
+        id: version
+        run: echo "version=$(make --no-print-directory -s print-version)" >> "$GITHUB_OUTPUT"
+
+      # The toolchain comes from flake.lock, so only reuse build output built by it.
+      - name: Cache Cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo
+            firmware/nrf52840/target
+          key: nrf52840-${{ runner.os }}-${{ hashFiles('firmware/nrf52840/flake.lock') }}-${{ hashFiles('firmware/nrf52840/Cargo.lock') }}
+          restore-keys: |
+            nrf52840-${{ runner.os }}-${{ hashFiles('firmware/nrf52840/flake.lock') }}-
+
+      - name: Build firmware
+        working-directory: firmware/nrf52840
+        run: cargo build --release --locked
+
+      - name: Collect image
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p dist
+          cp firmware/nrf52840/target/thumbv7em-none-eabi/release/mcrs-nrf "dist/nrf52840-$VERSION.elf"
+
+      - name: Upload image
+        uses: actions/upload-artifact@v7
+        with:
+          name: nrf52840-firmware-${{ steps.version.outputs.version }}
+          path: dist/*.elf
           if-no-files-found: error
