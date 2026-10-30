@@ -1,6 +1,6 @@
 //! The repeater platform for an nRF52840 with an SX1262 radio.
 use core::cell::{Cell, RefCell};
-
+use defmt::Debug2Format;
 use defmt::{debug, error};
 use embassy_nrf::{
     gpio::{Input, Output},
@@ -154,7 +154,7 @@ impl RadioHardware for NrfRadio {
                 Ok(receiver)
             }
             Err(e) => {
-                error!("failed to initialize sx1262: {:?}", e);
+                error!("failed to initialize sx1262: {:?}", Debug2Format(&e));
                 Err(())
             }
         }

@@ -8,7 +8,7 @@ use crate::{
     },
     esp::{self, EspStorage, RadioDelay, SpiDelay},
 };
-use defmt::{debug, error};
+use defmt::{debug, error, Debug2Format};
 use esp_hal::{
     Blocking,
     gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull},
@@ -332,7 +332,7 @@ impl<F: RadioFrontend> RadioHardware for HeltecRadio<F> {
                 Ok(BoardRadio::new(receiver, frontend))
             }
             Err(e) => {
-                error!("failed to initialize sx1262: {:?}", e);
+                error!("failed to initialize sx1262: {:?}", Debug2Format(&e));
                 Err(())
             }
         }
