@@ -8,11 +8,7 @@ use {
         },
         platform::{Platform, Storage},
     },
-    alloc::{
-        format,
-        string::String,
-        vec::{self, Vec},
-    },
+    alloc::{format, string::String, vec, vec::Vec},
     core::fmt::Write,
     defmt::{debug, info, warn},
     embedded_io_async::Read,

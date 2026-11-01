@@ -3,10 +3,7 @@ use {
         AdvertNodeType, Error, MAX_ADVERT_DATA_SIZE, Result,
         wire::{read_i32_le, read_u8, read_u16_le},
     },
-    alloc::{
-        string::String,
-        vec::{self, Vec},
-    },
+    alloc::{string::String, vec, vec::Vec},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, defmt::Format)]
