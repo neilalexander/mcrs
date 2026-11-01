@@ -1491,9 +1491,12 @@ async fn handle_unset_command<P: Platform, S: Storage>(
 
     match context.update_config(|config| config.unset(setting)).await {
         #[cfg(feature = "mqtt")]
-        Ok(()) if matches!(setting, "mqtt.1" | "mqtt.2" | "mqtt.3") => {
+        Ok(()) if setting.starts_with("mqtt.") => {
             context.mqtt.request_restart();
-            String::from("OK - MQTT server reset to defaults; MQTT restarting")
+            String::from("OK - MQTT setting reset to default; MQTT restarting")
+        }
+        Ok(()) if setting == "ntp" => {
+            String::from("OK - reset to default; applies at next NTP sync")
         }
         Ok(())
             if matches!(

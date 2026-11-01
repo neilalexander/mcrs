@@ -301,16 +301,32 @@ impl AppConfig {
             "generated",
         );
         #[cfg(feature = "mqtt")]
-        if let Some(number) = setting.strip_prefix("mqtt.")
-            && !number.contains('.')
-        {
+        if let Some(setting) = setting.strip_prefix("mqtt.") {
+            let (number, field) = setting
+                .split_once('.')
+                .map_or((setting, None), |(number, field)| (number, Some(field)));
             let index = number
                 .parse::<usize>()
                 .ok()
                 .and_then(|number| number.checked_sub(1))
                 .filter(|index| *index < MQTT_SERVER_COUNT)
                 .ok_or(ConfigError::UnknownSetting)?;
-            self.mqtt[index] = defaults.mqtt[index].clone();
+            let mqtt = &mut self.mqtt[index];
+            let default = &defaults.mqtt[index];
+            match field {
+                None => *mqtt = default.clone(),
+                Some("host") => mqtt.host = default.host.clone(),
+                Some("port") => mqtt.port = default.port,
+                Some("username") => mqtt.username = default.username.clone(),
+                Some("password") => mqtt.password = default.password.clone(),
+                Some("auth") => mqtt.auth = default.auth,
+                Some("auth.audience" | "audience") => {
+                    mqtt.auth_audience = default.auth_audience.clone()
+                }
+                Some("topic.root") => mqtt.topic_root = default.topic_root.clone(),
+                Some("iata") => mqtt.iata = default.iata.clone(),
+                Some(_) => return Err(ConfigError::UnknownSetting),
+            }
             return Ok(());
         }
         match setting {
@@ -320,6 +336,12 @@ impl AppConfig {
             "lat" => self.latitude_microdegrees = defaults.latitude_microdegrees,
             "lon" => self.longitude_microdegrees = defaults.longitude_microdegrees,
             "ntp" => self.ntp = defaults.ntp,
+            "acl" => self.acl = defaults.acl,
+            "region.default" => {
+                let name = defaults.regions.default_region().map(|region| region.name);
+                self.set_default_region(name.as_deref())?;
+            }
+            "region.capture" => self.region_capture = defaults.region_capture,
             "wifi.ssid" => self.wifi.ssid = defaults.wifi.ssid,
             "wifi.pass" => self.wifi.password = defaults.wifi.password,
             "wifi.telnet" => self.wifi.telnet = defaults.wifi.telnet,
