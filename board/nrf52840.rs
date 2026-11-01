@@ -3,7 +3,7 @@
 #![no_std]
 #![no_main]
 
-use crate::platform::{HEAP_SIZE, NrfPlatform, NrfRadio};
+use mcrs_nrf::{HEAP_SIZE, NrfPlatform, NrfRadio};
 use embassy_nrf::{
     bind_interrupts,
     gpio::{Input, Level, Output, OutputDrive, Pull},
@@ -22,7 +22,6 @@ use mcrs_repeater::{
 };
 use {defmt_rtt as _, panic_probe as _};
 
-mod platform;
 
 const MODEL: &str = "nRF52840";
 

@@ -1,4 +1,4 @@
 [workspace]
 members = ["protocol", "repeater", "fuzz"]
-exclude = ["firmware/nrf52840"]
+exclude = ["platform/esp32", "platform/nrf52840"]
 resolver = "3"

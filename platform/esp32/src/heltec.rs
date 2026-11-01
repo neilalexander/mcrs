@@ -1,7 +1,4 @@
-use crate::{
-    EspPlatform,
-    esp::{self, EspStorage, RadioDelay},
-};
+use crate::{EspPlatform, EspStorage, RadioDelay};
 use alloc::{format, string::String};
 use core::{
     future::{Future, poll_fn},
@@ -39,8 +36,6 @@ pub type BatterySensePin = AdcPin<GPIO1<'static>, ADC1<'static>, AdcCalCurve<ADC
 const OTA_AP_IP: embassy_net::Ipv4Address = embassy_net::Ipv4Address::new(192, 168, 4, 1);
 const OTA_AP_PREFIX: u8 = 24;
 const OTA_HTTP_PORT: u16 = 80;
-#[cfg(feature = "mqtt")]
-const MQTT_STATUS_INTERVAL_SECS: u64 = 15 * 60;
 const NTP_PORT: u16 = 123;
 const NTP_UNIX_EPOCH_OFFSET: u32 = 2_208_988_800;
 const NTP_RETRY_SECONDS: u64 = 60;
@@ -301,11 +296,17 @@ async fn run_ota_station_mode<'a>(
                 let mut ntp = pin!(ntp_loop(stack, context));
                 let mut telnet = pin!(mcrs_repeater::app::telnet::serve(stack, context));
                 #[cfg(feature = "mqtt")]
-                let mut mqtt1 = pin!(mqtt_loop(stack, context, 0));
+                let mut mqtt1 = pin!(mcrs_repeater::app::mqtt::client::run(
+                    stack, context, 0, crate::rng::WifiRng::new,
+                ));
                 #[cfg(feature = "mqtt")]
-                let mut mqtt2 = pin!(mqtt_loop(stack, context, 1));
+                let mut mqtt2 = pin!(mcrs_repeater::app::mqtt::client::run(
+                    stack, context, 1, crate::rng::WifiRng::new,
+                ));
                 #[cfg(feature = "mqtt")]
-                let mut mqtt3 = pin!(mqtt_loop(stack, context, 2));
+                let mut mqtt3 = pin!(mcrs_repeater::app::mqtt::client::run(
+                    stack, context, 2, crate::rng::WifiRng::new,
+                ));
                 let mut disconnected = pin!(controller.wait_for_disconnect_async());
                 poll_fn(|cx| {
                     if let Poll::Ready(never) = server.as_mut().poll(cx) {
@@ -331,22 +332,7 @@ async fn run_ota_station_mode<'a>(
                 })
                 .await;
                 #[cfg(feature = "mqtt")]
-                for index in 0..mcrs_repeater::app::config::MQTT_SERVER_COUNT {
-                    use mcrs_repeater::app::mqtt::{ConnectionError, ConnectionState};
-                    let enabled = context
-                        .with_config(|config| {
-                            config.mqtt(index).is_some_and(|mqtt| !mqtt.host.is_empty())
-                        })
-                        .await;
-                    if enabled {
-                        context
-                            .mqtt
-                            .set_error(index, Some(ConnectionError::Unreachable));
-                        context.mqtt.set_state(index, ConnectionState::Disconnected);
-                    } else {
-                        context.mqtt.set_state(index, ConnectionState::Disabled);
-                    }
-                }
+                mcrs_repeater::app::mqtt::client::disconnected(context).await;
             }
             warn!("Wi-Fi: station disconnected; reconnecting");
             let _ = controller.disconnect_async().await;
@@ -363,412 +349,6 @@ async fn run_ota_station_mode<'a>(
         match worker.as_mut().poll(cx) {
             Poll::Ready(never) => match never {},
             Poll::Pending => Poll::Pending,
-        }
-    })
-    .await
-}
-
-#[cfg(feature = "mqtt")]
-async fn mqtt_loop<P: Platform, S: Storage>(
-    stack: embassy_net::Stack<'_>,
-    context: &AppContext<P, S>,
-    index: usize,
-) -> ! {
-    use mcrs_repeater::app::mqtt::ConnectionState;
-
-    loop {
-        let generation = context.mqtt.generation();
-        let mqtt = context
-            .with_config(|config| config.mqtt(index).cloned())
-            .await;
-        let Some(mqtt) = mqtt.filter(|mqtt| !mqtt.host.is_empty()) else {
-            context.mqtt.set_state(index, ConnectionState::Disabled);
-            wait_mqtt_retry_or_restart(context, index, generation, 30).await;
-            continue;
-        };
-        context.mqtt.set_state(index, ConnectionState::Connecting);
-        // Keep the three TLS-capable session futures out of the fixed 32 KiB
-        // Embassy task arena. Disabled brokers allocate no session state.
-        let result =
-            alloc::boxed::Box::pin(mqtt_session(stack, context, index, generation, &mqtt)).await;
-        // Cancellation by an explicit restart is not a connection failure.
-        if context.mqtt.generation() == generation {
-            if let Err(error) = result {
-                context.mqtt.set_error(index, Some(error));
-                warn!("MQTT {}: {}", index + 1, error.as_str());
-            }
-        }
-        context.mqtt.set_state(index, ConnectionState::Disconnected);
-        wait_mqtt_retry_or_restart(context, index, generation, 10).await;
-    }
-}
-
-#[cfg(feature = "mqtt")]
-async fn mqtt_session<P: Platform, S: Storage>(
-    stack: embassy_net::Stack<'_>,
-    context: &AppContext<P, S>,
-    index: usize,
-    generation: u32,
-    config: &mcrs_repeater::app::config::MqttConfig,
-) -> Result<(), mcrs_repeater::app::mqtt::ConnectionError> {
-    use super::mqtt_transport::{SharedSocket, WifiRng};
-    use embedded_tls::{Aes128GcmSha256, TlsConfig, TlsConnection, TlsContext, UnsecureProvider};
-    use mcrs_repeater::app::mqtt::ConnectionError;
-    use mcrs_repeater::app::mqtt::transport::{self, Endpoint};
-
-    let endpoint =
-        Endpoint::parse(&config.host, config.port).map_err(|_| ConnectionError::Config)?;
-    let mut rx = [0u8; 512];
-    let mut tx = [0u8; 512];
-    let mut socket = embassy_net::tcp::TcpSocket::new(stack, &mut rx, &mut tx);
-    mqtt_io(context, index, generation, async {
-        let addresses = stack
-            .dns_query(endpoint.host, embassy_net::dns::DnsQueryType::A)
-            .await
-            .map_err(|_| ())?;
-        socket
-            .connect((addresses.first().copied().ok_or(())?, endpoint.port))
-            .await
-            .map_err(|_| ())
-    })
-    .await
-    .map_err(|_| ConnectionError::Unreachable)?;
-
-    if endpoint.tls {
-        // Allocate TLS records only for secure connections, outside the task arena.
-        // A full receive record accommodates servers that don't negotiate MFL.
-        let mut read_record = alloc::vec::Vec::new();
-        let mut write_record = alloc::vec::Vec::new();
-        read_record
-            .try_reserve_exact(16640)
-            .map_err(|_| ConnectionError::Memory)?;
-        write_record
-            .try_reserve_exact(2048)
-            .map_err(|_| ConnectionError::Memory)?;
-        read_record.resize(16640, 0);
-        write_record.resize(2048, 0);
-        let shared = core::cell::RefCell::new(socket);
-        let mut tls = TlsConnection::<_, Aes128GcmSha256>::new(
-            SharedSocket(&shared),
-            &mut read_record,
-            &mut write_record,
-        );
-        let tls_config = TlsConfig::new()
-            .enable_rsa_signatures()
-            .with_server_name(endpoint.host);
-        mqtt_io(context, index, generation, async {
-            // Deliberately accept all certificates, including automatically rotated
-            // certificates. This encrypts traffic but does not authenticate peers.
-            tls.open(TlsContext::new(
-                &tls_config,
-                UnsecureProvider::new::<Aes128GcmSha256>(WifiRng::new()),
-            ))
-            .await
-            .map_err(|_| ())
-        })
-        .await
-        .map_err(|_| ConnectionError::Tls)?;
-        if endpoint.websocket {
-            mqtt_io(
-                context,
-                index,
-                generation,
-                transport::upgrade(&mut tls, &endpoint, WifiRng::new().bytes()),
-            )
-            .await
-            .map_err(|_| ConnectionError::WebSocket)?;
-        }
-        let (reader, writer) = tls.split();
-        mqtt_connected(
-            context,
-            index,
-            generation,
-            config,
-            endpoint.websocket,
-            reader,
-            writer,
-        )
-        .await
-    } else {
-        if endpoint.websocket {
-            mqtt_io(
-                context,
-                index,
-                generation,
-                transport::upgrade(&mut socket, &endpoint, WifiRng::new().bytes()),
-            )
-            .await
-            .map_err(|_| ConnectionError::WebSocket)?;
-        }
-        let (reader, writer) = socket.split();
-        mqtt_connected(
-            context,
-            index,
-            generation,
-            config,
-            endpoint.websocket,
-            reader,
-            writer,
-        )
-        .await
-    }
-}
-
-#[cfg(feature = "mqtt")]
-async fn mqtt_status_json<P: Platform, S: Storage>(
-    context: &AppContext<P, S>,
-    public_key: &[u8; 32],
-    online: bool,
-) -> String {
-    context
-        .with_config(|config| {
-            let status = context.status();
-            mcrs_repeater::app::mqtt::status_json(
-                public_key,
-                online,
-                config.node_name(),
-                context.platform.model(),
-                VERSION,
-                context.platform.now_seconds(),
-                mcrs_repeater::app::mqtt::StatusStats {
-                    battery_mv: status.battery_millivolts,
-                    uptime_ms: status.uptime_millis,
-                },
-            )
-        })
-        .await
-}
-
-#[cfg(feature = "mqtt")]
-async fn mqtt_connected<
-    P: Platform,
-    S: Storage,
-    R: embedded_io_async::Read,
-    W: embedded_io_async::Write,
->(
-    context: &AppContext<P, S>,
-    index: usize,
-    generation: u32,
-    config: &mcrs_repeater::app::config::MqttConfig,
-    websocket: bool,
-    reader: R,
-    mut writer: W,
-) -> Result<(), mcrs_repeater::app::mqtt::ConnectionError> {
-    use super::mqtt_transport::WifiRng;
-    use embassy_sync::{blocking_mutex::raw::NoopRawMutex, signal::Signal};
-    use mcrs_repeater::app::mqtt::{self, ConnectionError, transport};
-
-    let (public_key, credentials) = context
-        .with_identity(|identity| {
-            let public_key = *identity.public_key();
-            let credentials =
-                config.credentials(&public_key, context.platform.now_seconds(), |message| {
-                    identity.sign(message)
-                });
-            (public_key, credentials)
-        })
-        .await;
-    let (username, password) = credentials.map_err(|_| {
-        if context.platform.now_seconds() < 1_704_067_200 {
-            ConnectionError::Clock
-        } else {
-            ConnectionError::Config
-        }
-    })?;
-    let topic = mqtt::packets_topic(config, &public_key);
-    let status = mqtt::status_topic(&topic);
-    let client_id = format!(
-        "mcrs-{:02x}{:02x}{:02x}-{}",
-        public_key[0],
-        public_key[1],
-        public_key[2],
-        index + 1
-    );
-    let pong = transport::Pong::new();
-    let ack = Signal::<NoopRawMutex, ()>::new();
-    let mut reader = transport::Reader::new(reader, websocket, &pong);
-    let mut receive = pin!(async {
-        mqtt::read_connack(&mut reader).await?;
-        ack.signal(());
-        while mqtt::read_pingresp(&mut reader).await.is_ok() {
-            ack.signal(());
-        }
-        Err::<(), _>(ConnectionError::Connection)
-    });
-    let mut send = pin!(async {
-        let mut rng = WifiRng::new();
-        mqtt_io(context, index, generation, async {
-            // The broker retains these bytes until the connection is lost.
-            let offline = mqtt_status_json(context, &public_key, false).await;
-            transport::write(
-                &mut writer,
-                websocket,
-                2,
-                &mqtt::connect_packet((&username, &password), &client_id, &status, &offline),
-                rng.bytes(),
-            )
-            .await?;
-            mqtt_wait_ack(&mut writer, websocket, &ack, &pong, &mut rng).await
-        })
-        .await?;
-        context
-            .mqtt
-            .set_state(index, mqtt::ConnectionState::Connected);
-        info!("MQTT {}: connected", index + 1);
-        let mut next_status = embassy_time::Instant::now(); // Publish immediately after connecting.
-        let mut keepalive = next_status + embassy_time::Duration::from_secs(30);
-        loop {
-            let mut event = pin!(context.mqtt.receive_packet(index));
-            let mut idle = pin!(embassy_time::Timer::at(keepalive.min(next_status)));
-            let mut control = pin!(pong.wait());
-            let (packet, control) = poll_fn(|cx| {
-                context.mqtt.register_waker(index, cx.waker());
-                if context.mqtt.generation() != generation {
-                    return Poll::Ready((None, None));
-                }
-                // Deadlines take priority so busy connections still refresh status.
-                if idle.as_mut().poll(cx).is_ready() {
-                    return Poll::Ready((None, None));
-                }
-                if let Poll::Ready(data) = control.as_mut().poll(cx) {
-                    return Poll::Ready((None, Some(data)));
-                }
-                if let Poll::Ready(event) = event.as_mut().poll(cx) {
-                    return Poll::Ready((Some(event), None));
-                }
-                Poll::Pending
-            })
-            .await;
-            mqtt_io(context, index, generation, async {
-                if let Some(data) = control {
-                    // WebSocket control frames do not count as MQTT keepalive traffic.
-                    return transport::write(&mut writer, websocket, 10, &data, rng.bytes()).await;
-                }
-                if let Some(event) = packet {
-                    let payload = context
-                        .with_config(|config| {
-                            mqtt::packet_json(&event, &public_key, config.node_name())
-                        })
-                        .await;
-                    transport::write(
-                        &mut writer,
-                        websocket,
-                        2,
-                        &mqtt::publish_packet(&topic, &payload, false),
-                        rng.bytes(),
-                    )
-                    .await?;
-                } else if embassy_time::Instant::now() >= next_status {
-                    let online = mqtt_status_json(context, &public_key, true).await;
-                    transport::write(
-                        &mut writer,
-                        websocket,
-                        2,
-                        &mqtt::publish_packet(&status, &online, true),
-                        rng.bytes(),
-                    )
-                    .await?;
-                    next_status = embassy_time::Instant::now()
-                        + embassy_time::Duration::from_secs(MQTT_STATUS_INTERVAL_SECS);
-                } else {
-                    ack.reset();
-                    transport::write(&mut writer, websocket, 2, &[0xc0, 0], rng.bytes()).await?;
-                    mqtt_wait_ack(&mut writer, websocket, &ack, &pong, &mut rng).await?;
-                }
-                keepalive = embassy_time::Instant::now() + embassy_time::Duration::from_secs(30);
-                Ok::<(), ()>(())
-            })
-            .await?;
-        }
-        #[allow(unreachable_code)]
-        Ok::<(), ()>(())
-    });
-    poll_fn(|cx| {
-        if let Poll::Ready(result) = receive.as_mut().poll(cx) {
-            return Poll::Ready(result);
-        }
-        if send.as_mut().poll(cx).is_ready() {
-            return Poll::Ready(Err(ConnectionError::Connection));
-        }
-        Poll::Pending
-    })
-    .await
-}
-
-// Continue servicing WebSocket pings even while waiting for MQTT acknowledgements.
-#[cfg(feature = "mqtt")]
-async fn mqtt_wait_ack<W: embedded_io_async::Write>(
-    writer: &mut W,
-    websocket: bool,
-    ack: &embassy_sync::signal::Signal<embassy_sync::blocking_mutex::raw::NoopRawMutex, ()>,
-    pong: &mcrs_repeater::app::mqtt::transport::Pong,
-    rng: &mut super::mqtt_transport::WifiRng,
-) -> Result<(), ()> {
-    loop {
-        let mut response = pin!(ack.wait());
-        let mut control = pin!(pong.wait());
-        let data = poll_fn(|cx| {
-            if response.as_mut().poll(cx).is_ready() {
-                return Poll::Ready(None);
-            }
-            if let Poll::Ready(data) = control.as_mut().poll(cx) {
-                return Poll::Ready(Some(data));
-            }
-            Poll::Pending
-        })
-        .await;
-        let Some(data) = data else {
-            return Ok(());
-        };
-        mcrs_repeater::app::mqtt::transport::write(writer, websocket, 10, &data, rng.bytes())
-            .await?;
-    }
-}
-
-// Dropping a cancelled or timed-out operation may leave a partial MQTT frame.
-// Every error from this helper must therefore discard the connection.
-#[cfg(feature = "mqtt")]
-async fn mqtt_io<P: Platform, S: Storage, T, E>(
-    context: &AppContext<P, S>,
-    index: usize,
-    generation: u32,
-    operation: impl Future<Output = Result<T, E>>,
-) -> Result<T, ()> {
-    let mut operation = pin!(operation);
-    let mut timeout = pin!(embassy_time::Timer::after_secs(10));
-    poll_fn(|cx| {
-        context.mqtt.register_waker(index, cx.waker());
-        if context.mqtt.generation() != generation {
-            return Poll::Ready(Err(()));
-        }
-        if timeout.as_mut().poll(cx).is_ready() {
-            return Poll::Ready(Err(()));
-        }
-        operation
-            .as_mut()
-            .poll(cx)
-            .map(|result| result.map_err(|_| ()))
-    })
-    .await
-}
-
-#[cfg(feature = "mqtt")]
-async fn wait_mqtt_retry_or_restart<P: Platform, S: Storage>(
-    context: &AppContext<P, S>,
-    index: usize,
-    generation: u32,
-    seconds: u64,
-) {
-    let mut timer = pin!(embassy_time::Timer::after_secs(seconds));
-    poll_fn(|cx| {
-        if context.mqtt.generation() != generation {
-            return Poll::Ready(());
-        }
-        context.mqtt.register_waker(index, cx.waker());
-        if timer.as_mut().poll(cx).is_ready() {
-            Poll::Ready(())
-        } else {
-            Poll::Pending
         }
     })
     .await
@@ -1124,7 +704,7 @@ where
 
 impl Battery for BatteryMonitor {
     async fn millivolts(&mut self) -> Option<u16> {
-        let mut delay = esp::radio_delay();
+        let mut delay = crate::radio_delay();
         let sample = self.sample(&mut delay).await?;
         debug!(
             "Battery: adc={}mV battery={}mV",

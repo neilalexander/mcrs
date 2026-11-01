@@ -40,15 +40,15 @@ MQTT_SUFFIX := -mqtt
 endif
 
 heltec-v3-build:
-	cd firmware/esp32s3 && cargo +esp build --release --bin mcrs-heltec_v3 $(MQTT_FEATURE)
+	cd platform/esp32 && cargo +esp build --release --bin mcrs-heltec_v3 $(MQTT_FEATURE)
 
 heltec-v3-run heltec-v3-flash:
-	cd firmware/esp32s3 && cargo +esp run --release --bin mcrs-heltec_v3 $(MQTT_FEATURE)
+	cd platform/esp32 && cargo +esp run --release --bin mcrs-heltec_v3 $(MQTT_FEATURE)
 
 heltec-v3-bins: heltec-v3-full-bin heltec-v3-upgrade-bin
 
 heltec-v3-full-bin: heltec-v3-build | $(DIST_DIR)
-	cd firmware/esp32s3 && espflash save-image \
+	cd platform/esp32 && espflash save-image \
 		--chip $(HELTEC_V3_CHIP) \
 		--flash-size $(HELTEC_V3_FLASH_SIZE) \
 		--flash-mode $(HELTEC_V3_FLASH_MODE) \
@@ -59,7 +59,7 @@ heltec-v3-full-bin: heltec-v3-build | $(DIST_DIR)
 		../../$(DIST_DIR)/mcrs-heltec-v3$(PROFILE_SUFFIX)$(MQTT_SUFFIX)-$(VERSION)-merged.bin
 
 heltec-v3-upgrade-bin: heltec-v3-build | $(DIST_DIR)
-	cd firmware/esp32s3 && espflash save-image \
+	cd platform/esp32 && espflash save-image \
 		--chip $(HELTEC_V3_CHIP) \
 		--flash-size $(HELTEC_V3_FLASH_SIZE) \
 		--flash-mode $(HELTEC_V3_FLASH_MODE) \
@@ -70,15 +70,15 @@ heltec-v3-upgrade-bin: heltec-v3-build | $(DIST_DIR)
 		../../$(DIST_DIR)/mcrs-heltec-v3$(PROFILE_SUFFIX)$(MQTT_SUFFIX)-$(VERSION)-upgrade.bin
 
 heltec-v4-build:
-	cd firmware/esp32s3 && cargo +esp build --release --bin mcrs-heltec_v4 $(MQTT_FEATURE)
+	cd platform/esp32 && cargo +esp build --release --bin mcrs-heltec_v4 $(MQTT_FEATURE)
 
 heltec-v4-run heltec-v4-flash:
-	cd firmware/esp32s3 && cargo +esp run --release --bin mcrs-heltec_v4 $(MQTT_FEATURE)
+	cd platform/esp32 && cargo +esp run --release --bin mcrs-heltec_v4 $(MQTT_FEATURE)
 
 heltec-v4-bins: heltec-v4-full-bin heltec-v4-upgrade-bin
 
 heltec-v4-full-bin: heltec-v4-build | $(DIST_DIR)
-	cd firmware/esp32s3 && espflash save-image \
+	cd platform/esp32 && espflash save-image \
 		--chip $(HELTEC_V4_CHIP) \
 		--flash-size $(HELTEC_V4_FLASH_SIZE) \
 		--flash-mode $(HELTEC_V4_FLASH_MODE) \
@@ -89,7 +89,7 @@ heltec-v4-full-bin: heltec-v4-build | $(DIST_DIR)
 		../../$(DIST_DIR)/mcrs-heltec-v4$(PROFILE_SUFFIX)$(MQTT_SUFFIX)-$(VERSION)-merged.bin
 
 heltec-v4-upgrade-bin: heltec-v4-build | $(DIST_DIR)
-	cd firmware/esp32s3 && espflash save-image \
+	cd platform/esp32 && espflash save-image \
 		--chip $(HELTEC_V4_CHIP) \
 		--flash-size $(HELTEC_V4_FLASH_SIZE) \
 		--flash-mode $(HELTEC_V4_FLASH_MODE) \
@@ -100,15 +100,15 @@ heltec-v4-upgrade-bin: heltec-v4-build | $(DIST_DIR)
 		../../$(DIST_DIR)/mcrs-heltec-v4$(PROFILE_SUFFIX)$(MQTT_SUFFIX)-$(VERSION)-upgrade.bin
 
 heltec-wsl3-build:
-	cd firmware/esp32s3 && cargo +esp build --release --bin mcrs-heltec_wsl3 $(MQTT_FEATURE)
+	cd platform/esp32 && cargo +esp build --release --bin mcrs-heltec_wsl3 $(MQTT_FEATURE)
 
 heltec-wsl3-run heltec-wsl3-flash:
-	cd firmware/esp32s3 && cargo +esp run --release --bin mcrs-heltec_wsl3 $(MQTT_FEATURE)
+	cd platform/esp32 && cargo +esp run --release --bin mcrs-heltec_wsl3 $(MQTT_FEATURE)
 
 heltec-wsl3-bins: heltec-wsl3-full-bin heltec-wsl3-upgrade-bin
 
 heltec-wsl3-full-bin: heltec-wsl3-build | $(DIST_DIR)
-	cd firmware/esp32s3 && espflash save-image \
+	cd platform/esp32 && espflash save-image \
 		--chip $(HELTEC_WSL3_CHIP) \
 		--flash-size $(HELTEC_WSL3_FLASH_SIZE) \
 		--flash-mode $(HELTEC_WSL3_FLASH_MODE) \
@@ -119,7 +119,7 @@ heltec-wsl3-full-bin: heltec-wsl3-build | $(DIST_DIR)
 		../../$(DIST_DIR)/mcrs-heltec-wsl3$(PROFILE_SUFFIX)$(MQTT_SUFFIX)-$(VERSION)-merged.bin
 
 heltec-wsl3-upgrade-bin: heltec-wsl3-build | $(DIST_DIR)
-	cd firmware/esp32s3 && espflash save-image \
+	cd platform/esp32 && espflash save-image \
 		--chip $(HELTEC_WSL3_CHIP) \
 		--flash-size $(HELTEC_WSL3_FLASH_SIZE) \
 		--flash-mode $(HELTEC_WSL3_FLASH_MODE) \

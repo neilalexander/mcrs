@@ -1,12 +1,25 @@
 //! The repeater platform and devices shared by the Heltec ESP32-S3 boards. A
 //! board supplies only what differs: its console, its SX1262 configuration and
 //! its radio frontend.
-use crate::{
-    board::heltec::{
-        self, BatteryMonitor, BoardRadio, MEMORY_PROFILE, RadioFrontend, STORAGE_LAYOUT,
-        WifiResources,
-    },
-    esp::{self, EspStorage, RadioDelay, SpiDelay},
+#![no_std]
+
+extern crate alloc;
+
+pub use mcrs_repeater::Repeater;
+
+pub mod heltec;
+
+mod esp;
+mod littlefs;
+pub(crate) mod ota;
+
+#[cfg(feature = "mqtt")]
+pub(crate) mod rng;
+
+pub use esp::*;
+
+use crate::heltec::{
+    BatteryMonitor, BoardRadio, MEMORY_PROFILE, RadioFrontend, STORAGE_LAYOUT, WifiResources,
 };
 use defmt::{debug, error, Debug2Format};
 use esp_hal::{

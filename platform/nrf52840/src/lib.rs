@@ -1,3 +1,5 @@
+#![no_std]
+
 //! The repeater platform for an nRF52840 with an SX1262 radio.
 use core::cell::{Cell, RefCell};
 use defmt::Debug2Format;

@@ -83,14 +83,14 @@ cargo test
 Building the Heltec v3 firmware:
 
 ```sh
-cd firmware/esp32s3
+cd platform/esp32
 cargo +esp build --release --bin mcrs-heltec_v3
 ```
 
 Building and flashing the Heltec v3 firmware:
 
 ```sh
-cd firmware/esp32s3
+cd platform/esp32
 cargo +esp run --release --bin mcrs-heltec_v3
 ```
 
@@ -241,7 +241,7 @@ cargo +nightly fuzz run protocol_payloads
 The firmware has some opinionated defaults when compared to the official repeater firmware:
 
 * Flood adverts are not sent automatically by default. Flooded adverts are extremely wasteful
-  and take up a lot of airtime across long distances, so should be avoided wherever possible. 
+  and take up a lot of airtime across long distances, so should be avoided wherever possible.
 * Zero-hop adverts are sent every 4 hours to populate neighbour lists, this is not currently
   configurable. It is useful to know about repeaters nearby and to be able to see neighbours
   in repeater telemetry, but we avoid sending information about them too often.

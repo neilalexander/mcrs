@@ -783,6 +783,7 @@ dependencies = [
  "ed25519-dalek",
  "embassy-net",
  "embassy-sync",
+ "embassy-time",
  "embedded-hal 1.0.0",
  "embedded-hal-async",
  "embedded-io-async",

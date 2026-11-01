@@ -24,6 +24,7 @@ use embassy_sync::{
     signal::Signal,
 };
 
+pub mod client;
 pub mod transport;
 
 pub struct MqttContext {

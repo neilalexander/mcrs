@@ -79,7 +79,7 @@ pub fn init_storage(layout: mcrs_repeater::platform::storage::Layout) -> EspStor
                 if partition.is_read_only() || partition.len() < layout.partition_size as u32 {
                     None
                 } else {
-                    match crate::littlefs::LittleFsStorage::new(
+                    match super::littlefs::LittleFsStorage::new(
                         FlashPartition {
                             offset: partition.offset(),
                             size: partition.len() as usize,
@@ -344,7 +344,7 @@ impl OtaUpdate {
 }
 
 pub struct EspStorage {
-    inner: Option<crate::littlefs::LittleFsStorage>,
+    inner: Option<super::littlefs::LittleFsStorage>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

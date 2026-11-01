@@ -48,3 +48,10 @@ opt-level = 3
 lto = "fat"
 codegen-units = 1
 debug = 2
+
+[[bin]]
+name = "mcrs-nrf"
+path = "../../board/nrf52840.rs"
+
+[workspace]
+resolver = "3"

@@ -1,7 +1,7 @@
 use alloc::{vec, vec::Vec};
 use littlefs_rust::{BlockDevice, Error as FsError, Filesystem, FilesystemOptions};
 
-use crate::esp::FlashPartition;
+use super::esp::FlashPartition;
 use mcrs_repeater::platform::{Storage, storage::Error};
 
 const MAX_KEY_LEN: usize = 64;

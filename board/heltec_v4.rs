@@ -8,19 +8,18 @@ use esp_hal::{
     gpio::{Flex, InputConfig, Level, Output, OutputConfig},
     usb_serial_jtag::UsbSerialJtag,
 };
-use mcrs_esp32s3::board::heltec::wifi_task;
+use mcrs_esp32s3::heltec::wifi_task;
 use mcrs_esp32s3::{
-    Repeater,
-    board::heltec::{RadioFrontend, RadioOutput},
-    esp::radio_delay,
-    platform::{BoardConfig, Devices},
+    BoardConfig, Devices, Repeater,
+    heltec::{RadioFrontend, RadioOutput},
+    radio_delay,
 };
 
 const MODEL: &str = "Heltec V4";
 
 #[esp_rtos::main]
 async fn main(_spawner: embassy_executor::Spawner) -> ! {
-    let (peripherals, board) = mcrs_esp32s3::platform::init();
+    let (peripherals, board) = mcrs_esp32s3::init();
 
     let console = UsbSerialJtag::new(board.USB_DEVICE).into_async();
 
