@@ -7,12 +7,10 @@ extern crate alloc;
 
 pub use mcrs_repeater::Repeater;
 
-pub mod heltec;
-
 mod esp;
+pub mod heltec;
 mod littlefs;
 pub(crate) mod ota;
-
 #[cfg(feature = "mqtt")]
 pub(crate) mod rng;
 

@@ -1,5 +1,3 @@
-extern crate alloc;
-
 use {
     super::identity::Identity,
     crate::{Platform, app::AppContext, platform::Storage},
@@ -311,8 +309,6 @@ fn mac_for_ciphertext(shared_secret: &[u8; 32], ciphertext: &[u8]) -> Option<[u8
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
-
     use super::{super::identity::PrivateKey, *};
 
     #[test]
@@ -354,7 +350,7 @@ mod tests {
             destination_hash: identity.public_key()[0],
             source_hash: 0,
             mac: [0; 2],
-            ciphertext: vec![0],
+            ciphertext: alloc::vec![0],
         };
 
         assert!(decrypt_authenticated_direct_payload(&payload, &identity, &[]).is_none());
@@ -367,7 +363,7 @@ mod tests {
             destination_hash: identity.public_key()[0],
             sender_pubkey: [2; 32],
             mac: [0; 2],
-            ciphertext: vec![0],
+            ciphertext: alloc::vec![0],
         };
 
         assert!(decrypt_anonymous_request(&payload, &identity).is_none());
@@ -378,8 +374,11 @@ mod tests {
         let shared_secret = [7; 32];
         let requester = [8; 32];
         let responder = [9; 32];
-        let discovered_path =
-            Path::new(mcrs_protocol::HashSize::Two, vec![0x11, 0x22, 0x33, 0x44]).unwrap();
+        let discovered_path = Path::new(
+            mcrs_protocol::HashSize::Two,
+            alloc::vec![0x11, 0x22, 0x33, 0x44],
+        )
+        .unwrap();
         let packet = encode_path_response_packet(
             &shared_secret,
             &requester,

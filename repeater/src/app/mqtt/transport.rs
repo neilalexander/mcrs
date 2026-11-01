@@ -220,7 +220,7 @@ impl<R: Read> Read for Reader<'_, R> {
                     if !fin || len > 125 {
                         return Err(InvalidData);
                     }
-                    let mut data = vec![0; len as usize];
+                    let mut data = alloc::vec![0; len as usize];
                     self.inner
                         .read_exact(&mut data)
                         .await
@@ -423,7 +423,7 @@ mod tests {
         ] {
             assert!(validate_upgrade(response.as_bytes(), "dGhlIHNhbXBsZSBub25jZQ==").is_err());
         }
-        let mut io = Io::new(&vec![b'x'; 4097], 1);
+        let mut io = Io::new(&alloc::vec![b'x'; 4097], 1);
         assert!(
             run(upgrade(
                 &mut io,
@@ -481,7 +481,7 @@ mod tests {
     #[test]
     fn masks_all_client_frames_and_supports_extended_lengths() {
         for len in [0, 2, 125, 126, 1024, 65536] {
-            let data = vec![0x55; len];
+            let data = alloc::vec![0x55; len];
             let mask = [1, 2, 3, 4];
             let mut io = Io::new(&[], 7);
             run(write(&mut io, true, 2, &data, mask)).unwrap();
@@ -511,7 +511,7 @@ mod tests {
             server_frame.extend_from_slice(&data);
             let pong = Pong::new();
             let mut reader = Reader::new(Io::new(&server_frame, 128), true, &pong);
-            let mut actual = vec![0; len];
+            let mut actual = alloc::vec![0; len];
             run(reader.read_exact(&mut actual)).unwrap();
             assert_eq!(actual, data);
         }

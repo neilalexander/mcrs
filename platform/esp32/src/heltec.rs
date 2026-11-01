@@ -17,7 +17,6 @@ use {
     },
     esp_radio::wifi::{AuthenticationMethod, Config, ap::AccessPointConfig, sta::StationConfig},
     mcrs_repeater::{
-        VERSION,
         app::AppContext,
         memory::MemoryProfile,
         platform::{Battery, Platform, Radio, ReceivedPacket, Storage},

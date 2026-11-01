@@ -1,6 +1,7 @@
-use alloc::vec::Vec;
-
-use crate::{Error, Result};
+use {
+    crate::{Error, Result},
+    alloc::vec::Vec,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, defmt::Format)]
 pub struct TracePath {

@@ -1,8 +1,9 @@
-use alloc::vec::Vec;
-
-use crate::{
-    Result,
-    wire::{ensure_payload_len, read_u32_le},
+use {
+    crate::{
+        Result,
+        wire::{ensure_payload_len, read_u32_le},
+    },
+    alloc::vec::Vec,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

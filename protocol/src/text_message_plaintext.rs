@@ -1,8 +1,9 @@
-use alloc::vec::Vec;
-
-use crate::{
-    Error, MAX_TEXT_LEN, Result, TextType,
-    wire::{ensure_payload_len, read_u8, read_u32_le},
+use {
+    crate::{
+        Error, MAX_TEXT_LEN, Result, TextType,
+        wire::{ensure_payload_len, read_u8, read_u32_le},
+    },
+    alloc::vec::Vec,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

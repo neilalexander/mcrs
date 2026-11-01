@@ -1,8 +1,9 @@
-use alloc::vec::Vec;
-
-use crate::{
-    CIPHER_MAC_SIZE, Result,
-    wire::{ensure_payload_len, read_array, read_u8},
+use {
+    crate::{
+        CIPHER_MAC_SIZE, Result,
+        wire::{ensure_payload_len, read_array, read_u8},
+    },
+    alloc::vec::Vec,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, defmt::Format)]

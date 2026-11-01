@@ -1,6 +1,7 @@
-use alloc::vec::Vec;
-
-use crate::{Error, Result, wire::read_array};
+use {
+    crate::{Error, Result, wire::read_array},
+    alloc::vec::Vec,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, defmt::Format)]
 pub struct AckPayload {

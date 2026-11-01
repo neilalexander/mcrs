@@ -1,5 +1,3 @@
-extern crate alloc;
-
 use {
     crate::{
         app::{
@@ -8,7 +6,7 @@ use {
         },
         platform::{Platform, Storage},
     },
-    alloc::{format, string::String, vec, vec::Vec},
+    alloc::{format, string::String, vec::Vec},
     core::fmt::Write,
     defmt::{debug, info, warn},
     embedded_io_async::Read,
@@ -576,7 +574,7 @@ fn anonymous_basic_response(
     let response = RepeaterResponsePlaintext {
         reflected_tag: request_timestamp,
         responder_time,
-        body: vec![repeater_features(repeat_enabled)],
+        body: alloc::vec![repeater_features(repeat_enabled)],
     };
     response.encode()
 }

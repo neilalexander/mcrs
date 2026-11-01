@@ -1,5 +1,3 @@
-extern crate alloc;
-
 use {
     alloc::{string::String, vec::Vec},
     core::fmt::Write,

@@ -1,9 +1,6 @@
 use {
     crate::*,
-    alloc::{
-        string::String,
-        vec::{self, Vec},
-    },
+    alloc::{string::String, vec::Vec},
     ed25519_dalek::{Signer, SigningKey},
 };
 
@@ -39,7 +36,7 @@ fn normal_packet_round_trips_with_transport_codes_and_path() {
     let encoded = packet.encode().unwrap();
     assert_eq!(
         encoded,
-        vec![
+        alloc::vec![
             0x0f, 0x34, 0x12, 0x00, 0x00, 0x42, 0xaa, 0xbb, 0xcc, 0xdd, 1, 2, 3, 4
         ]
     );
@@ -58,19 +55,19 @@ fn trace_packet_uses_snr_header_path_and_payload_hashes() {
     let packet = Packet {
         route_type: RouteType::Direct,
         transport_codes: None,
-        path: RoutePath::Trace(TracePath::new(vec![-4, 12]).unwrap()),
+        path: RoutePath::Trace(TracePath::new(alloc::vec![-4, 12]).unwrap()),
         payload: Payload::Trace(TracePayload {
             tag: 0x01020304,
             auth_code: 0xa0b0c0d0,
             hash_size: TraceHashSize::Two,
-            path_hashes: vec![0xaa, 0xbb, 0xcc, 0xdd],
+            path_hashes: alloc::vec![0xaa, 0xbb, 0xcc, 0xdd],
         }),
     };
 
     let encoded = packet.encode().unwrap();
     assert_eq!(
         encoded,
-        vec![
+        alloc::vec![
             0x26, 0x02, 0xfc, 0x0c, 0x04, 0x03, 0x02, 0x01, 0xd0, 0xc0, 0xb0, 0xa0, 0x01, 0xaa,
             0xbb, 0xcc, 0xdd
         ]
@@ -115,7 +112,7 @@ fn advert_app_data_rejects_truncated_overlong_and_trailing_fields() {
 
 #[test]
 fn advert_payload_rejects_overlong_app_data_instead_of_truncating() {
-    let input = vec![0; PUB_KEY_SIZE + 4 + SIGNATURE_SIZE + MAX_ADVERT_DATA_SIZE + 1];
+    let input = alloc::vec![0; PUB_KEY_SIZE + 4 + SIGNATURE_SIZE + MAX_ADVERT_DATA_SIZE + 1];
     assert_eq!(
         AdvertPayload::decode(&input),
         Err(Error::InvalidLength("advert app_data"))
@@ -124,7 +121,7 @@ fn advert_payload_rejects_overlong_app_data_instead_of_truncating() {
 
 #[test]
 fn public_payload_decoders_reject_oversized_input() {
-    let input = vec![0; MAX_PACKET_PAYLOAD + 1];
+    let input = alloc::vec![0; MAX_PACKET_PAYLOAD + 1];
     let expected = Some(Error::PayloadTooLong { len: input.len() });
 
     assert_eq!(
@@ -223,7 +220,7 @@ fn zero_hop_control_packets_must_be_direct_zero_hop() {
 #[test]
 fn control_messages_reject_bad_lengths_without_panicking() {
     for len in [0usize, 1, 4, 6, 8, 10, 12, 14, 36, 38] {
-        let request = ControlPayload::new(0x08, 0, vec![0; len]);
+        let request = ControlPayload::new(0x08, 0, alloc::vec![0; len]);
         if len != 5 && len != 9 {
             assert_eq!(
                 request.message(),
@@ -231,7 +228,7 @@ fn control_messages_reject_bad_lengths_without_panicking() {
             );
         }
 
-        let response = ControlPayload::new(0x09, 0, vec![0; len]);
+        let response = ControlPayload::new(0x09, 0, alloc::vec![0; len]);
         if len != 13 && len != 37 {
             assert_eq!(
                 response.message(),
@@ -272,7 +269,7 @@ fn forwarding_helpers_mutate_paths() {
         route_type: RouteType::Flood,
         transport_codes: None,
         path: RoutePath::Normal(Path::empty()),
-        payload: Payload::RawCustom(vec![1, 2, 3]),
+        payload: Payload::RawCustom(alloc::vec![1, 2, 3]),
     };
 
     packet.append_flood_hop(&[0xab]).unwrap();
@@ -305,12 +302,12 @@ fn dedup_signature_uses_trace_path_length() {
     let mut packet = Packet {
         route_type: RouteType::Direct,
         transport_codes: None,
-        path: RoutePath::Trace(TracePath::new(vec![]).unwrap()),
+        path: RoutePath::Trace(TracePath::new(alloc::vec![]).unwrap()),
         payload: Payload::Trace(TracePayload {
             tag: 1,
             auth_code: 2,
             hash_size: TraceHashSize::One,
-            path_hashes: vec![0xaa],
+            path_hashes: alloc::vec![0xaa],
         }),
     };
     let before = packet.dedup_signature().unwrap();
@@ -321,7 +318,7 @@ fn dedup_signature_uses_trace_path_length() {
 
 #[test]
 fn dedup_signature_distinguishes_route_and_transport_scope() {
-    let payload = Payload::RawCustom(vec![1, 2, 3]);
+    let payload = Payload::RawCustom(alloc::vec![1, 2, 3]);
     let unscoped = Packet {
         route_type: RouteType::Flood,
         transport_codes: None,
@@ -518,18 +515,18 @@ fn direct_ciphertext_requires_nonempty_complete_aes_blocks() {
         destination_hash: 1,
         source_hash: 2,
         mac: [0; CIPHER_MAC_SIZE],
-        ciphertext: vec![],
+        ciphertext: alloc::vec![],
     };
     assert!(!payload.has_complete_ciphertext_blocks());
 
     let unaligned = DirectEncryptedPayload {
-        ciphertext: vec![0; CIPHER_BLOCK_SIZE - 1],
+        ciphertext: alloc::vec![0; CIPHER_BLOCK_SIZE - 1],
         ..payload.clone()
     };
     assert!(!unaligned.has_complete_ciphertext_blocks());
 
     let aligned = DirectEncryptedPayload {
-        ciphertext: vec![0; CIPHER_BLOCK_SIZE],
+        ciphertext: alloc::vec![0; CIPHER_BLOCK_SIZE],
         ..payload
     };
     assert!(aligned.has_complete_ciphertext_blocks());
@@ -540,12 +537,12 @@ fn public_trace_helper_rejects_invalid_manual_trace_payload() {
     let packet = Packet {
         route_type: RouteType::Direct,
         transport_codes: None,
-        path: RoutePath::Trace(TracePath::new(vec![]).unwrap()),
+        path: RoutePath::Trace(TracePath::new(alloc::vec![]).unwrap()),
         payload: Payload::Trace(TracePayload {
             tag: 1,
             auth_code: 2,
             hash_size: TraceHashSize::Two,
-            path_hashes: vec![0xaa],
+            path_hashes: alloc::vec![0xaa],
         }),
     };
 
@@ -579,12 +576,12 @@ fn text_message_rejects_messages_over_the_protocol_limit() {
         timestamp: 1,
         text_type: TextType::Plain,
         attempt: 0,
-        message: vec![0; MAX_TEXT_LEN + 1],
+        message: alloc::vec![0; MAX_TEXT_LEN + 1],
     };
 
     assert_eq!(text.encode(), Err(Error::InvalidLength("text message")));
 
-    let mut encoded = vec![0; 5];
+    let mut encoded = alloc::vec![0; 5];
     encoded.extend_from_slice(&text.message);
     assert_eq!(
         TextMessagePlaintext::decode(&encoded),

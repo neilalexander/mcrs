@@ -433,7 +433,7 @@ pub fn publish_packet(topic: &str, payload: &str, retain: bool) -> Vec<u8> {
 }
 
 fn frame(kind: u8, body: &[u8]) -> Vec<u8> {
-    let mut out = vec![kind];
+    let mut out = alloc::vec![kind];
     let mut remaining = body.len();
     loop {
         let mut byte = (remaining % 128) as u8;

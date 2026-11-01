@@ -1,10 +1,10 @@
-use alloc::vec::Vec;
-
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-
-use crate::{
-    AdvertAppData, Error, MAX_ADVERT_DATA_SIZE, PUB_KEY_SIZE, Result, SIGNATURE_SIZE,
-    wire::{read_array, read_u32_le},
+use {
+    crate::{
+        AdvertAppData, Error, MAX_ADVERT_DATA_SIZE, PUB_KEY_SIZE, Result, SIGNATURE_SIZE,
+        wire::{read_array, read_u32_le},
+    },
+    alloc::vec::Vec,
+    ed25519_dalek::{Signature, Verifier, VerifyingKey},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, defmt::Format)]

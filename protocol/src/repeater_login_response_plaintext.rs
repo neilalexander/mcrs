@@ -1,8 +1,9 @@
-use alloc::vec::Vec;
-
-use crate::{
-    Error, RESP_SERVER_LOGIN_OK, Result,
-    wire::{read_array, read_u8, read_u32_le},
+use {
+    crate::{
+        Error, RESP_SERVER_LOGIN_OK, Result,
+        wire::{read_array, read_u8, read_u32_le},
+    },
+    alloc::vec::Vec,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

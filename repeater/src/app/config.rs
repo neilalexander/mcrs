@@ -1,5 +1,3 @@
-extern crate alloc;
-
 use {
     crate::app::{
         LoopDetection,

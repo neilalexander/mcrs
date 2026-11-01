@@ -1,6 +1,7 @@
-use alloc::vec::Vec;
-
-use crate::{Error, Path, PayloadKind, Result, wire::ensure_payload_len};
+use {
+    crate::{Error, Path, PayloadKind, Result, wire::ensure_payload_len},
+    alloc::vec::Vec,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathPlaintext {

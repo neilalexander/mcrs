@@ -1,8 +1,9 @@
-use alloc::{vec, vec::Vec};
-
-use crate::{
-    AdvertNodeType, ControlMessage, Error, Result,
-    wire::{ensure_payload_len, read_u8, read_u32_le},
+use {
+    crate::{
+        AdvertNodeType, ControlMessage, Error, Result,
+        wire::{ensure_payload_len, read_u8, read_u32_le},
+    },
+    alloc::vec::Vec,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, defmt::Format)]
@@ -25,7 +26,7 @@ impl ControlPayload {
         since: Option<u32>,
         prefix_only: bool,
     ) -> Self {
-        let mut data = vec![type_filter];
+        let mut data = alloc::vec![type_filter];
         data.extend_from_slice(&tag.to_le_bytes());
         if let Some(since) = since {
             data.extend_from_slice(&since.to_le_bytes());
@@ -39,7 +40,7 @@ impl ControlPayload {
         tag: u32,
         pubkey: Vec<u8>,
     ) -> Self {
-        let mut data = vec![snr_quarters as u8];
+        let mut data = alloc::vec![snr_quarters as u8];
         data.extend_from_slice(&tag.to_le_bytes());
         data.extend_from_slice(&pubkey);
         Self::new(0x09, node_type.to_nibble(), data)
