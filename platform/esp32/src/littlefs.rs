@@ -1,8 +1,9 @@
-use alloc::{vec, vec::Vec};
-use littlefs_rust::{BlockDevice, Error as FsError, Filesystem, FilesystemOptions};
-
-use super::esp::FlashPartition;
-use mcrs_repeater::platform::{Storage, storage::Error};
+use {
+    super::esp::FlashPartition,
+    alloc::vec::Vec,
+    littlefs_rust::{BlockDevice, Error as FsError, Filesystem, FilesystemOptions},
+    mcrs_repeater::platform::{Storage, storage::Error},
+};
 
 const MAX_KEY_LEN: usize = 64;
 const TEMP_PATH: &str = ".pending";
@@ -112,7 +113,7 @@ fn legacy_config(
     if &key != b"app.conf" {
         return Err(Error::Corrupt);
     }
-    let mut config = vec![0; data_len];
+    let mut config = alloc::vec![0; data_len];
     // The largest legacy record crosses the first erase-block boundary.
     let block_size = device.config().block_size;
     let mut offset = 20;

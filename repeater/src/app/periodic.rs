@@ -1,11 +1,14 @@
-use super::AppContext;
-use crate::platform::{Platform, Storage};
-use defmt::{error, info};
-use embedded_hal_async::delay::DelayNs;
+use {
+    crate::{
+        app::AppContext,
+        platform::{Platform, Storage},
+    },
+    defmt::{error, info},
+    embedded_hal_async::delay::DelayNs,
+    schedule::Schedule,
+};
 
 mod schedule;
-
-use schedule::Schedule;
 
 pub(crate) async fn run<P: Platform, S: Storage>(context: &AppContext<P, S>) -> ! {
     let mut delay = context.platform.delay();

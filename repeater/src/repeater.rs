@@ -1,18 +1,20 @@
 //! Starts the repeater on a board's devices and runs its tasks.
-use crate::{
-    app::{self, AppContext, battery, cli, config::AppConfig, periodic, ui},
-    memory::MemoryProfile,
-    platform::{Battery, Platform, Radio, RadioHardware, StatusDisplay, Storage},
+use {
+    crate::{
+        app::{self, AppContext, battery, cli, config::AppConfig, periodic, ui},
+        memory::MemoryProfile,
+        platform::{Battery, Platform, Radio, RadioHardware, StatusDisplay, Storage},
+    },
+    alloc::{boxed::Box, string::String},
+    core::{
+        future::{Future, poll_fn},
+        pin::pin,
+        task::Poll,
+    },
+    defmt::{error, info},
+    embedded_hal_async::digital::Wait,
+    embedded_io_async::{Read, Write},
 };
-use alloc::{boxed::Box, string::String};
-use core::{
-    future::{Future, poll_fn},
-    pin::pin,
-    task::Poll,
-};
-use defmt::{error, info};
-use embedded_hal_async::digital::Wait;
-use embedded_io_async::{Read, Write};
 
 /// The repeater for one board, with the devices it drives.
 pub struct Repeater<PLATFORM, STORAGE, RADIO, CONSOLE, DISPLAY, BUTTON, BATTERY>

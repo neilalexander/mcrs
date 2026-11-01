@@ -1,24 +1,22 @@
-use core::{
-    cell::{Cell, RefCell},
-    fmt,
-    hint::spin_loop,
+use {
+    core::{
+        cell::{Cell, RefCell},
+        hint::spin_loop,
+    },
+    critical_section::Mutex,
+    defmt::{Debug2Format, error, info, warn},
+    embassy_time::{Duration as EmbassyDuration, Timer},
+    embedded_hal::delay::DelayNs as BlockingDelayNs,
+    embedded_hal_async::delay::DelayNs,
+    esp_backtrace as _,
+    esp_bootloader_esp_idf::{
+        ota_updater::OtaUpdater,
+        partitions::{AppPartitionSubType, PartitionType},
+    },
+    esp_hal::{clock::CpuClock, peripherals::Peripherals, rtc_cntl::Rtc, time::Instant},
+    esp_println::println,
+    mcrs_repeater::VERSION,
 };
-
-use alloc::vec;
-use critical_section::Mutex;
-use defmt::{Debug2Format, error, info, warn};
-use embassy_time::{Duration as EmbassyDuration, Timer};
-use embedded_hal::delay::DelayNs as BlockingDelayNs;
-use embedded_hal_async::delay::DelayNs;
-use esp_bootloader_esp_idf::{
-    ota_updater::OtaUpdater,
-    partitions::{AppPartitionSubType, PartitionType},
-};
-use esp_hal::{clock::CpuClock, peripherals::Peripherals, rtc_cntl::Rtc, time::Instant};
-use esp_println::{print, println};
-
-use esp_backtrace as _;
-use mcrs_repeater::{VERSION, radio_metrics::SnrDb};
 
 // Use the HAL's supported descriptor section, preserving the git-derived version.
 esp_bootloader_esp_idf::esp_app_desc!(
@@ -469,7 +467,7 @@ impl embedded_storage::ReadStorage for RomFlash {
 impl embedded_storage::Storage for RomFlash {
     fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
         let padded_len = align_up(bytes.len(), 4);
-        let mut words = vec![u32::MAX; padded_len / 4];
+        let mut words = alloc::vec![u32::MAX; padded_len / 4];
         words_as_bytes_mut(&mut words)[..bytes.len()].copy_from_slice(bytes);
         erase_flash_range(offset, padded_len)?;
         write_flash_words(offset, &words)
@@ -520,7 +518,7 @@ fn read_flash(
     let aligned_offset = offset & !3;
     let prefix_len = (offset - aligned_offset) as usize;
     let aligned_len = align_up(prefix_len + bytes.len(), 4);
-    let mut words = vec![0u32; aligned_len / 4];
+    let mut words = alloc::vec![0u32; aligned_len / 4];
 
     let result = unsafe {
         esp_rom_sys::rom::spiflash::esp_rom_spiflash_read(
@@ -805,7 +803,6 @@ fn write_retained_wall_clock(unix_seconds: u32, rtc_seconds: u32) {
     );
 }
 
-#[cfg(feature = "esp32s3")]
 fn read_retained_wall_clock_words() -> Option<(u32, u32, u32)> {
     let rtc = esp_hal::peripherals::LPWR::regs();
     Some((
@@ -815,21 +812,12 @@ fn read_retained_wall_clock_words() -> Option<(u32, u32, u32)> {
     ))
 }
 
-#[cfg(feature = "esp32s3")]
 fn write_retained_wall_clock_words(checksum: u32, unix_seconds: u32, rtc_seconds: u32) {
     let rtc = esp_hal::peripherals::LPWR::regs();
     rtc.store0().write(|w| unsafe { w.bits(checksum) });
     rtc.store6().write(|w| unsafe { w.bits(unix_seconds) });
     rtc.store7().write(|w| unsafe { w.bits(rtc_seconds) });
 }
-
-#[cfg(not(feature = "esp32s3"))]
-fn read_retained_wall_clock_words() -> Option<(u32, u32, u32)> {
-    None
-}
-
-#[cfg(not(feature = "esp32s3"))]
-fn write_retained_wall_clock_words(_checksum: u32, _unix_seconds: u32, _rtc_seconds: u32) {}
 
 fn retained_wall_clock_checksum(unix_seconds: u32, rtc_seconds: u32) -> u32 {
     WALL_CLOCK_RTC_MAGIC

@@ -1,6 +1,8 @@
-use defmt::{debug, info};
-use mcrs_protocol::{
-    ControlMessage, DirectEncryptedPayload, GroupEncryptedPayload, Packet, Payload, RoutePath,
+use {
+    defmt::{debug, info},
+    mcrs_protocol::{
+        ControlMessage, DirectEncryptedPayload, GroupEncryptedPayload, Packet, Payload, RoutePath,
+    },
 };
 
 const VERBOSE_PROTOCOL_LOGS: bool = false;

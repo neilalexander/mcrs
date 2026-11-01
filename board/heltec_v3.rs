@@ -1,14 +1,15 @@
 #![no_std]
 #![no_main]
 
-use defmt::error;
-use embassy_futures::join::join;
-use esp_hal::uart::{Config as UartConfig, Uart};
-use mcrs_esp32s3::heltec::wifi_task;
-use mcrs_esp32s3::{
-    BoardConfig, Devices, Repeater,
-    heltec::NoRadioFrontend,
-    idle_loop,
+use {
+    defmt::error,
+    embassy_futures::join::join,
+    esp_hal::uart::{Config as UartConfig, Uart},
+    mcrs_esp32s3::{
+        BoardConfig, Devices, Repeater,
+        heltec::{NoRadioFrontend, wifi_task},
+        idle_loop,
+    },
 };
 
 const MODEL: &str = "Heltec V3";

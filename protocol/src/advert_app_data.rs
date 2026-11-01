@@ -1,8 +1,9 @@
-use alloc::{string::String, vec, vec::Vec};
-
-use crate::{
-    AdvertNodeType, Error, MAX_ADVERT_DATA_SIZE, Result,
-    wire::{read_i32_le, read_u8, read_u16_le},
+use {
+    crate::{
+        AdvertNodeType, Error, MAX_ADVERT_DATA_SIZE, Result,
+        wire::{read_i32_le, read_u8, read_u16_le},
+    },
+    alloc::{string::String, vec::Vec},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, defmt::Format)]
@@ -79,7 +80,7 @@ impl AdvertAppData {
             flags |= 0x80;
         }
 
-        let mut out = vec![flags];
+        let mut out = alloc::vec![flags];
         if let Some((latitude, longitude)) = self.location {
             out.extend_from_slice(&latitude.to_le_bytes());
             out.extend_from_slice(&longitude.to_le_bytes());

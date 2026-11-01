@@ -1,7 +1,8 @@
-use hmac::{Hmac, KeyInit, Mac};
-use sha2::{Digest, Sha256};
-
-use crate::{CIPHER_KEY_SIZE, PUB_KEY_SIZE, PayloadKind};
+use {
+    crate::{CIPHER_KEY_SIZE, PUB_KEY_SIZE, PayloadKind},
+    hmac::{Hmac, KeyInit, Mac},
+    sha2::{Digest, Sha256},
+};
 
 type HmacSha256 = Hmac<Sha256>;
 

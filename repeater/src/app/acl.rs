@@ -1,5 +1,7 @@
-use alloc::{string::String, vec::Vec};
-use core::fmt::Write;
+use {
+    alloc::{string::String, vec::Vec},
+    core::fmt::Write,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {

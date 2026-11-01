@@ -1,20 +1,19 @@
-extern crate alloc;
-
-use crate::{Platform, app::AppContext, platform::Storage};
-
-use super::identity::Identity;
-use aes::{
-    Aes128,
-    cipher::{Block, BlockCipherDecrypt, BlockCipherEncrypt, KeyInit},
+use {
+    super::identity::Identity,
+    crate::{Platform, app::AppContext, platform::Storage},
+    aes::{
+        Aes128,
+        cipher::{Block, BlockCipherDecrypt, BlockCipherEncrypt, KeyInit},
+    },
+    alloc::vec::Vec,
+    hmac::{Hmac, Mac},
+    mcrs_protocol::{
+        AnonymousRequestPayload, DirectEncryptedPayload, PERM_ACL_ADMIN, Packet, Path,
+        PathPlaintext, Payload, PayloadKind, RepeaterLoginResponsePlaintext, RoutePath, RouteType,
+        TextMessagePlaintext, TextType,
+    },
+    sha2::Sha256,
 };
-use alloc::vec::Vec;
-use hmac::{Hmac, Mac};
-use mcrs_protocol::{
-    AnonymousRequestPayload, DirectEncryptedPayload, PERM_ACL_ADMIN, Packet, Path, PathPlaintext,
-    Payload, PayloadKind, RepeaterLoginResponsePlaintext, RoutePath, RouteType,
-    TextMessagePlaintext, TextType,
-};
-use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -310,10 +309,7 @@ fn mac_for_ciphertext(shared_secret: &[u8; 32], ciphertext: &[u8]) -> Option<[u8
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
-
-    use super::super::identity::PrivateKey;
-    use super::*;
+    use super::{super::identity::PrivateKey, *};
 
     #[test]
     fn encrypted_payload_matches_aes_and_hmac_vectors() {
@@ -354,7 +350,7 @@ mod tests {
             destination_hash: identity.public_key()[0],
             source_hash: 0,
             mac: [0; 2],
-            ciphertext: vec![0],
+            ciphertext: alloc::vec![0],
         };
 
         assert!(decrypt_authenticated_direct_payload(&payload, &identity, &[]).is_none());
@@ -367,7 +363,7 @@ mod tests {
             destination_hash: identity.public_key()[0],
             sender_pubkey: [2; 32],
             mac: [0; 2],
-            ciphertext: vec![0],
+            ciphertext: alloc::vec![0],
         };
 
         assert!(decrypt_anonymous_request(&payload, &identity).is_none());
@@ -378,8 +374,11 @@ mod tests {
         let shared_secret = [7; 32];
         let requester = [8; 32];
         let responder = [9; 32];
-        let discovered_path =
-            Path::new(mcrs_protocol::HashSize::Two, vec![0x11, 0x22, 0x33, 0x44]).unwrap();
+        let discovered_path = Path::new(
+            mcrs_protocol::HashSize::Two,
+            alloc::vec![0x11, 0x22, 0x33, 0x44],
+        )
+        .unwrap();
         let packet = encode_path_response_packet(
             &shared_secret,
             &requester,

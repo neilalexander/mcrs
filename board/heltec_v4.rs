@@ -1,18 +1,19 @@
 #![no_std]
 #![no_main]
 
-use defmt::info;
-use embassy_futures::join::join;
-use embedded_hal_async::delay::DelayNs;
-use esp_hal::{
-    gpio::{Flex, InputConfig, Level, Output, OutputConfig},
-    usb_serial_jtag::UsbSerialJtag,
-};
-use mcrs_esp32s3::heltec::wifi_task;
-use mcrs_esp32s3::{
-    BoardConfig, Devices, Repeater,
-    heltec::{RadioFrontend, RadioOutput},
-    radio_delay,
+use {
+    defmt::info,
+    embassy_futures::join::join,
+    embedded_hal_async::delay::DelayNs,
+    esp_hal::{
+        gpio::{Flex, InputConfig, Level, Output, OutputConfig},
+        usb_serial_jtag::UsbSerialJtag,
+    },
+    mcrs_esp32s3::{
+        BoardConfig, Devices, Repeater,
+        heltec::{RadioFrontend, RadioOutput, wifi_task},
+        radio_delay,
+    },
 };
 
 const MODEL: &str = "Heltec V4";

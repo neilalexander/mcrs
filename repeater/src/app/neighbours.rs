@@ -1,9 +1,9 @@
-extern crate alloc;
-
-use alloc::vec::Vec;
-use core::fmt::Write;
-use defmt::info;
-use mcrs_protocol::{AdvertNodeType, PUB_KEY_SIZE, Packet, Payload, RoutePath, node_hash};
+use {
+    alloc::vec::Vec,
+    core::fmt::Write,
+    defmt::info,
+    mcrs_protocol::{AdvertNodeType, PUB_KEY_SIZE, Packet, Payload, RoutePath, node_hash},
+};
 
 const MAX_NEIGHBOUR_HASH_LEN: usize = 4;
 const MAX_NEIGHBOUR_RESULTS_BYTES: usize = 130;

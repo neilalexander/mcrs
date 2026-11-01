@@ -1,9 +1,10 @@
-use alloc::vec::Vec;
-
-use crate::{
-    AckPayload, AdvertPayload, AnonymousRequestPayload, ControlPayload, DirectEncryptedPayload,
-    GroupEncryptedPayload, MultipartPayload, PayloadKind, Result, TracePayload,
-    wire::ensure_payload_len,
+use {
+    crate::{
+        AckPayload, AdvertPayload, AnonymousRequestPayload, ControlPayload, DirectEncryptedPayload,
+        GroupEncryptedPayload, MultipartPayload, PayloadKind, Result, TracePayload,
+        wire::ensure_payload_len,
+    },
+    alloc::vec::Vec,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, defmt::Format)]

@@ -1,7 +1,9 @@
 #![no_main]
 
-use libfuzzer_sys::fuzz_target;
-use mcrs_protocol::{ControlMessage, Packet, Payload, RoutePath};
+use {
+    libfuzzer_sys::fuzz_target,
+    mcrs_protocol::{ControlMessage, Packet, Payload, RoutePath},
+};
 
 fuzz_target!(|data: &[u8]| {
     let Ok(packet) = Packet::decode(data) else {

@@ -1,22 +1,20 @@
 //! Minimal MQTT 3.1.1 packet reporter, modelled on MeshCore-MQTT.
 
-use crate::app::config;
-use alloc::{
-    format,
-    string::{String, ToString},
-    vec,
-    vec::Vec,
-};
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use core::fmt::Write as _;
-use core::{
-    cell::{Cell, RefCell},
-    sync::atomic::{AtomicU8, Ordering},
-    task::Waker,
-};
-use embassy_sync::{
-    blocking_mutex::raw::CriticalSectionRawMutex,
-    channel::Channel,
+use {
+    crate::app::config,
+    alloc::{
+        format,
+        string::{String, ToString},
+        vec::{self, Vec},
+    },
+    base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD},
+    core::{
+        cell::{Cell, RefCell},
+        fmt::Write as _,
+        sync::atomic::{AtomicU8, Ordering},
+        task::Waker,
+    },
+    embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel},
 };
 
 pub mod client;
@@ -435,7 +433,7 @@ pub fn publish_packet(topic: &str, payload: &str, retain: bool) -> Vec<u8> {
 }
 
 fn frame(kind: u8, body: &[u8]) -> Vec<u8> {
-    let mut out = vec![kind];
+    let mut out = alloc::vec![kind];
     let mut remaining = body.len();
     loop {
         let mut byte = (remaining % 128) as u8;
@@ -493,17 +491,21 @@ pub async fn read_pingresp(reader: &mut impl embedded_io_async::Read) -> Result<
 #[cfg(test)]
 mod tests {
     const FIRMWARE_VERSION: &str = env!("MESHCORE_FIRMWARE_VERSION");
-    use super::*;
-    use core::{
-        future::Future,
-        pin::pin,
-        task::{Context, Poll, Waker},
+    use {
+        super::*,
+        core::{
+            future::Future,
+            pin::pin,
+            task::{Context, Poll, Waker},
+        },
     };
 
     #[test]
     fn device_credentials_match_meshcore_format_and_verify_for_both_key_formats() {
-        use crate::app::identity::{Identity, PrivateKey};
-        use ed25519_dalek::{Signature, VerifyingKey};
+        use {
+            crate::app::identity::{Identity, PrivateKey},
+            ed25519_dalek::{Signature, VerifyingKey},
+        };
         let expanded = PrivateKey::from_hex("28ad39fefd7fa3e200a9c626eef599e61a2d055c48a8288a4e7e4c4bca3928789c7d6db3506d65dbac7c052aaee4857425210c9bc54030c826e54055983452a5").unwrap();
         let mut previous = None;
         for private in [PrivateKey::Seed([7; 32]), expanded] {

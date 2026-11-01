@@ -12,12 +12,12 @@
 
 pub mod storage;
 
-use core::{convert::Infallible, future::Future};
-
-use embedded_hal_async::{delay::DelayNs, digital::Wait};
-use embedded_io_async::{Read, Write};
-
-use crate::{app::config::RadioConfig, memory::MemoryProfile};
+use {
+    crate::{app::config::RadioConfig, memory::MemoryProfile},
+    core::{convert::Infallible, future::Future},
+    embedded_hal_async::{delay::DelayNs, digital::Wait},
+    embedded_io_async::{Read, Write},
+};
 
 /// The services the whole board provides. The repeater shares the platform
 /// between its tasks.

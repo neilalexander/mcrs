@@ -1,10 +1,14 @@
-use crate::app::{AppContext, config::AppConfig};
-use crate::platform::{Platform, Storage};
-use alloc::{string::String, vec::Vec};
-use defmt::{error, info};
-use mcrs_protocol::{
-    AdvertAppData, AdvertNodeType, AdvertPayload, ControlMessage, ControlPayload, HashSize,
-    MAX_ADVERT_DATA_SIZE, Packet, Path, Payload, RoutePath, RouteType,
+use {
+    crate::{
+        app::{AppContext, config::AppConfig},
+        platform::{Platform, Storage},
+    },
+    alloc::{string::String, vec::Vec},
+    defmt::{error, info},
+    mcrs_protocol::{
+        AdvertAppData, AdvertNodeType, AdvertPayload, ControlMessage, ControlPayload, HashSize,
+        MAX_ADVERT_DATA_SIZE, Packet, Path, Payload, RoutePath, RouteType,
+    },
 };
 
 pub const DISCOVER_NEIGHBOURS_TTL_MS: u64 = 60_000;

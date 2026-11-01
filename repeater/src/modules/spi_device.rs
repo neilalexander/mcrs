@@ -1,11 +1,12 @@
-use core::convert::Infallible;
-
-use embedded_hal::{
-    delay::DelayNs as BlockingDelayNs,
-    digital::OutputPin,
-    spi::{ErrorType as BlockingErrorType, SpiBus as BlockingSpiBus},
+use {
+    core::convert::Infallible,
+    embedded_hal::{
+        delay::DelayNs as BlockingDelayNs,
+        digital::OutputPin,
+        spi::{ErrorType as BlockingErrorType, SpiBus as BlockingSpiBus},
+    },
+    embedded_hal_async::spi::{ErrorType as AsyncErrorType, Operation, SpiDevice},
 };
-use embedded_hal_async::spi::{ErrorType as AsyncErrorType, Operation, SpiDevice};
 
 pub struct BlockingExclusiveSpiDevice<BUS, CS, DLY> {
     bus: BUS,

@@ -11,7 +11,6 @@ pub mod platform;
 pub mod radio_metrics;
 mod repeater;
 
-pub use platform::Platform;
-pub use repeater::Repeater;
+pub use {platform::Platform, repeater::Repeater};
 
 pub const VERSION: &str = env!("MESHCORE_FIRMWARE_VERSION");
