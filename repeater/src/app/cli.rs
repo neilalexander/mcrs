@@ -895,11 +895,7 @@ async fn handle_command<P: Platform, S: Storage>(
         }
         "status" => status_text(context),
         "ver" | "version" => String::from(FIRMWARE_VERSION),
-        _ => {
-            let mut output = format!("CLI: unknown command '{}'\n", command);
-            output.push_str(&help_text());
-            output
-        }
+        _ => String::from("CLI: unknown command; use help"),
     };
 
     let mut response = command_response(request, output);
@@ -1937,9 +1933,7 @@ fn denied_text() -> String {
 }
 
 fn help_text() -> String {
-    String::from(
-        "Commands: help, ver, status, identity, radio, clock, region, region list {allowed|denied}, ota status, get {name|owner.info|lat|lon|radio|tx|dutycycle|freq|flood.max.unscoped|flood.max.advert|repeat|advert.interval|flood.advert.interval|path.hash.mode|loop.detect|public.key|status}; Privileged: time, clock sync, set, unset, set acl <pubkey> admin|deny, unset acl <pubkey>, password, neighbours, advert, advert.zerohop, discover.neighbours, region {put|remove|allowf|denyf|default}, ota {start|stop}, export config [all|delta] (serial/telnet), erase config, reboot",
-    )
+    String::from("Help: https://github.com/neilalexander/mcrs/blob/main/CONFIG.md")
 }
 
 fn status_text<P: Platform, S: Storage>(context: &AppContext<P, S>) -> String {
