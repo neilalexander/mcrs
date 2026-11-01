@@ -1,0 +1,5 @@
+[idf]
+partition_table = "partitions.csv"
+
+[flash]
+size = "8MB"

@@ -6,7 +6,7 @@ use crate::{
     wire::ensure_payload_len,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, defmt::Format)]
 pub enum Payload {
     Request(DirectEncryptedPayload),
     Response(DirectEncryptedPayload),

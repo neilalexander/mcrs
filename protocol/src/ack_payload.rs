@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use crate::{Error, Result, wire::read_array};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, defmt::Format)]
 pub struct AckPayload {
     pub ack_hash: [u8; 4],
 }

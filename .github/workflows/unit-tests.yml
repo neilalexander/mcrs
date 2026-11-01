@@ -40,7 +40,7 @@ jobs:
             unit-tests-${{ runner.os }}-
 
       - name: Run unit tests
-        run: cargo test --locked -p mcrs-protocol
+        run: cargo test --locked
 
   mqtt:
     name: MQTT transport
@@ -65,4 +65,4 @@ jobs:
             mqtt-tests-${{ runner.os }}-
 
       - name: Run unit tests
-        run: cargo test --locked -p mcrs-firmware --lib --features mqtt
+        run: cargo test --locked --features mqtt

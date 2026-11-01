@@ -5,7 +5,7 @@ use crate::{
     wire::{ensure_payload_len, read_u8, read_u32_le},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, defmt::Format)]
 pub struct ControlPayload {
     pub flags: u8,
     pub data: Vec<u8>,

@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use crate::{Error, PayloadKind, Result, wire::ensure_payload_len};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, defmt::Format)]
 pub struct MultipartPayload {
     pub remaining: u8,
     pub sub_type: PayloadKind,

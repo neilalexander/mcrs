@@ -1,0 +1,40 @@
+[package]
+name = "mcrs-repeater"
+version = "0.1.3"
+edition = "2024"
+
+[features]
+mqtt = ["dep:embassy-time","dep:base64", "dep:sha1", "dep:embedded-tls", "dep:rand_core", "dep:time"]
+
+[dependencies]
+mcrs-protocol = { path = "../protocol" }
+
+aes = { version = "0.9.3", default-features = false }
+curve25519-dalek = { version = "5.0.0", default-features = false, features = ["alloc", "precomputed-tables", "zeroize"] }
+ed25519-dalek = { version = "3.0.0", default-features = false, features = ["zeroize", "hazmat"] }
+sha2 = { version = "0.11", default-features = false }
+hmac = { version = "0.13", default-features = false }
+
+embedded-hal = "1.0.0"
+embedded-hal-async = "1.0.0"
+embedded-io-async = "0.7.0"
+
+embassy-net = { version = "0.9.1", features = ["dhcpv4", "dns", "medium-ethernet", "proto-ipv4", "tcp", "udp"] }
+embassy-time = { version = "0.5.1", optional = true }
+embassy-sync = "0.8.0"
+
+embedded-storage = "0.3.1"
+
+lora-phy = { git = "https://github.com/lora-rs/lora-rs", rev = "15332dab3b4dd39d809990b712cf3ce1f73b14a9" }
+
+# MQTT reporting, WebSocket framing and TLS 1.3 (only in MQTT builds).
+base64 = { version = "0.23.1", default-features = false, features = ["alloc"], optional = true }
+sha1 = { version = "0.11", default-features = false, optional = true }
+embedded-tls = { version = "0.19", default-features = false, optional = true }
+rand_core = { version = "0.6", default-features = false, optional = true }
+time = { version = "0.3.55", default-features = false, optional = true }
+defmt = { version = "1.2.0", features = ["alloc"] }
+
+[dev-dependencies]
+# Host tests need a critical section implementation; the firmware's HAL provides one.
+critical-section = { version = "1.2.0", features = ["std"] }

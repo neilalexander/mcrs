@@ -1,8 +1,4 @@
 [workspace]
-members = ["protocol", "firmware"]
-exclude = ["fuzz"]
+members = ["protocol", "repeater", "fuzz"]
+exclude = ["platform/esp32", "platform/nrf52840"]
 resolver = "3"
-
-# The Wi-Fi driver requires optimization even in development builds.
-[profile.dev.package.esp-radio]
-opt-level = 3
