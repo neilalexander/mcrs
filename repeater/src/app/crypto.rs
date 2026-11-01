@@ -51,7 +51,7 @@ pub fn decrypt_anonymous_request(
     let mut plaintext = payload.ciphertext.clone();
     let cipher = Aes128::new_from_slice(&shared_secret[..16]).ok()?;
 
-    for block in plaintext.chunks_exact_mut(16) {
+    for block in plaintext.as_chunks_mut::<16>().0 {
         cipher.decrypt_block(<&mut Block<Aes128>>::try_from(block).ok()?);
     }
 
@@ -269,7 +269,7 @@ fn encrypt_payload(shared_secret: &[u8; 32], plaintext: &[u8]) -> Option<([u8; 2
     ciphertext.resize(padded_len, 0);
 
     let cipher = Aes128::new_from_slice(&shared_secret[..16]).ok()?;
-    for block in ciphertext.chunks_exact_mut(16) {
+    for block in ciphertext.as_chunks_mut::<16>().0 {
         cipher.encrypt_block(<&mut Block<Aes128>>::try_from(block).ok()?);
     }
 
@@ -280,7 +280,7 @@ fn decrypt_payload(shared_secret: &[u8; 32], ciphertext: &[u8]) -> Option<Vec<u8
     let mut plaintext = ciphertext.to_vec();
     let cipher = Aes128::new_from_slice(&shared_secret[..16]).ok()?;
 
-    for block in plaintext.chunks_exact_mut(16) {
+    for block in plaintext.as_chunks_mut::<16>().0 {
         cipher.decrypt_block(<&mut Block<Aes128>>::try_from(block).ok()?);
     }
 

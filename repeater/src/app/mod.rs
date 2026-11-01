@@ -389,7 +389,7 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
                 self.with_config(|config| {
                     config
                         .regions()
-                        .match_flood_region(&packet)
+                        .match_flood_region(packet)
                         .map(|region| String::from(region.display_name()))
                 })
                 .await
@@ -417,7 +417,7 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
 
     fn record_packet_received(&self, rssi: i16, snr_quarters: i16) {
         self.packets_received
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
                 Some(count.saturating_add(1))
             })
             .ok();
@@ -428,7 +428,7 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
 
     fn record_packet_sent(&self) {
         self.packets_sent
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
                 Some(count.saturating_add(1))
             })
             .ok();
@@ -436,7 +436,7 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
 
     fn record_tx_airtime(&self, airtime_ms: u32) {
         self.tx_airtime_ms
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |total| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |total| {
                 Some(total.saturating_add(airtime_ms))
             })
             .ok();
@@ -444,7 +444,7 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
 
     fn record_packet_error(&self) {
         self.packet_errors
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
                 Some(count.saturating_add(1))
             })
             .ok();

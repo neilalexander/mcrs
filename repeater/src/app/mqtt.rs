@@ -11,17 +11,12 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use core::fmt::Write as _;
 use core::{
     cell::{Cell, RefCell},
-    fmt,
-    future::{Future, poll_fn},
-    pin::pin,
-    sync::atomic::{AtomicI16, AtomicU8, AtomicU16, AtomicU32, Ordering},
-    task::{Poll, Waker},
+    sync::atomic::{AtomicU8, Ordering},
+    task::Waker,
 };
 use embassy_sync::{
-    blocking_mutex::{Mutex as BlockingMutex, raw::CriticalSectionRawMutex},
+    blocking_mutex::raw::CriticalSectionRawMutex,
     channel::Channel,
-    mutex::Mutex,
-    signal::Signal,
 };
 
 pub mod client;
@@ -111,6 +106,12 @@ impl MqttContext {
 
     pub fn get_error(&self, index: usize) -> Option<ConnectionError> {
         self.errors.get(index).and_then(Cell::get)
+    }
+}
+
+impl Default for MqttContext {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

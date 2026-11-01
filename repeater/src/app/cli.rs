@@ -126,6 +126,12 @@ impl Cli {
     }
 }
 
+impl Default for Cli {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Runs the CLI on the local console, echoing what the user types.
 pub(crate) async fn serve_console<P, S, C>(mut console: C, context: &AppContext<P, S>) -> !
 where
@@ -261,7 +267,7 @@ async fn handle_anonymous_request<P: Platform, S: Storage>(
             sender
         );
         return encode_login_response(
-            &context,
+            context,
             &decrypted.shared_secret,
             &decrypted.sender_pubkey,
             &responder_public_key,
@@ -285,7 +291,7 @@ async fn handle_anonymous_request<P: Platform, S: Storage>(
         context.request_reboot_after_next_remote_reply();
     }
     encode_remote_cli_reply(
-        &context,
+        context,
         &decrypted.shared_secret,
         &decrypted.sender_pubkey,
         &responder_public_key,
@@ -352,7 +358,7 @@ async fn handle_authenticated_text_message<P: Platform, S: Storage>(
         response.text.insert_str(0, prefix);
     }
     encode_remote_cli_reply(
-        &context,
+        context,
         &decrypted.shared_secret,
         &decrypted.sender_pubkey,
         &responder_public_key,
@@ -1892,7 +1898,7 @@ fn encode_remote_cli_reply<P: Platform, S: Storage>(
 ) -> Option<alloc::vec::Vec<u8>> {
     truncate_to_remote_reply_len(&mut output);
     encode_cli_text_response(
-        &context,
+        context,
         shared_secret,
         requester_public_key,
         responder_public_key,

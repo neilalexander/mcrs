@@ -374,6 +374,12 @@ impl RegionMap {
     }
 }
 
+impl Default for RegionMap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, defmt::Format)]
 pub enum RegionError {
     EmptyName,

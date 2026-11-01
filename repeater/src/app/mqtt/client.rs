@@ -87,12 +87,11 @@ pub async fn run<P: Platform, S: Storage, G: RngCore + CryptoRng>(
         ))
         .await;
         // Cancellation by an explicit restart is not a connection failure.
-        if context.mqtt.generation() == generation {
-            if let Err(error) = result {
+        if context.mqtt.generation() == generation
+            && let Err(error) = result {
                 context.mqtt.set_error(index, Some(error));
                 warn!("MQTT {}: {}", index + 1, error.as_str());
             }
-        }
         context.mqtt.set_state(index, ConnectionState::Disconnected);
         wait_mqtt_retry_or_restart(context, index, generation, 10).await;
     }
