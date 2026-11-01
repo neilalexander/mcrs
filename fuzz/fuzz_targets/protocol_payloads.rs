@@ -1,11 +1,13 @@
 #![no_main]
 
-use libfuzzer_sys::fuzz_target;
-use mcrs_protocol::{
-    AdvertAppData, AdvertPayload, AnonymousRequestPayload, ControlPayload, DirectEncryptedPayload,
-    GroupEncryptedPayload, MultipartPayload, PathPlaintext, RepeaterLoginResponsePlaintext,
-    RepeaterResponsePlaintext, RepeaterSubRequestPlaintext, RequestPlaintext, TextMessagePlaintext,
-    TracePayload,
+use {
+    libfuzzer_sys::fuzz_target,
+    mcrs_protocol::{
+        AdvertAppData, AdvertPayload, AnonymousRequestPayload, ControlPayload,
+        DirectEncryptedPayload, GroupEncryptedPayload, MultipartPayload, PathPlaintext,
+        RepeaterLoginResponsePlaintext, RepeaterResponsePlaintext, RepeaterSubRequestPlaintext,
+        RequestPlaintext, TextMessagePlaintext, TracePayload,
+    },
 };
 
 fuzz_target!(|data: &[u8]| {

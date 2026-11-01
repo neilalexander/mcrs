@@ -4,21 +4,22 @@ use core::{
     hint::spin_loop,
 };
 
-use alloc::vec;
-use critical_section::Mutex;
-use defmt::{Debug2Format, error, info, warn};
-use embassy_time::{Duration as EmbassyDuration, Timer};
-use embedded_hal::delay::DelayNs as BlockingDelayNs;
-use embedded_hal_async::delay::DelayNs;
-use esp_bootloader_esp_idf::{
-    ota_updater::OtaUpdater,
-    partitions::{AppPartitionSubType, PartitionType},
+use {
+    alloc::vec,
+    critical_section::Mutex,
+    defmt::{Debug2Format, error, info, warn},
+    embassy_time::{Duration as EmbassyDuration, Timer},
+    embedded_hal::delay::DelayNs as BlockingDelayNs,
+    embedded_hal_async::delay::DelayNs,
+    esp_backtrace as _,
+    esp_bootloader_esp_idf::{
+        ota_updater::OtaUpdater,
+        partitions::{AppPartitionSubType, PartitionType},
+    },
+    esp_hal::{clock::CpuClock, peripherals::Peripherals, rtc_cntl::Rtc, time::Instant},
+    esp_println::{print, println},
+    mcrs_repeater::{VERSION, radio_metrics::SnrDb},
 };
-use esp_hal::{clock::CpuClock, peripherals::Peripherals, rtc_cntl::Rtc, time::Instant};
-use esp_println::{print, println};
-
-use esp_backtrace as _;
-use mcrs_repeater::{VERSION, radio_metrics::SnrDb};
 
 // Use the HAL's supported descriptor section, preserving the git-derived version.
 esp_bootloader_esp_idf::esp_app_desc!(

@@ -1,9 +1,14 @@
 //! MQTT endpoints and bounded RFC 6455 binary-stream framing.
-use alloc::{format, vec, vec::Vec};
-use base64::{Engine, engine::general_purpose::STANDARD};
-use embassy_sync::{blocking_mutex::raw::NoopRawMutex, signal::Signal};
-use embedded_io_async::{Read, Write};
-use sha1::{Digest, Sha1};
+use {
+    alloc::{
+        format,
+        vec::{self, Vec},
+    },
+    base64::{Engine, engine::general_purpose::STANDARD},
+    embassy_sync::{blocking_mutex::raw::NoopRawMutex, signal::Signal},
+    embedded_io_async::{Read, Write},
+    sha1::{Digest, Sha1},
+};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Endpoint<'a> {
@@ -273,11 +278,13 @@ pub async fn write<W: Write>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use core::{
-        future::Future,
-        pin::pin,
-        task::{Context, Poll, Waker},
+    use {
+        super::*,
+        core::{
+            future::Future,
+            pin::pin,
+            task::{Context, Poll, Waker},
+        },
     };
 
     fn run<T>(future: impl Future<Output = T>) -> T {

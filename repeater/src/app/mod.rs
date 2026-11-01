@@ -18,24 +18,26 @@ mod remote;
 pub mod telnet;
 pub(crate) mod ui;
 
-use alloc::{string::String, vec::Vec};
-use core::{
-    cell::{Cell, RefCell},
-    fmt,
-    future::{Future, poll_fn},
-    pin::pin,
-    sync::atomic::{AtomicI16, AtomicU8, AtomicU16, AtomicU32, Ordering},
-    task::{Poll, Waker},
+use {
+    alloc::{string::String, vec::Vec},
+    core::{
+        cell::{Cell, RefCell},
+        fmt,
+        future::{Future, poll_fn},
+        pin::pin,
+        sync::atomic::{AtomicI16, AtomicU8, AtomicU16, AtomicU32, Ordering},
+        task::{Poll, Waker},
+    },
+    defmt::{debug, error, info, warn},
+    embassy_sync::{
+        blocking_mutex::{Mutex as BlockingMutex, raw::CriticalSectionRawMutex},
+        channel::Channel,
+        mutex::Mutex,
+        signal::Signal,
+    },
+    embedded_hal_async::delay::DelayNs,
+    mcrs_protocol::{HashSize, Packet, Path, PayloadKind, RoutePath, RouteType, SeenPacketCache},
 };
-use defmt::{debug, error, info, warn};
-use embassy_sync::{
-    blocking_mutex::{Mutex as BlockingMutex, raw::CriticalSectionRawMutex},
-    channel::Channel,
-    mutex::Mutex,
-    signal::Signal,
-};
-use embedded_hal_async::delay::DelayNs;
-use mcrs_protocol::{HashSize, Packet, Path, PayloadKind, RoutePath, RouteType, SeenPacketCache};
 
 #[cfg(feature = "mqtt")]
 use crate::app::mqtt::MqttContext;

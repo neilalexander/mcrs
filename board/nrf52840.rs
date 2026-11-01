@@ -3,25 +3,27 @@
 #![no_std]
 #![no_main]
 
-use mcrs_nrf::{HEAP_SIZE, NrfPlatform, NrfRadio};
-use embassy_nrf::{
-    bind_interrupts,
-    gpio::{Input, Level, Output, OutputDrive, Pull},
-    peripherals,
-    rng::Rng,
-    spim::{self, Spim},
+use {
+    defmt_rtt as _,
+    embassy_nrf::{
+        bind_interrupts,
+        gpio::{Input, Level, Output, OutputDrive, Pull},
+        peripherals,
+        rng::Rng,
+        spim::{self, Spim},
+    },
+    embassy_time::Delay,
+    embedded_alloc::LlffHeap as Heap,
+    embedded_hal_bus::spi::ExclusiveDevice,
+    lora_phy::sx126x::TcxoCtrlVoltage,
+    mcrs_nrf::{HEAP_SIZE, NrfPlatform, NrfRadio},
+    mcrs_repeater::{
+        Repeater,
+        modules::sx1262::BoardConfig,
+        platform::{NoBattery, NoButton, NoConsole, NoDisplay, NoStorage},
+    },
+    panic_probe as _,
 };
-use embassy_time::Delay;
-use embedded_alloc::LlffHeap as Heap;
-use embedded_hal_bus::spi::ExclusiveDevice;
-use lora_phy::sx126x::TcxoCtrlVoltage;
-use mcrs_repeater::{
-    Repeater,
-    modules::sx1262::BoardConfig,
-    platform::{NoBattery, NoButton, NoConsole, NoDisplay, NoStorage},
-};
-use {defmt_rtt as _, panic_probe as _};
-
 
 const MODEL: &str = "nRF52840";
 

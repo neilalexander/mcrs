@@ -1,19 +1,25 @@
 extern crate alloc;
 
-use crate::{
-    app::{
-        AppContext,
-        crypto::{encode_cli_text_response, encode_login_response},
+use {
+    crate::{
+        app::{
+            AppContext,
+            crypto::{encode_cli_text_response, encode_login_response},
+        },
+        platform::{Platform, Storage},
     },
-    platform::{Platform, Storage},
-};
-use alloc::{format, string::String, vec, vec::Vec};
-use core::fmt::Write;
-use defmt::{debug, info, warn};
-use embedded_io_async::Read;
-use mcrs_protocol::{
-    PERM_ACL_ADMIN, PERM_ACL_GUEST, Packet, Payload, RepeaterResponsePlaintext, RequestPlaintext,
-    TextMessagePlaintext, TextType,
+    alloc::{
+        format,
+        string::String,
+        vec::{self, Vec},
+    },
+    core::fmt::Write,
+    defmt::{debug, info, warn},
+    embedded_io_async::Read,
+    mcrs_protocol::{
+        PERM_ACL_ADMIN, PERM_ACL_GUEST, Packet, Payload, RepeaterResponsePlaintext,
+        RequestPlaintext, TextMessagePlaintext, TextType,
+    },
 };
 
 const LINE_BUFFER_LEN: usize = 160;
@@ -1055,7 +1061,11 @@ async fn handle_get_command<P: Platform, S: Storage>(
                 .with_config(|config| format!("> {}", config.path_hash_mode()))
                 .await
         }
-        "tier" => context.with_config(|config| format!("> {}", config.tier())).await,
+        "tier" => {
+            context
+                .with_config(|config| format!("> {}", config.tier()))
+                .await
+        }
         "loop.detect" => {
             context
                 .with_config(|config| format!("> {}", config.loop_detection().as_str()))

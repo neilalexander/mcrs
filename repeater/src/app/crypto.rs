@@ -1,20 +1,21 @@
 extern crate alloc;
 
-use crate::{Platform, app::AppContext, platform::Storage};
-
-use super::identity::Identity;
-use aes::{
-    Aes128,
-    cipher::{Block, BlockCipherDecrypt, BlockCipherEncrypt, KeyInit},
+use {
+    super::identity::Identity,
+    crate::{Platform, app::AppContext, platform::Storage},
+    aes::{
+        Aes128,
+        cipher::{Block, BlockCipherDecrypt, BlockCipherEncrypt, KeyInit},
+    },
+    alloc::vec::Vec,
+    hmac::{Hmac, Mac},
+    mcrs_protocol::{
+        AnonymousRequestPayload, DirectEncryptedPayload, PERM_ACL_ADMIN, Packet, Path,
+        PathPlaintext, Payload, PayloadKind, RepeaterLoginResponsePlaintext, RoutePath, RouteType,
+        TextMessagePlaintext, TextType,
+    },
+    sha2::Sha256,
 };
-use alloc::vec::Vec;
-use hmac::{Hmac, Mac};
-use mcrs_protocol::{
-    AnonymousRequestPayload, DirectEncryptedPayload, PERM_ACL_ADMIN, Packet, Path, PathPlaintext,
-    Payload, PayloadKind, RepeaterLoginResponsePlaintext, RoutePath, RouteType,
-    TextMessagePlaintext, TextType,
-};
-use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -312,8 +313,7 @@ fn mac_for_ciphertext(shared_secret: &[u8; 32], ciphertext: &[u8]) -> Option<[u8
 mod tests {
     use alloc::vec;
 
-    use super::super::identity::PrivateKey;
-    use super::*;
+    use super::{super::identity::PrivateKey, *};
 
     #[test]
     fn encrypted_payload_matches_aes_and_hmac_vectors() {

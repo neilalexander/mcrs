@@ -18,36 +18,38 @@ pub(crate) mod rng;
 
 pub use esp::*;
 
-use crate::heltec::{
-    BatteryMonitor, BoardRadio, MEMORY_PROFILE, RadioFrontend, STORAGE_LAYOUT, WifiResources,
-};
-use defmt::{debug, error, Debug2Format};
-use esp_hal::{
-    Blocking,
-    gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull},
-    i2c::master::{Config as I2cConfig, I2c},
-    interrupt::software::SoftwareInterruptControl,
-    peripherals::{
-        ADC1, GPIO0, GPIO1, GPIO2, GPIO5, GPIO7, GPIO8, GPIO9, GPIO10, GPIO11, GPIO12, GPIO13,
-        GPIO14, GPIO17, GPIO18, GPIO21, GPIO36, GPIO37, GPIO43, GPIO44, GPIO46, I2C0, RNG, SPI2,
-        UART0, USB_DEVICE, WIFI,
+use {
+    crate::heltec::{
+        BatteryMonitor, BoardRadio, MEMORY_PROFILE, RadioFrontend, STORAGE_LAYOUT, WifiResources,
     },
-    spi::{
-        Mode,
-        master::{Config as SpiConfig, Spi},
+    defmt::{Debug2Format, debug, error},
+    esp_hal::{
+        Blocking,
+        gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull},
+        i2c::master::{Config as I2cConfig, I2c},
+        interrupt::software::SoftwareInterruptControl,
+        peripherals::{
+            ADC1, GPIO0, GPIO1, GPIO2, GPIO5, GPIO7, GPIO8, GPIO9, GPIO10, GPIO11, GPIO12, GPIO13,
+            GPIO14, GPIO17, GPIO18, GPIO21, GPIO36, GPIO37, GPIO43, GPIO44, GPIO46, I2C0, RNG,
+            SPI2, UART0, USB_DEVICE, WIFI,
+        },
+        spi::{
+            Mode,
+            master::{Config as SpiConfig, Spi},
+        },
+        time::Rate,
+        timer::timg::TimerGroup,
     },
-    time::Rate,
-    timer::timg::TimerGroup,
-};
-use mcrs_repeater::{
-    app::config::RadioConfig,
-    memory::MemoryProfile,
-    modules::{
-        spi_device::BlockingExclusiveSpiDevice,
-        ssd1306::{self, PowerActiveLevel},
-        sx1262,
+    mcrs_repeater::{
+        app::config::RadioConfig,
+        memory::MemoryProfile,
+        modules::{
+            spi_device::BlockingExclusiveSpiDevice,
+            ssd1306::{self, PowerActiveLevel},
+            sx1262,
+        },
+        platform::{Platform, RadioHardware},
     },
-    platform::{Platform, RadioHardware},
 };
 
 pub use mcrs_repeater::modules::sx1262::BoardConfig;

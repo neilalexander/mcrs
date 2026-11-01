@@ -1,9 +1,10 @@
-use alloc::vec::Vec;
-use sha2::{Digest, Sha256};
-
-use crate::{
-    Error, Header, MAX_PACKET_PAYLOAD, MAX_TRANS_UNIT, Path, Payload, PayloadKind, Result,
-    RoutePath, RouteType, TracePath, TransportCodes,
+use {
+    crate::{
+        Error, Header, MAX_PACKET_PAYLOAD, MAX_TRANS_UNIT, Path, Payload, PayloadKind, Result,
+        RoutePath, RouteType, TracePath, TransportCodes,
+    },
+    alloc::vec::Vec,
+    sha2::{Digest, Sha256},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, defmt::Format)]

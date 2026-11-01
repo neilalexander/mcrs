@@ -1,17 +1,22 @@
 //! MQTT connections over an Embassy network stack, independent of board hardware.
-use crate::{
-    VERSION,
-    app::AppContext,
-    platform::{Platform, Storage},
+use {
+    crate::{
+        VERSION,
+        app::AppContext,
+        platform::{Platform, Storage},
+    },
+    alloc::{format, string::String},
+    core::{
+        cell::RefCell,
+        future::{Future, poll_fn},
+        pin::pin,
+        task::Poll,
+    },
+    defmt::{info, warn},
+    embassy_net::tcp::{Error, TcpSocket},
+    embedded_io_async::{ErrorType, Read, Write},
+    rand_core::{CryptoRng, RngCore},
 };
-use alloc::{format, string::String};
-use core::{
-    future::{Future, poll_fn},
-    pin::pin,
-    task::Poll,
-};
-use defmt::{info, warn};
-use rand_core::{CryptoRng, RngCore};
 
 const MQTT_STATUS_INTERVAL_SECS: u64 = 15 * 60;
 
@@ -20,10 +25,6 @@ fn random_bytes<const N: usize>(rng: &mut impl RngCore) -> [u8; N] {
     rng.fill_bytes(&mut bytes);
     bytes
 }
-
-use core::cell::RefCell;
-use embassy_net::tcp::{Error, TcpSocket};
-use embedded_io_async::{ErrorType, Read, Write};
 
 // Each poll borrows the socket only for that poll. Embassy TCP read/write have
 // no per-future state and are cancellation safe, allowing TLS's split halves to
@@ -88,10 +89,11 @@ pub async fn run<P: Platform, S: Storage, G: RngCore + CryptoRng>(
         .await;
         // Cancellation by an explicit restart is not a connection failure.
         if context.mqtt.generation() == generation
-            && let Err(error) = result {
-                context.mqtt.set_error(index, Some(error));
-                warn!("MQTT {}: {}", index + 1, error.as_str());
-            }
+            && let Err(error) = result
+        {
+            context.mqtt.set_error(index, Some(error));
+            warn!("MQTT {}: {}", index + 1, error.as_str());
+        }
         context.mqtt.set_state(index, ConnectionState::Disconnected);
         wait_mqtt_retry_or_restart(context, index, generation, 10).await;
     }
@@ -105,9 +107,13 @@ async fn mqtt_session<P: Platform, S: Storage, G: RngCore + CryptoRng>(
     config: &crate::app::config::MqttConfig,
     make_rng: impl Fn() -> G + Copy,
 ) -> Result<(), crate::app::mqtt::ConnectionError> {
-    use crate::app::mqtt::ConnectionError;
-    use crate::app::mqtt::transport::{self, Endpoint};
-    use embedded_tls::{Aes128GcmSha256, TlsConfig, TlsConnection, TlsContext, UnsecureProvider};
+    use {
+        crate::app::mqtt::{
+            ConnectionError,
+            transport::{self, Endpoint},
+        },
+        embedded_tls::{Aes128GcmSha256, TlsConfig, TlsConnection, TlsContext, UnsecureProvider},
+    };
 
     let endpoint =
         Endpoint::parse(&config.host, config.port).map_err(|_| ConnectionError::Config)?;
@@ -249,8 +255,10 @@ async fn mqtt_connected<
     mut writer: W,
     make_rng: impl Fn() -> G + Copy,
 ) -> Result<(), crate::app::mqtt::ConnectionError> {
-    use crate::app::mqtt::{self, ConnectionError, transport};
-    use embassy_sync::{blocking_mutex::raw::NoopRawMutex, signal::Signal};
+    use {
+        crate::app::mqtt::{self, ConnectionError, transport},
+        embassy_sync::{blocking_mutex::raw::NoopRawMutex, signal::Signal},
+    };
 
     let (public_key, credentials) = context
         .with_identity(|identity| {

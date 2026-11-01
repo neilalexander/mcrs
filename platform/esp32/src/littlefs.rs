@@ -1,8 +1,9 @@
-use alloc::{vec, vec::Vec};
-use littlefs_rust::{BlockDevice, Error as FsError, Filesystem, FilesystemOptions};
-
-use super::esp::FlashPartition;
-use mcrs_repeater::platform::{Storage, storage::Error};
+use {
+    super::esp::FlashPartition,
+    alloc::{vec, vec::Vec},
+    littlefs_rust::{BlockDevice, Error as FsError, Filesystem, FilesystemOptions},
+    mcrs_repeater::platform::{Storage, storage::Error},
+};
 
 const MAX_KEY_LEN: usize = 64;
 const TEMP_PATH: &str = ".pending";

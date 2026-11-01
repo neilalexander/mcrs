@@ -1,16 +1,16 @@
-use crate::platform::ReceivedPacket;
-use crate::radio_metrics::PacketMetrics;
-use defmt::Debug2Format;
-use defmt::error;
-use embedded_hal::digital::OutputPin;
-use embedded_hal_async::{delay::DelayNs, digital::Wait, spi::SpiDevice};
-use lora_phy::{
-    LoRa, RxMode,
-    iv::GenericSx126xInterfaceVariant,
-    mod_params::{
-        Bandwidth, CodingRate, ModulationParams, PacketParams, RadioError, SpreadingFactor,
+use {
+    crate::{platform::ReceivedPacket, radio_metrics::PacketMetrics},
+    defmt::{Debug2Format, error},
+    embedded_hal::digital::OutputPin,
+    embedded_hal_async::{delay::DelayNs, digital::Wait, spi::SpiDevice},
+    lora_phy::{
+        LoRa, RxMode,
+        iv::GenericSx126xInterfaceVariant,
+        mod_params::{
+            Bandwidth, CodingRate, ModulationParams, PacketParams, RadioError, SpreadingFactor,
+        },
+        sx126x::{Config, Sx126x, Sx1262, TcxoCtrlVoltage},
     },
-    sx126x::{Config, Sx126x, Sx1262, TcxoCtrlVoltage},
 };
 
 pub const ENABLE_PUBLIC_NETWORK: bool = false;

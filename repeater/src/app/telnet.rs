@@ -1,7 +1,9 @@
-use super::{AppContext, cli::PostReplyAction};
-use crate::platform::{Platform, Storage};
-use defmt::info;
-use embedded_io_async::Write as _;
+use {
+    super::{AppContext, cli::PostReplyAction},
+    crate::platform::{Platform, Storage},
+    defmt::info,
+    embedded_io_async::Write as _,
+};
 
 const TELNET_PORT: u16 = 23;
 const LINE_BUFFER_LEN: usize = 160;

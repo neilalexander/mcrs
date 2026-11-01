@@ -1,22 +1,23 @@
 #![no_std]
 
 //! The repeater platform for an nRF52840 with an SX1262 radio.
-use core::cell::{Cell, RefCell};
-use defmt::Debug2Format;
-use defmt::{debug, error};
-use embassy_nrf::{
-    gpio::{Input, Output},
-    mode::Blocking,
-    rng::Rng,
-    spim::Spim,
-};
-use embassy_time::{Delay, Instant};
-use embedded_hal_bus::spi::ExclusiveDevice;
-use mcrs_repeater::{
-    app::config::RadioConfig,
-    memory::MemoryProfile,
-    modules::sx1262::{self, BoardConfig},
-    platform::{Platform, RadioHardware},
+use {
+    core::cell::{Cell, RefCell},
+    defmt::{Debug2Format, debug, error},
+    embassy_nrf::{
+        gpio::{Input, Output},
+        mode::Blocking,
+        rng::Rng,
+        spim::Spim,
+    },
+    embassy_time::{Delay, Instant},
+    embedded_hal_bus::spi::ExclusiveDevice,
+    mcrs_repeater::{
+        app::config::RadioConfig,
+        memory::MemoryProfile,
+        modules::sx1262::{self, BoardConfig},
+        platform::{Platform, RadioHardware},
+    },
 };
 
 /// The heap the repeater's tables and queues are allocated from.

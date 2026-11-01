@@ -1,7 +1,11 @@
-use alloc::{string::String, vec, vec::Vec};
-
-use crate::*;
-use ed25519_dalek::{Signer, SigningKey};
+use {
+    crate::*,
+    alloc::{
+        string::String,
+        vec::{self, Vec},
+    },
+    ed25519_dalek::{Signer, SigningKey},
+};
 
 #[test]
 fn header_round_trips() {

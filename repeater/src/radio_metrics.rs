@@ -44,19 +44,20 @@ impl From<lora_phy::mod_params::PacketStatus> for PacketMetrics {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use alloc::format;
-    use embedded_hal_async::spi::{ErrorType, Operation, SpiDevice};
-
-    use core::{
-        future::Future,
-        pin::pin,
-        task::{Context, Poll, Waker},
-    };
-    use lora_phy::{
-        mod_params::RadioError,
-        mod_traits::{InterfaceVariant, RadioKind},
-        sx126x::{Config, Sx126x, Sx1262},
+    use {
+        super::*,
+        alloc::format,
+        core::{
+            future::Future,
+            pin::pin,
+            task::{Context, Poll, Waker},
+        },
+        embedded_hal_async::spi::{ErrorType, Operation, SpiDevice},
+        lora_phy::{
+            mod_params::RadioError,
+            mod_traits::{InterfaceVariant, RadioKind},
+            sx126x::{Config, Sx126x, Sx1262},
+        },
     };
 
     fn run<T>(future: impl Future<Output = T>) -> T {
