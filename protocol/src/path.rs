@@ -1,6 +1,5 @@
-use alloc::vec::Vec;
-
 use crate::{Error, HashSize, MAX_PATH_SIZE, Result};
+use alloc::vec::Vec;
 
 #[derive(Debug, Clone, PartialEq, Eq, defmt::Format)]
 pub struct Path {

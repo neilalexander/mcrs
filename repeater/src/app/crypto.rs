@@ -1,8 +1,5 @@
-extern crate alloc;
-
-use crate::{Platform, app::AppContext, platform::Storage};
-
 use super::identity::Identity;
+use crate::{Platform, app::AppContext, platform::Storage};
 use aes::{
     Aes128,
     cipher::{Block, BlockCipherDecrypt, BlockCipherEncrypt, KeyInit},
@@ -312,8 +309,7 @@ fn mac_for_ciphertext(shared_secret: &[u8; 32], ciphertext: &[u8]) -> Option<[u8
 mod tests {
     use alloc::vec;
 
-    use super::super::identity::PrivateKey;
-    use super::*;
+    use super::{super::identity::PrivateKey, *};
 
     #[test]
     fn encrypted_payload_matches_aes_and_hmac_vectors() {

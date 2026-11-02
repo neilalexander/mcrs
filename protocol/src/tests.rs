@@ -1,6 +1,5 @@
-use alloc::{string::String, vec, vec::Vec};
-
 use crate::*;
+use alloc::{string::String, vec, vec::Vec};
 use ed25519_dalek::{Signer, SigningKey};
 
 #[test]

@@ -8,16 +8,13 @@ use alloc::{
     vec::Vec,
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use core::fmt::Write as _;
 use core::{
     cell::{Cell, RefCell},
+    fmt::Write as _,
     sync::atomic::{AtomicU8, Ordering},
     task::Waker,
 };
-use embassy_sync::{
-    blocking_mutex::raw::CriticalSectionRawMutex,
-    channel::Channel,
-};
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 
 pub mod client;
 pub mod transport;

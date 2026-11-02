@@ -4,10 +4,9 @@
 use defmt::error;
 use embassy_futures::join::join;
 use esp_hal::uart::{Config as UartConfig, Uart};
-use mcrs_esp32s3::heltec::wifi_task;
 use mcrs_esp32s3::{
     BoardConfig, Devices, Repeater,
-    heltec::NoRadioFrontend,
+    heltec::{NoRadioFrontend, wifi_task},
     idle_loop,
 };
 

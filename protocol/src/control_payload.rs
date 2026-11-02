@@ -1,9 +1,8 @@
-use alloc::{vec, vec::Vec};
-
 use crate::{
     AdvertNodeType, ControlMessage, Error, Result,
     wire::{ensure_payload_len, read_u8, read_u32_le},
 };
+use alloc::{vec, vec::Vec};
 
 #[derive(Debug, Clone, PartialEq, Eq, defmt::Format)]
 pub struct ControlPayload {

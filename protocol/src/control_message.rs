@@ -1,6 +1,5 @@
-use alloc::vec::Vec;
-
 use crate::{AdvertNodeType, ControlPayload};
+use alloc::vec::Vec;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlMessage {

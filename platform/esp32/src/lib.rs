@@ -21,7 +21,7 @@ pub use esp::*;
 use crate::heltec::{
     BatteryMonitor, BoardRadio, MEMORY_PROFILE, RadioFrontend, STORAGE_LAYOUT, WifiResources,
 };
-use defmt::{debug, error, Debug2Format};
+use defmt::{Debug2Format, debug, error};
 use esp_hal::{
     Blocking,
     gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull},

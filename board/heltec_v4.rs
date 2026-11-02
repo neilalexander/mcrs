@@ -8,10 +8,9 @@ use esp_hal::{
     gpio::{Flex, InputConfig, Level, Output, OutputConfig},
     usb_serial_jtag::UsbSerialJtag,
 };
-use mcrs_esp32s3::heltec::wifi_task;
 use mcrs_esp32s3::{
     BoardConfig, Devices, Repeater,
-    heltec::{RadioFrontend, RadioOutput},
+    heltec::{RadioFrontend, RadioOutput, wifi_task},
     radio_delay,
 };
 

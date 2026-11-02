@@ -2,8 +2,7 @@
 
 //! The repeater platform for an nRF52840 with an SX1262 radio.
 use core::cell::{Cell, RefCell};
-use defmt::Debug2Format;
-use defmt::{debug, error};
+use defmt::{Debug2Format, debug, error};
 use embassy_nrf::{
     gpio::{Input, Output},
     mode::Blocking,

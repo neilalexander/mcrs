@@ -1,10 +1,9 @@
-use alloc::vec::Vec;
-
 use crate::{
     AckPayload, AdvertPayload, AnonymousRequestPayload, ControlPayload, DirectEncryptedPayload,
     GroupEncryptedPayload, MultipartPayload, PayloadKind, Result, TracePayload,
     wire::ensure_payload_len,
 };
+use alloc::vec::Vec;
 
 #[derive(Debug, Clone, PartialEq, Eq, defmt::Format)]
 pub enum Payload {

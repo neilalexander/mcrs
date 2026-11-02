@@ -1,17 +1,15 @@
 //! The status screen and the user button. A press wakes the screen, and
 //! holding the button sends a zero-hop advert.
+use super::AppContext;
+use crate::platform::{DisplayStatus, Platform, StatusDisplay, Storage};
 use alloc::string::String;
 use core::{
     future::{Future, poll_fn},
     pin::pin,
     task::Poll,
 };
-
 use defmt::{debug, error, info};
 use embedded_hal_async::{delay::DelayNs, digital::Wait};
-
-use super::AppContext;
-use crate::platform::{DisplayStatus, Platform, StatusDisplay, Storage};
 
 const DISPLAY_AWAKE_MS: u32 = 5_000;
 const ADVERT_HOLD_MS: u32 = 2_000;

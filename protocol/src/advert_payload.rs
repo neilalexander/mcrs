@@ -1,5 +1,4 @@
 use alloc::vec::Vec;
-
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
 use crate::{

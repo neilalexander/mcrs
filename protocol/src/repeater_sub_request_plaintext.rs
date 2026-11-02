@@ -1,9 +1,8 @@
-use alloc::vec::Vec;
-
 use crate::{
     Error, Path, Result,
     wire::{read_u8, read_u32_le},
 };
+use alloc::vec::Vec;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepeaterSubRequestPlaintext {
