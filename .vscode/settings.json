@@ -1,0 +1,14 @@
+{
+    "rust-analyzer.check.allTargets": false,
+    "rust-analyzer.checkOnSave": true,
+    "rust-analyzer.linkedProjects": [
+        "platform/esp32/Cargo.toml",
+        "platform/nrf52840/Cargo.toml",
+        "Cargo.toml",
+    ],
+    "rust-analyzer.restartServerOnConfigChange": true,
+    "rust-analyzer.testExplorer": true,
+    "rust-analyzer.cargo.allTargets": false,
+    "rust-analyzer.server.path": "rust-analyzer",
+    "rust-analyzer.workspace.discoverConfig": null,
+}

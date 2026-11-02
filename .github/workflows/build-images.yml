@@ -27,7 +27,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  MCRS_PROFILE: ${{ inputs.PROFILE || '' }}
 
 jobs:
   build_esp32:
@@ -39,25 +39,22 @@ jobs:
         board:
           - id: heltec-v3
             name: Heltec V3
-            build_target: esp32s3
             make_target: heltec-v3-bins
+            package: mcrs-heltec_v3
           - id: heltec-v4
             name: Heltec V4
-            build_target: esp32s3
-            make_target: heltec-v4-bins
-          - id: heltec-wsl3
-            name: Heltec WSL3
-            build_target: esp32s3
-            make_target: heltec-wsl3-bins
+            make_target: heltec-v3-bins
+            package: mcrs-heltec_v4
         variant:
           - id: standard
             name_suffix: ""
             artifact_suffix: ""
-            mqtt: 0
+            features: ""
           - id: mqtt
             name_suffix: " MQTT"
             artifact_suffix: -mqtt
-            mqtt: 1
+            # The board crates have no features of their own.
+            features: "--features mcrs-esp32s3/mqtt"
 
     steps:
       - name: Check out repository
@@ -70,32 +67,37 @@ jobs:
         id: version
         run: echo "version=$(make --no-print-directory -s print-version)" >> "$GITHUB_OUTPUT"
 
-      - name: Install Rust for Xtensa
-        uses: esp-rs/xtensa-toolchain@v1.7.0
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
         with:
-          buildtargets: ${{ matrix.board.build_target }}
-          default: false
-          ldproxy: false
-          override: false
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
 
+      # flake.lock pins esp-rs-nix to an SSH URL, but runners have no GitHub
+      # SSH key. The repository is public, so fetch it over HTTPS instead.
+      - name: Fetch flake inputs over HTTPS
+        run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+
+      # The toolchain comes from flake.lock, so only reuse build output built by it.
       - name: Cache Cargo
         uses: actions/cache@v6
         with:
           path: |
             ~/.cargo
             platform/esp32/target
-          key: ${{ matrix.board.id }}-${{ runner.os }}-${{ hashFiles('platform/esp32/Cargo.lock') }}
+          key: ${{ matrix.board.id }}${{ matrix.variant.artifact_suffix }}-${{ runner.os }}-${{ hashFiles('platform/esp32/flake.lock') }}-${{ hashFiles('platform/esp32/Cargo.lock') }}
           restore-keys: |
-            ${{ matrix.board.id }}-${{ runner.os }}-
+            ${{ matrix.board.id }}${{ matrix.variant.artifact_suffix }}-${{ runner.os }}-${{ hashFiles('platform/esp32/flake.lock') }}-
 
-      - name: Install espflash
-        run: cargo install espflash --version 4.4.0 --locked
+      - name: Build firmware
+        working-directory: platform/esp32
+        run: nix develop --command cargo build --release --locked --bin ${{ matrix.board.package }} ${{ matrix.variant.features }}
 
       - name: Build images
+        working-directory: platform/esp32
         env:
           VERSION: ${{ steps.version.outputs.version }}
           PROFILE: ${{ inputs.PROFILE || '' }}
-        run: make VERSION="$VERSION" MQTT=${{ matrix.variant.mqtt }} ${{ matrix.board.make_target }}
+        run: nix develop --command make VERSION="$VERSION" MQTT=${{ matrix.variant.mqtt }} ${{ matrix.board.make_target }}
 
       - name: Upload images
         uses: actions/upload-artifact@v7
@@ -115,10 +117,10 @@ jobs:
           ref: ${{ inputs.REF || '' }}
           fetch-depth: 0
 
-      # The version the firmware reports (see repeater/build.rs).
-      - name: Determine image version
-        id: version
-        run: echo "version=$(make --no-print-directory -s print-version)" >> "$GITHUB_OUTPUT"
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
 
       # The toolchain comes from flake.lock, so only reuse build output built by it.
       - name: Cache Cargo
@@ -133,7 +135,7 @@ jobs:
 
       - name: Build firmware
         working-directory: platform/nrf52840
-        run: cargo build --release --locked
+        run: nix develop --command cargo build --release --locked
 
       - name: Collect image
         env:
