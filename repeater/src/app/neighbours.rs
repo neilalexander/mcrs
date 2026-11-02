@@ -1,5 +1,3 @@
-extern crate alloc;
-
 use alloc::vec::Vec;
 use core::fmt::Write;
 use defmt::info;

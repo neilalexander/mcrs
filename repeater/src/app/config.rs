@@ -1,5 +1,3 @@
-extern crate alloc;
-
 use alloc::{string::String, vec::Vec};
 use core::fmt::{self, Write};
 
@@ -1795,7 +1793,10 @@ mod tests {
         for tier in 0..=10 {
             app.set_tier(tier).unwrap();
             let encoded = encode_config_text(&StoredAppConfig::from_app_config(&app));
-            assert_eq!(decode_config_text(&encoded, &defaults()).unwrap().tier, tier);
+            assert_eq!(
+                decode_config_text(&encoded, &defaults()).unwrap().tier,
+                tier
+            );
         }
         assert!(app.set_tier(11).is_err());
         assert_eq!(app.tier(), 10);

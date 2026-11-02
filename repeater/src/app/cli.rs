@@ -1,5 +1,3 @@
-extern crate alloc;
-
 use crate::{
     app::{
         AppContext,
@@ -1055,7 +1053,11 @@ async fn handle_get_command<P: Platform, S: Storage>(
                 .with_config(|config| format!("> {}", config.path_hash_mode()))
                 .await
         }
-        "tier" => context.with_config(|config| format!("> {}", config.tier())).await,
+        "tier" => {
+            context
+                .with_config(|config| format!("> {}", config.tier()))
+                .await
+        }
         "loop.detect" => {
             context
                 .with_config(|config| format!("> {}", config.loop_detection().as_str()))

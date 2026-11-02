@@ -1,5 +1,3 @@
-extern crate alloc;
-
 use crate::{Platform, app::AppContext, platform::Storage};
 
 use super::identity::Identity;
