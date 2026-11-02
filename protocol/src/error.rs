@@ -1,6 +1,5 @@
-use core::fmt;
-
 use crate::PayloadKind;
+use core::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq, defmt::Format)]
 pub enum Error {

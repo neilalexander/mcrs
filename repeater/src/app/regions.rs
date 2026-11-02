@@ -1,6 +1,5 @@
 use alloc::{string::String, vec::Vec};
 use core::fmt::Write;
-
 use hmac::{Hmac, KeyInit, Mac};
 use mcrs_protocol::{Packet, RouteType, TransportCodes};
 use sha2::{Digest, Sha256};

@@ -1,9 +1,8 @@
-use alloc::vec::Vec;
-
 use crate::{
     CIPHER_BLOCK_SIZE, CIPHER_MAC_SIZE, Result,
     wire::{ensure_payload_len, read_array, read_u8},
 };
+use alloc::vec::Vec;
 
 #[derive(Debug, Clone, PartialEq, Eq, defmt::Format)]
 pub struct DirectEncryptedPayload {

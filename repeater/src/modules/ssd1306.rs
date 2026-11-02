@@ -1,10 +1,9 @@
+use crate::platform::{DisplayStatus, StatusDisplay};
 use embedded_hal::{
     digital::OutputPin,
     i2c::{ErrorType as I2cErrorType, I2c},
 };
 use embedded_hal_async::delay::DelayNs;
-
-use crate::platform::{DisplayStatus, StatusDisplay};
 
 const I2C_ADDRESS: u8 = 0x3c;
 const WIDTH: u8 = 128;

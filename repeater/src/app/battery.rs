@@ -1,6 +1,8 @@
 //! Samples the battery for the status screen, telemetry and MQTT.
-use crate::app::AppContext;
-use crate::platform::{Battery, Platform, Storage};
+use crate::{
+    app::AppContext,
+    platform::{Battery, Platform, Storage},
+};
 use defmt::info;
 use embedded_hal_async::delay::DelayNs;
 

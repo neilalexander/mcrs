@@ -1,6 +1,5 @@
-use alloc::vec::Vec;
-
 use crate::{Error, PayloadKind, Result, wire::ensure_payload_len};
+use alloc::vec::Vec;
 
 #[derive(Debug, Clone, PartialEq, Eq, defmt::Format)]
 pub struct MultipartPayload {

@@ -3,7 +3,7 @@
 #![no_std]
 #![no_main]
 
-use mcrs_nrf::{HEAP_SIZE, NrfPlatform, NrfRadio};
+use defmt_rtt as _;
 use embassy_nrf::{
     bind_interrupts,
     gpio::{Input, Level, Output, OutputDrive, Pull},
@@ -15,13 +15,13 @@ use embassy_time::Delay;
 use embedded_alloc::LlffHeap as Heap;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use lora_phy::sx126x::TcxoCtrlVoltage;
+use mcrs_nrf::{HEAP_SIZE, NrfPlatform, NrfRadio};
 use mcrs_repeater::{
     Repeater,
     modules::sx1262::BoardConfig,
     platform::{NoBattery, NoButton, NoConsole, NoDisplay, NoStorage},
 };
-use {defmt_rtt as _, panic_probe as _};
-
+use panic_probe as _;
 
 const MODEL: &str = "nRF52840";
 

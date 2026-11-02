@@ -1,7 +1,5 @@
-use crate::platform::ReceivedPacket;
-use crate::radio_metrics::PacketMetrics;
-use defmt::Debug2Format;
-use defmt::error;
+use crate::{platform::ReceivedPacket, radio_metrics::PacketMetrics};
+use defmt::{Debug2Format, error};
 use embedded_hal::digital::OutputPin;
 use embedded_hal_async::{delay::DelayNs, digital::Wait, spi::SpiDevice};
 use lora_phy::{

@@ -1,11 +1,10 @@
-use alloc::{string::String, vec::Vec};
-use core::fmt::{self, Write};
-
 use super::{
     LoopDetection,
     identity::{self, Identity, PrivateKey},
     regions::{RegionError, RegionMap},
 };
+use alloc::{string::String, vec::Vec};
+use core::fmt::{self, Write};
 
 fn clamp_advert_interval(minutes: u32) -> u32 {
     match minutes {

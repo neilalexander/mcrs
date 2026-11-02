@@ -5,8 +5,7 @@ use core::{
     pin::pin,
     task::Poll,
 };
-use defmt::info;
-use defmt::{debug, error, warn};
+use defmt::{debug, error, info, warn};
 use embedded_hal_async::delay::DelayNs as _;
 use esp_hal::{
     Blocking,
@@ -19,11 +18,8 @@ use esp_radio::wifi::{AuthenticationMethod, Config, ap::AccessPointConfig, sta::
 use mcrs_repeater::{
     VERSION,
     app::AppContext,
-    platform::{Platform, Storage},
-};
-use mcrs_repeater::{
     memory::MemoryProfile,
-    platform::{Battery, Radio, ReceivedPacket},
+    platform::{Battery, Platform, Radio, ReceivedPacket, Storage},
 };
 use static_cell::StaticCell;
 
@@ -297,15 +293,24 @@ async fn run_ota_station_mode<'a>(
                 let mut telnet = pin!(mcrs_repeater::app::telnet::serve(stack, context));
                 #[cfg(feature = "mqtt")]
                 let mut mqtt1 = pin!(mcrs_repeater::app::mqtt::client::run(
-                    stack, context, 0, crate::rng::WifiRng::new,
+                    stack,
+                    context,
+                    0,
+                    crate::rng::WifiRng::new,
                 ));
                 #[cfg(feature = "mqtt")]
                 let mut mqtt2 = pin!(mcrs_repeater::app::mqtt::client::run(
-                    stack, context, 1, crate::rng::WifiRng::new,
+                    stack,
+                    context,
+                    1,
+                    crate::rng::WifiRng::new,
                 ));
                 #[cfg(feature = "mqtt")]
                 let mut mqtt3 = pin!(mcrs_repeater::app::mqtt::client::run(
-                    stack, context, 2, crate::rng::WifiRng::new,
+                    stack,
+                    context,
+                    2,
+                    crate::rng::WifiRng::new,
                 ));
                 let mut disconnected = pin!(controller.wait_for_disconnect_async());
                 poll_fn(|cx| {

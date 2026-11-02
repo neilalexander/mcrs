@@ -1,9 +1,9 @@
+use crate::{
+    EspPlatform, EspStorage, OtaError, begin_ota_update, finish_ota_update, ota_status,
+    write_ota_update,
+};
 use embedded_io_async::{Read, Write};
 use mcrs_repeater::{Platform as _, VERSION, app::AppContext};
-
-use crate::{
-    EspPlatform, EspStorage, OtaError, begin_ota_update, finish_ota_update, ota_status, write_ota_update,
-};
 
 const HEADER_BUFFER_LEN: usize = 1024;
 const BODY_BUFFER_LEN: usize = 1024;

@@ -6,11 +6,14 @@ use crate::{
 };
 use alloc::{format, string::String};
 use core::{
+    cell::RefCell,
     future::{Future, poll_fn},
     pin::pin,
     task::Poll,
 };
 use defmt::{info, warn};
+use embassy_net::tcp::{Error, TcpSocket};
+use embedded_io_async::{ErrorType, Read, Write};
 use rand_core::{CryptoRng, RngCore};
 
 const MQTT_STATUS_INTERVAL_SECS: u64 = 15 * 60;
@@ -20,10 +23,6 @@ fn random_bytes<const N: usize>(rng: &mut impl RngCore) -> [u8; N] {
     rng.fill_bytes(&mut bytes);
     bytes
 }
-
-use core::cell::RefCell;
-use embassy_net::tcp::{Error, TcpSocket};
-use embedded_io_async::{ErrorType, Read, Write};
 
 // Each poll borrows the socket only for that poll. Embassy TCP read/write have
 // no per-future state and are cancellation safe, allowing TLS's split halves to
@@ -88,10 +87,11 @@ pub async fn run<P: Platform, S: Storage, G: RngCore + CryptoRng>(
         .await;
         // Cancellation by an explicit restart is not a connection failure.
         if context.mqtt.generation() == generation
-            && let Err(error) = result {
-                context.mqtt.set_error(index, Some(error));
-                warn!("MQTT {}: {}", index + 1, error.as_str());
-            }
+            && let Err(error) = result
+        {
+            context.mqtt.set_error(index, Some(error));
+            warn!("MQTT {}: {}", index + 1, error.as_str());
+        }
         context.mqtt.set_state(index, ConnectionState::Disconnected);
         wait_mqtt_retry_or_restart(context, index, generation, 10).await;
     }
@@ -105,8 +105,10 @@ async fn mqtt_session<P: Platform, S: Storage, G: RngCore + CryptoRng>(
     config: &crate::app::config::MqttConfig,
     make_rng: impl Fn() -> G + Copy,
 ) -> Result<(), crate::app::mqtt::ConnectionError> {
-    use crate::app::mqtt::ConnectionError;
-    use crate::app::mqtt::transport::{self, Endpoint};
+    use crate::app::mqtt::{
+        ConnectionError,
+        transport::{self, Endpoint},
+    };
     use embedded_tls::{Aes128GcmSha256, TlsConfig, TlsConnection, TlsContext, UnsecureProvider};
 
     let endpoint =

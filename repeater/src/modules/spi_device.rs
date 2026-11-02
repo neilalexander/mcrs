@@ -1,5 +1,4 @@
 use core::convert::Infallible;
-
 use embedded_hal::{
     delay::DelayNs as BlockingDelayNs,
     digital::OutputPin,

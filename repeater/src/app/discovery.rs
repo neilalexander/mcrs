@@ -1,5 +1,7 @@
-use crate::app::{AppContext, config::AppConfig};
-use crate::platform::{Platform, Storage};
+use crate::{
+    app::{AppContext, config::AppConfig},
+    platform::{Platform, Storage},
+};
 use alloc::{string::String, vec::Vec};
 use defmt::{error, info};
 use mcrs_protocol::{

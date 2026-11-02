@@ -1,6 +1,5 @@
-use alloc::vec::Vec;
-
 use crate::{Result, wire::read_u16_le};
+use alloc::vec::Vec;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, defmt::Format)]
 pub struct TransportCodes {
