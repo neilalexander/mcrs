@@ -78,8 +78,9 @@ pub struct ReceivedPacket {
 /// explicit header, a CRC, standard IQ, the private sync word and a preamble of
 /// [`RadioConfig::PREAMBLE_LENGTH`] symbols.
 pub trait Radio {
-    /// Sets the radio up with `config`. The repeater calls this once, before
-    /// any other method, and runs without the radio if it fails.
+    /// Sets the radio up with `config`, failing if the chip can't use a
+    /// setting. The repeater calls this once, before any other method, and
+    /// runs without the radio if it fails.
     fn start(&mut self, config: RadioConfig) -> impl Future<Output = Result<(), ()>>;
 
     fn wait_for_read(

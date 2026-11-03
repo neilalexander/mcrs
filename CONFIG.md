@@ -32,6 +32,8 @@ set dutycycle 10
 reboot
 ```
 
+The bandwidth must be one of the LoRa bandwidths: 7.8, 10.4, 15.6, 20.8, 31.25, 41.7, 62.5, 125, 250 or 500KHz. The spreading factor ranges from 5 to 12, and the coding rate from 5 to 8 (4/5 to 4/8).
+
 Changes to the radio settings do not take effect until after a reboot.
 
 ## Repeater tier

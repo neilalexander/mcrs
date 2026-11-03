@@ -87,10 +87,120 @@ impl WifiConfig {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RadioConfig {
     pub receive_frequency_hz: u32,
-    pub spreading_factor: u8,
-    pub bandwidth_hz: u32,
-    pub coding_rate_denominator: u8,
+    pub spreading_factor: SpreadingFactor,
+    pub bandwidth: Bandwidth,
+    pub coding_rate: CodingRate,
     pub transmit_power_dbm: i32,
+}
+
+/// A LoRa spreading factor, SF5 to SF12.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpreadingFactor {
+    Sf5,
+    Sf6,
+    Sf7,
+    Sf8,
+    Sf9,
+    Sf10,
+    Sf11,
+    Sf12,
+}
+
+impl SpreadingFactor {
+    pub fn from_factor(factor: u8) -> Option<Self> {
+        match factor {
+            5 => Some(Self::Sf5),
+            6 => Some(Self::Sf6),
+            7 => Some(Self::Sf7),
+            8 => Some(Self::Sf8),
+            9 => Some(Self::Sf9),
+            10 => Some(Self::Sf10),
+            11 => Some(Self::Sf11),
+            12 => Some(Self::Sf12),
+            _ => None,
+        }
+    }
+
+    pub const fn factor(self) -> u8 {
+        match self {
+            Self::Sf5 => 5,
+            Self::Sf6 => 6,
+            Self::Sf7 => 7,
+            Self::Sf8 => 8,
+            Self::Sf9 => 9,
+            Self::Sf10 => 10,
+            Self::Sf11 => 11,
+            Self::Sf12 => 12,
+        }
+    }
+}
+
+/// A LoRa bandwidth. [`Bandwidth::hz`] rounds the narrow ones, such as
+/// 7.8125 kHz, to 10 Hz.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u32)]
+pub enum Bandwidth {
+    Khz7_8 = 7_810,
+    Khz10_4 = 10_420,
+    Khz15_6 = 15_630,
+    Khz20_8 = 20_830,
+    Khz31_25 = 31_250,
+    Khz41_7 = 41_670,
+    Khz62_5 = 62_500,
+    Khz125 = 125_000,
+    Khz250 = 250_000,
+    Khz500 = 500_000,
+}
+
+impl Bandwidth {
+    const ALL: [Self; 10] = [
+        Self::Khz7_8,
+        Self::Khz10_4,
+        Self::Khz15_6,
+        Self::Khz20_8,
+        Self::Khz31_25,
+        Self::Khz41_7,
+        Self::Khz62_5,
+        Self::Khz125,
+        Self::Khz250,
+        Self::Khz500,
+    ];
+
+    /// The bandwidth within 1% of `hz`, so that a rounded value such as
+    /// 7.8 kHz finds 7.81 kHz.
+    pub fn from_hz(hz: u32) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|bandwidth| hz.abs_diff(bandwidth.hz()) <= bandwidth.hz() / 100)
+    }
+
+    pub const fn hz(self) -> u32 {
+        self as u32
+    }
+}
+
+/// A LoRa coding rate, 4/5 to 4/8.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum CodingRate {
+    Cr4_5 = 5,
+    Cr4_6 = 6,
+    Cr4_7 = 7,
+    Cr4_8 = 8,
+}
+
+impl CodingRate {
+    const ALL: [Self; 4] = [Self::Cr4_5, Self::Cr4_6, Self::Cr4_7, Self::Cr4_8];
+
+    pub fn from_denominator(denominator: u8) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|cr| cr.denominator() == denominator)
+    }
+
+    pub const fn denominator(self) -> u8 {
+        self as u8
+    }
 }
 
 impl AppConfig {
@@ -592,7 +702,7 @@ impl RadioConfig {
         let payload_symbols = payload_symbol_count(
             payload_len,
             self.spreading_factor,
-            self.coding_rate_denominator,
+            self.coding_rate,
             low_data_rate_optimize,
         );
         let preamble_symbols_quarters = Self::PREAMBLE_LENGTH as u64 * 4 + 17;
@@ -607,25 +717,13 @@ impl RadioConfig {
     }
 
     fn symbol_time_us(self) -> u64 {
-        let chips_per_symbol = 1u64 << self.spreading_factor.min(31);
-        div_ceil_u64(
-            chips_per_symbol * 1_000_000,
-            self.bandwidth_hz.max(1) as u64,
-        )
+        let chips_per_symbol = 1u64 << self.spreading_factor.factor();
+        div_ceil_u64(chips_per_symbol * 1_000_000, self.bandwidth.hz() as u64)
     }
 
     pub fn validate(self) -> Result<(), ConfigError> {
         if !(150_000_000..=2_500_000_000).contains(&self.receive_frequency_hz) {
             return Err(ConfigError::InvalidFrequency);
-        }
-        if !(7_000..=500_000).contains(&self.bandwidth_hz) {
-            return Err(ConfigError::InvalidBandwidth);
-        }
-        if !(5..=12).contains(&self.spreading_factor) {
-            return Err(ConfigError::InvalidSpreadingFactor);
-        }
-        if !(5..=8).contains(&self.coding_rate_denominator) {
-            return Err(ConfigError::InvalidCodingRate);
         }
         if !(-9..=22).contains(&self.transmit_power_dbm) {
             return Err(ConfigError::InvalidTransmitPower);
@@ -636,11 +734,11 @@ impl RadioConfig {
 
 fn payload_symbol_count(
     payload_len: usize,
-    spreading_factor: u8,
-    coding_rate_denominator: u8,
+    spreading_factor: SpreadingFactor,
+    coding_rate: CodingRate,
     low_data_rate_optimize: bool,
 ) -> u32 {
-    let sf = spreading_factor as i32;
+    let sf = spreading_factor.factor() as i32;
     let crc_on = 1;
     let implicit_header = 0;
     let de = i32::from(low_data_rate_optimize);
@@ -649,7 +747,7 @@ fn payload_symbol_count(
     let coded_symbols = if numerator <= 0 {
         0
     } else {
-        ((numerator + denominator - 1) / denominator) as u32 * coding_rate_denominator as u32
+        ((numerator + denominator - 1) / denominator) as u32 * coding_rate.denominator() as u32
     };
 
     8 + coded_symbols
@@ -707,7 +805,8 @@ impl StoredAppConfig {
 
     fn with_defaults_text(private_key: PrivateKey, overlay: &str) -> Option<Self> {
         // Only device-specific values are generated here. Fixed defaults live
-        // in profiles/defaults.conf; the zero values below are parser initialization.
+        // in profiles/defaults.conf; the placeholder values below are parser
+        // initialization.
         let empty = Self {
             tier: 0,
             private_key,
@@ -722,9 +821,9 @@ impl StoredAppConfig {
             wifi: WifiConfig::default(),
             radio: RadioConfig {
                 receive_frequency_hz: 0,
-                spreading_factor: 0,
-                bandwidth_hz: 0,
-                coding_rate_denominator: 0,
+                spreading_factor: SpreadingFactor::Sf5,
+                bandwidth: Bandwidth::Khz7_8,
+                coding_rate: CodingRate::Cr4_5,
                 transmit_power_dbm: 0,
             },
             regions: RegionMap::new(),
@@ -912,13 +1011,13 @@ fn decode_config_layer(
                 config.radio.receive_frequency_hz = value.parse::<u32>().ok()?;
             }
             "radio.bandwidth_hz" => {
-                config.radio.bandwidth_hz = value.parse::<u32>().ok()?;
+                config.radio.bandwidth = Bandwidth::from_hz(value.parse().ok()?)?;
             }
             "radio.spreading_factor" => {
-                config.radio.spreading_factor = value.parse::<u8>().ok()?;
+                config.radio.spreading_factor = SpreadingFactor::from_factor(value.parse().ok()?)?;
             }
             "radio.coding_rate" | "radio.coding_rate_denominator" => {
-                config.radio.coding_rate_denominator = value.parse::<u8>().ok()?;
+                config.radio.coding_rate = CodingRate::from_denominator(value.parse().ok()?)?;
             }
             "radio.tx_power_dbm" => {
                 config.radio.transmit_power_dbm = value.parse::<i32>().ok()?;
@@ -1123,21 +1222,25 @@ fn encode_sparse_config_text_redacted(
             config.radio.receive_frequency_hz
         );
     }
-    if config.radio.bandwidth_hz != defaults.radio.bandwidth_hz {
-        let _ = writeln!(&mut out, "radio.bandwidth_hz={}", config.radio.bandwidth_hz);
+    if config.radio.bandwidth != defaults.radio.bandwidth {
+        let _ = writeln!(
+            &mut out,
+            "radio.bandwidth_hz={}",
+            config.radio.bandwidth.hz()
+        );
     }
     if config.radio.spreading_factor != defaults.radio.spreading_factor {
         let _ = writeln!(
             &mut out,
             "radio.spreading_factor={}",
-            config.radio.spreading_factor
+            config.radio.spreading_factor.factor()
         );
     }
-    if config.radio.coding_rate_denominator != defaults.radio.coding_rate_denominator {
+    if config.radio.coding_rate != defaults.radio.coding_rate {
         let _ = writeln!(
             &mut out,
             "radio.coding_rate={}",
-            config.radio.coding_rate_denominator
+            config.radio.coding_rate.denominator()
         );
     }
     if config.radio.transmit_power_dbm != defaults.radio.transmit_power_dbm {
@@ -1279,16 +1382,20 @@ fn encode_full_config_text_redacted(config: &StoredAppConfig, redact_secrets: bo
         "radio.frequency_hz={}",
         config.radio.receive_frequency_hz
     );
-    let _ = writeln!(&mut out, "radio.bandwidth_hz={}", config.radio.bandwidth_hz);
+    let _ = writeln!(
+        &mut out,
+        "radio.bandwidth_hz={}",
+        config.radio.bandwidth.hz()
+    );
     let _ = writeln!(
         &mut out,
         "radio.spreading_factor={}",
-        config.radio.spreading_factor
+        config.radio.spreading_factor.factor()
     );
     let _ = writeln!(
         &mut out,
         "radio.coding_rate={}",
-        config.radio.coding_rate_denominator
+        config.radio.coding_rate.denominator()
     );
     let _ = writeln!(
         &mut out,
@@ -1424,9 +1531,6 @@ pub enum ConfigError {
     InvalidLatitude,
     InvalidLongitude,
     InvalidFrequency,
-    InvalidBandwidth,
-    InvalidSpreadingFactor,
-    InvalidCodingRate,
     InvalidTransmitPower,
     InvalidDutyCycle,
     InvalidFloodMaxHops,
@@ -1449,9 +1553,6 @@ impl fmt::Display for ConfigError {
             ConfigError::InvalidLatitude => f.write_str("invalid latitude"),
             ConfigError::InvalidLongitude => f.write_str("invalid longitude"),
             ConfigError::InvalidFrequency => f.write_str("invalid frequency"),
-            ConfigError::InvalidBandwidth => f.write_str("invalid bandwidth"),
-            ConfigError::InvalidSpreadingFactor => f.write_str("invalid spreading factor"),
-            ConfigError::InvalidCodingRate => f.write_str("invalid coding rate"),
             ConfigError::InvalidTransmitPower => f.write_str("invalid transmit power"),
             ConfigError::InvalidDutyCycle => f.write_str("invalid duty cycle"),
             ConfigError::InvalidFloodMaxHops => f.write_str("invalid flood max hops"),
@@ -2067,6 +2168,72 @@ mod tests {
         ] {
             assert!(
                 StoredAppConfig::with_defaults_text(PrivateKey::Seed([7; 32]), &text).is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn lora_settings_accept_only_supported_values() {
+        for factor in 0..=u8::MAX {
+            assert_eq!(
+                SpreadingFactor::from_factor(factor).map(SpreadingFactor::factor),
+                (5..=12).contains(&factor).then_some(factor)
+            );
+        }
+        for denominator in 0..=u8::MAX {
+            assert_eq!(
+                CodingRate::from_denominator(denominator).map(CodingRate::denominator),
+                (5..=8).contains(&denominator).then_some(denominator)
+            );
+        }
+        for bandwidth in Bandwidth::ALL {
+            assert_eq!(Bandwidth::from_hz(bandwidth.hz()), Some(bandwidth));
+        }
+        for (hz, bandwidth) in [
+            (7_800, Bandwidth::Khz7_8),
+            (10_417, Bandwidth::Khz10_4),
+            (15_625, Bandwidth::Khz15_6),
+            (20_800, Bandwidth::Khz20_8),
+            (41_700, Bandwidth::Khz41_7),
+        ] {
+            assert_eq!(Bandwidth::from_hz(hz), Some(bandwidth));
+        }
+        for hz in [0, 7_000, 100_000, 510_000] {
+            assert_eq!(Bandwidth::from_hz(hz), None);
+        }
+    }
+
+    #[test]
+    fn radio_settings_load_named_bandwidths_and_reject_others() {
+        let radio = RadioConfig {
+            receive_frequency_hz: 869_618_000,
+            spreading_factor: SpreadingFactor::Sf8,
+            bandwidth: Bandwidth::Khz62_5,
+            coding_rate: CodingRate::Cr4_6,
+            transmit_power_dbm: 14,
+        };
+        let image = network_defaults("");
+        assert_eq!(image.radio, radio);
+        // A 12.25-symbol preamble and 26 payload symbols of 4.096 ms each.
+        assert_eq!(radio.packet_airtime_ms(10), 157);
+
+        // Earlier firmware saved the bandwidth as typed, such as 7.8 kHz.
+        let device = decode_config_text(b"radio.bandwidth_hz=7800\n", &image).unwrap();
+        assert_eq!(device.radio.bandwidth, Bandwidth::Khz7_8);
+        let saved = encode_sparse_config_text(&device, &image);
+        assert!(
+            core::str::from_utf8(&saved)
+                .unwrap()
+                .contains("radio.bandwidth_hz=7810\n")
+        );
+        for text in [
+            "radio.bandwidth_hz=100000\n",
+            "radio.spreading_factor=13\n",
+            "radio.coding_rate=4\n",
+        ] {
+            assert!(
+                decode_config_text(text.as_bytes(), &image).is_none(),
+                "{text}"
             );
         }
     }

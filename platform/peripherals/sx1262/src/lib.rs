@@ -16,7 +16,7 @@ use lora_phy::{
     sx126x::{self, Config, Sx126x},
 };
 use mcrs_repeater::{
-    app::config::RadioConfig,
+    app::config::{self, RadioConfig},
     platform::{Radio, ReceivedPacket},
 };
 
@@ -205,8 +205,8 @@ where
 
         let modulation_params = lora.create_modulation_params(
             spreading_factor(config.spreading_factor),
-            bandwidth(config.bandwidth_hz),
-            coding_rate(config.coding_rate_denominator),
+            bandwidth(config.bandwidth),
+            coding_rate(config.coding_rate),
             config.receive_frequency_hz,
         )?;
         let rx_packet_params = lora.create_rx_packet_params(
@@ -305,39 +305,39 @@ where
     }
 }
 
-fn spreading_factor(value: u8) -> SpreadingFactor {
-    match value {
-        5 => SpreadingFactor::_5,
-        6 => SpreadingFactor::_6,
-        7 => SpreadingFactor::_7,
-        9 => SpreadingFactor::_9,
-        10 => SpreadingFactor::_10,
-        11 => SpreadingFactor::_11,
-        12 => SpreadingFactor::_12,
-        _ => SpreadingFactor::_8,
+fn spreading_factor(spreading_factor: config::SpreadingFactor) -> SpreadingFactor {
+    match spreading_factor {
+        config::SpreadingFactor::Sf5 => SpreadingFactor::_5,
+        config::SpreadingFactor::Sf6 => SpreadingFactor::_6,
+        config::SpreadingFactor::Sf7 => SpreadingFactor::_7,
+        config::SpreadingFactor::Sf8 => SpreadingFactor::_8,
+        config::SpreadingFactor::Sf9 => SpreadingFactor::_9,
+        config::SpreadingFactor::Sf10 => SpreadingFactor::_10,
+        config::SpreadingFactor::Sf11 => SpreadingFactor::_11,
+        config::SpreadingFactor::Sf12 => SpreadingFactor::_12,
     }
 }
 
-fn bandwidth(value: u32) -> Bandwidth {
-    match value {
-        7_810 => Bandwidth::_7KHz,
-        10_420 => Bandwidth::_10KHz,
-        15_630 => Bandwidth::_15KHz,
-        20_830 => Bandwidth::_20KHz,
-        31_250 => Bandwidth::_31KHz,
-        41_670 => Bandwidth::_41KHz,
-        125_000 => Bandwidth::_125KHz,
-        250_000 => Bandwidth::_250KHz,
-        500_000 => Bandwidth::_500KHz,
-        _ => Bandwidth::_62KHz,
+fn bandwidth(bandwidth: config::Bandwidth) -> Bandwidth {
+    match bandwidth {
+        config::Bandwidth::Khz7_8 => Bandwidth::_7KHz,
+        config::Bandwidth::Khz10_4 => Bandwidth::_10KHz,
+        config::Bandwidth::Khz15_6 => Bandwidth::_15KHz,
+        config::Bandwidth::Khz20_8 => Bandwidth::_20KHz,
+        config::Bandwidth::Khz31_25 => Bandwidth::_31KHz,
+        config::Bandwidth::Khz41_7 => Bandwidth::_41KHz,
+        config::Bandwidth::Khz62_5 => Bandwidth::_62KHz,
+        config::Bandwidth::Khz125 => Bandwidth::_125KHz,
+        config::Bandwidth::Khz250 => Bandwidth::_250KHz,
+        config::Bandwidth::Khz500 => Bandwidth::_500KHz,
     }
 }
 
-fn coding_rate(value: u8) -> CodingRate {
-    match value {
-        5 => CodingRate::_4_5,
-        6 => CodingRate::_4_6,
-        7 => CodingRate::_4_7,
-        _ => CodingRate::_4_8,
+fn coding_rate(coding_rate: config::CodingRate) -> CodingRate {
+    match coding_rate {
+        config::CodingRate::Cr4_5 => CodingRate::_4_5,
+        config::CodingRate::Cr4_6 => CodingRate::_4_6,
+        config::CodingRate::Cr4_7 => CodingRate::_4_7,
+        config::CodingRate::Cr4_8 => CodingRate::_4_8,
     }
 }

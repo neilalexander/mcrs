@@ -12,14 +12,18 @@ pub mod heltec;
 mod esp;
 mod littlefs;
 pub(crate) mod ota;
+mod spi_device;
 
 #[cfg(feature = "mqtt")]
 pub(crate) mod rng;
 
 pub use esp::*;
 
-use crate::heltec::{
-    BatteryMonitor, BoardRadio, MEMORY_PROFILE, RadioFrontend, STORAGE_LAYOUT, WifiResources,
+use crate::{
+    heltec::{
+        BatteryMonitor, BoardRadio, MEMORY_PROFILE, RadioFrontend, STORAGE_LAYOUT, WifiResources,
+    },
+    spi_device::BlockingExclusiveSpiDevice,
 };
 use defmt::error;
 use esp_hal::{
@@ -39,9 +43,7 @@ use esp_hal::{
     time::Rate,
     timer::timg::TimerGroup,
 };
-use mcrs_repeater::{
-    memory::MemoryProfile, modules::spi_device::BlockingExclusiveSpiDevice, platform::Platform,
-};
+use mcrs_repeater::{memory::MemoryProfile, platform::Platform};
 use mcrs_ssd1306::PowerActiveLevel;
 use mcrs_sx1262::Sx1262;
 
