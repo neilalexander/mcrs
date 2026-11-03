@@ -21,7 +21,7 @@ pub use esp::*;
 use crate::heltec::{
     BatteryMonitor, BoardRadio, MEMORY_PROFILE, RadioFrontend, STORAGE_LAYOUT, WifiResources,
 };
-use defmt::{Debug2Format, debug, error};
+use defmt::error;
 use esp_hal::{
     Blocking,
     gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull},
@@ -40,20 +40,22 @@ use esp_hal::{
     timer::timg::TimerGroup,
 };
 use mcrs_repeater::{
-    app::config::RadioConfig,
-    memory::MemoryProfile,
-    modules::{spi_device::BlockingExclusiveSpiDevice, sx1262},
-    platform::{Platform, RadioHardware},
+    memory::MemoryProfile, modules::spi_device::BlockingExclusiveSpiDevice, platform::Platform,
 };
 use mcrs_ssd1306::PowerActiveLevel;
+use mcrs_sx1262::Sx1262;
 
-pub use mcrs_repeater::modules::sx1262::BoardConfig;
+pub use mcrs_sx1262::BoardConfig;
 
-pub type RadioReceiver = sx1262::Receiver<
-    BlockingExclusiveSpiDevice<Spi<'static, Blocking>, Output<'static>, SpiDelay>,
-    Output<'static>,
-    Input<'static>,
-    RadioDelay,
+/// The SX1262, with the board's frontend switched to match each operation.
+pub type HeltecRadio<F> = BoardRadio<
+    Sx1262<
+        BlockingExclusiveSpiDevice<Spi<'static, Blocking>, Output<'static>, SpiDelay>,
+        Output<'static>,
+        Input<'static>,
+        RadioDelay,
+    >,
+    F,
 >;
 pub type OledDisplay =
     mcrs_ssd1306::Display<I2c<'static, Blocking>, Output<'static>, Output<'static>>;
@@ -227,15 +229,21 @@ impl<F: RadioFrontend> Devices<F> {
         Self {
             platform: EspPlatform::new(model, identity_seed),
             storage: esp::init_storage(STORAGE_LAYOUT),
-            radio: HeltecRadio {
-                spi,
-                cs: Output::new(radio_cs, Level::High, output_config),
-                reset: Output::new(radio_reset, Level::High, output_config),
-                dio1: Input::new(radio_dio1, input_config),
-                busy: Input::new(radio_busy, input_config),
-                board_config,
+            radio: BoardRadio::new(
+                Sx1262::new(
+                    BlockingExclusiveSpiDevice::new(
+                        spi,
+                        Output::new(radio_cs, Level::High, output_config),
+                        esp::spi_delay(),
+                    ),
+                    Output::new(radio_reset, Level::High, output_config),
+                    Input::new(radio_dio1, input_config),
+                    Input::new(radio_busy, input_config),
+                    esp::radio_delay(),
+                    board_config,
+                ),
                 frontend,
-            },
+            ),
             display,
             button: Input::new(button, InputConfig::default().with_pull(Pull::Up)),
             battery: BatteryMonitor::new(adc, battery_sense, battery_ctrl),
@@ -298,54 +306,5 @@ impl Platform for EspPlatform {
 
     fn reboot(&self) -> ! {
         esp::reboot()
-    }
-}
-
-/// The SX1262 and its frontend, until the repeater starts them.
-pub struct HeltecRadio<F> {
-    spi: Spi<'static, Blocking>,
-    cs: Output<'static>,
-    reset: Output<'static>,
-    dio1: Input<'static>,
-    busy: Input<'static>,
-    board_config: BoardConfig,
-    frontend: F,
-}
-
-impl<F: RadioFrontend> RadioHardware for HeltecRadio<F> {
-    type Radio = BoardRadio<RadioReceiver, F>;
-
-    async fn start(self, config: RadioConfig) -> Result<Self::Radio, ()> {
-        let Self {
-            spi,
-            cs,
-            reset,
-            dio1,
-            busy,
-            board_config,
-            frontend,
-        } = self;
-        let spi = BlockingExclusiveSpiDevice::new(spi, cs, esp::spi_delay());
-
-        match sx1262::init_receiver(
-            spi,
-            reset,
-            dio1,
-            busy,
-            esp::radio_delay(),
-            board_config,
-            config.receive_config(),
-        )
-        .await
-        {
-            Ok(receiver) => {
-                debug!("radio initialized");
-                Ok(BoardRadio::new(receiver, frontend))
-            }
-            Err(e) => {
-                error!("failed to initialize sx1262: {:?}", Debug2Format(&e));
-                Err(())
-            }
-        }
     }
 }

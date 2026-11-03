@@ -582,6 +582,10 @@ impl AppConfig {
 }
 
 impl RadioConfig {
+    /// Preamble symbols before every packet, whatever the settings. Radios
+    /// send and expect this many, and the airtime includes them.
+    pub const PREAMBLE_LENGTH: u16 = 8;
+
     pub fn packet_airtime_ms(self, payload_len: usize) -> u32 {
         let symbol_time_us = self.symbol_time_us();
         let low_data_rate_optimize = symbol_time_us >= 16_000;
@@ -591,8 +595,7 @@ impl RadioConfig {
             self.coding_rate_denominator,
             low_data_rate_optimize,
         );
-        let preamble_symbols_quarters =
-            crate::modules::sx1262::RECEIVE_PREAMBLE_LENGTH as u64 * 4 + 17;
+        let preamble_symbols_quarters = Self::PREAMBLE_LENGTH as u64 * 4 + 17;
         let preamble_us = div_ceil_u64(symbol_time_us * preamble_symbols_quarters, 4);
         let payload_us = payload_symbols as u64 * symbol_time_us;
 
@@ -628,20 +631,6 @@ impl RadioConfig {
             return Err(ConfigError::InvalidTransmitPower);
         }
         Ok(())
-    }
-
-    pub fn receive_config(self) -> crate::modules::sx1262::ReceiveConfig {
-        crate::modules::sx1262::ReceiveConfig {
-            frequency_hz: self.receive_frequency_hz,
-            spreading_factor: spreading_factor(self.spreading_factor),
-            bandwidth: bandwidth(self.bandwidth_hz),
-            coding_rate: coding_rate(self.coding_rate_denominator),
-            preamble_length: crate::modules::sx1262::RECEIVE_PREAMBLE_LENGTH,
-            max_payload_len: crate::modules::sx1262::RECEIVE_MAX_PAYLOAD_LEN,
-            crc_on: true,
-            iq_inverted: false,
-            transmit_output_power_dbm: self.transmit_power_dbm,
-        }
     }
 }
 
@@ -1738,43 +1727,6 @@ fn write_optional_coordinate(out: &mut String, coordinate_microdegrees: Option<i
     let whole = absolute / i64::from(COORDINATE_SCALE);
     let fraction = absolute % i64::from(COORDINATE_SCALE);
     let _ = write!(out, "{}.{:06}", whole, fraction);
-}
-
-fn spreading_factor(value: u8) -> lora_phy::mod_params::SpreadingFactor {
-    match value {
-        5 => lora_phy::mod_params::SpreadingFactor::_5,
-        6 => lora_phy::mod_params::SpreadingFactor::_6,
-        7 => lora_phy::mod_params::SpreadingFactor::_7,
-        9 => lora_phy::mod_params::SpreadingFactor::_9,
-        10 => lora_phy::mod_params::SpreadingFactor::_10,
-        11 => lora_phy::mod_params::SpreadingFactor::_11,
-        12 => lora_phy::mod_params::SpreadingFactor::_12,
-        _ => lora_phy::mod_params::SpreadingFactor::_8,
-    }
-}
-
-fn bandwidth(value: u32) -> lora_phy::mod_params::Bandwidth {
-    match value {
-        7_810 => lora_phy::mod_params::Bandwidth::_7KHz,
-        10_420 => lora_phy::mod_params::Bandwidth::_10KHz,
-        15_630 => lora_phy::mod_params::Bandwidth::_15KHz,
-        20_830 => lora_phy::mod_params::Bandwidth::_20KHz,
-        31_250 => lora_phy::mod_params::Bandwidth::_31KHz,
-        41_670 => lora_phy::mod_params::Bandwidth::_41KHz,
-        125_000 => lora_phy::mod_params::Bandwidth::_125KHz,
-        250_000 => lora_phy::mod_params::Bandwidth::_250KHz,
-        500_000 => lora_phy::mod_params::Bandwidth::_500KHz,
-        _ => lora_phy::mod_params::Bandwidth::_62KHz,
-    }
-}
-
-fn coding_rate(value: u8) -> lora_phy::mod_params::CodingRate {
-    match value {
-        5 => lora_phy::mod_params::CodingRate::_4_5,
-        6 => lora_phy::mod_params::CodingRate::_4_6,
-        7 => lora_phy::mod_params::CodingRate::_4_7,
-        _ => lora_phy::mod_params::CodingRate::_4_8,
-    }
 }
 
 #[cfg(test)]

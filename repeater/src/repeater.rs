@@ -2,7 +2,7 @@
 use crate::{
     app::{self, AppContext, battery, cli, config::AppConfig, periodic, ui},
     memory::MemoryProfile,
-    platform::{Battery, Platform, Radio, RadioHardware, StatusDisplay, Storage},
+    platform::{Battery, Platform, Radio, StatusDisplay, Storage},
 };
 use alloc::{boxed::Box, string::String};
 use core::{
@@ -33,7 +33,7 @@ impl<PLATFORM, STORAGE, RADIO, CONSOLE, DISPLAY, BUTTON, BATTERY>
 where
     PLATFORM: Platform + 'static,
     STORAGE: Storage + 'static,
-    RADIO: RadioHardware,
+    RADIO: Radio,
     CONSOLE: Read + Write,
     DISPLAY: StatusDisplay,
     BUTTON: Wait,
@@ -83,7 +83,7 @@ where
     pub async fn run(self) -> ! {
         let Self {
             context,
-            radio,
+            mut radio,
             console,
             display,
             button,
@@ -93,7 +93,7 @@ where
         let radio_config = context.with_config(|config| config.radio()).await;
         // Without a radio the CLI keeps running, so the settings can be fixed.
         let radio = match radio.start(radio_config).await {
-            Ok(radio) => Some(radio),
+            Ok(()) => Some(radio),
             Err(()) => {
                 error!("Radio: start failed");
                 None

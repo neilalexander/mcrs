@@ -1,28 +1,14 @@
 #![no_std]
 
-//! The repeater platform for an nRF52840 with an SX1262 radio.
+//! The repeater platform for an nRF52840. The board chooses the radio.
 use core::cell::{Cell, RefCell};
-use defmt::{Debug2Format, debug, error};
-use embassy_nrf::{
-    gpio::{Input, Output},
-    mode::Blocking,
-    rng::Rng,
-    spim::Spim,
-};
+use embassy_nrf::{mode::Blocking, rng::Rng};
 use embassy_time::{Delay, Instant};
-use embedded_hal_bus::spi::ExclusiveDevice;
-use mcrs_repeater::{
-    app::config::RadioConfig,
-    memory::MemoryProfile,
-    modules::sx1262::{self, BoardConfig},
-    platform::{Platform, RadioHardware},
-};
+use mcrs_repeater::{memory::MemoryProfile, platform::Platform};
 
 /// The heap the repeater's tables and queues are allocated from.
 pub const HEAP_SIZE: usize = 64 * 1024;
 const MEMORY_PROFILE: MemoryProfile = MemoryProfile::new(HEAP_SIZE, 8, 16, 64, 256);
-
-pub type RadioSpi = ExclusiveDevice<Spim<'static>, Output<'static>, Delay>;
 
 /// The services the nRF52840 provides.
 pub struct NrfPlatform {
@@ -98,66 +84,4 @@ impl Platform for NrfPlatform {
 
 fn uptime_seconds() -> u32 {
     Instant::now().as_secs().min(u64::from(u32::MAX)) as u32
-}
-
-/// The SX1262, until the repeater starts it.
-pub struct NrfRadio {
-    spi: RadioSpi,
-    reset: Output<'static>,
-    dio1: Input<'static>,
-    busy: Input<'static>,
-    board_config: BoardConfig,
-}
-
-impl NrfRadio {
-    pub fn new(
-        spi: RadioSpi,
-        reset: Output<'static>,
-        dio1: Input<'static>,
-        busy: Input<'static>,
-        board_config: BoardConfig,
-    ) -> Self {
-        Self {
-            spi,
-            reset,
-            dio1,
-            busy,
-            board_config,
-        }
-    }
-}
-
-impl RadioHardware for NrfRadio {
-    type Radio = sx1262::Receiver<RadioSpi, Output<'static>, Input<'static>, Delay>;
-
-    async fn start(self, config: RadioConfig) -> Result<Self::Radio, ()> {
-        let Self {
-            spi,
-            reset,
-            dio1,
-            busy,
-            board_config,
-        } = self;
-
-        match sx1262::init_receiver(
-            spi,
-            reset,
-            dio1,
-            busy,
-            Delay,
-            board_config,
-            config.receive_config(),
-        )
-        .await
-        {
-            Ok(receiver) => {
-                debug!("radio initialized");
-                Ok(receiver)
-            }
-            Err(e) => {
-                error!("failed to initialize sx1262: {:?}", Debug2Format(&e));
-                Err(())
-            }
-        }
-    }
 }

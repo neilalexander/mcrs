@@ -1974,6 +1974,7 @@ dependencies = [
  "littlefs2-rust",
  "mcrs-repeater",
  "mcrs-ssd1306",
+ "mcrs-sx1262",
  "nb 1.1.0",
  "rand_core 0.6.4",
  "static_cell",
@@ -2007,7 +2008,6 @@ dependencies = [
  "embedded-storage",
  "embedded-tls",
  "hmac 0.13.0",
- "lora-phy",
  "mcrs-protocol",
  "rand_core 0.6.4",
  "sha1",
@@ -2021,6 +2021,17 @@ version = "0.1.0"
 dependencies = [
  "embedded-hal 1.0.0",
  "embedded-hal-async",
+ "mcrs-repeater",
+]
+
+[[package]]
+name = "mcrs-sx1262"
+version = "0.1.0"
+dependencies = [
+ "defmt 1.2.0",
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
+ "lora-phy",
  "mcrs-repeater",
 ]
 

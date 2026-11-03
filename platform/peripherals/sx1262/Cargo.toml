@@ -1,0 +1,14 @@
+[package]
+name = "mcrs-sx1262"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mcrs-repeater = { path = "../../../repeater" }
+
+defmt = "1.2.0"
+
+embedded-hal = "1.0.0"
+embedded-hal-async = "1.0.0"
+
+lora-phy = { git = "https://github.com/lora-rs/lora-rs", rev = "15332dab3b4dd39d809990b712cf3ce1f73b14a9" }

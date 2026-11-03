@@ -790,7 +790,6 @@ dependencies = [
  "embedded-storage",
  "embedded-tls",
  "hmac 0.13.0",
- "lora-phy",
  "mcrs-protocol",
  "rand_core",
  "sha1",
@@ -804,6 +803,17 @@ version = "0.1.0"
 dependencies = [
  "embedded-hal 1.0.0",
  "embedded-hal-async",
+ "mcrs-repeater",
+]
+
+[[package]]
+name = "mcrs-sx1262"
+version = "0.1.0"
+dependencies = [
+ "defmt",
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
+ "lora-phy",
  "mcrs-repeater",
 ]
 

@@ -970,7 +970,7 @@ where
                 let payload = &receive_buffer[..packet.len];
 
                 debug!(
-                    "SX1262 received packet: {} bytes, RSSI {}, SNR {}",
+                    "Radio RX: packet {} bytes, RSSI {}, SNR {}",
                     packet.len,
                     packet.rssi,
                     crate::radio_metrics::SnrDb(packet.snr_quarters)
