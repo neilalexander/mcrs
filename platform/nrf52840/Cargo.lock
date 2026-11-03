@@ -915,8 +915,8 @@ dependencies = [
  "embassy-time",
  "embedded-alloc",
  "embedded-hal-bus",
- "lora-phy",
  "mcrs-repeater",
+ "mcrs-sx1262",
  "panic-probe",
 ]
 
@@ -945,9 +945,19 @@ dependencies = [
  "embedded-io-async 0.7.0",
  "embedded-storage",
  "hmac",
- "lora-phy",
  "mcrs-protocol",
  "sha2",
+]
+
+[[package]]
+name = "mcrs-sx1262"
+version = "0.1.0"
+dependencies = [
+ "defmt 1.2.0",
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
+ "lora-phy",
+ "mcrs-repeater",
 ]
 
 [[package]]

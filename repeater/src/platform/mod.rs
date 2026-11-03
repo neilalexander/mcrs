@@ -9,6 +9,10 @@
 //! board without storage, a console, status screen, button or battery monitor
 //! passes [`NoStorage`], [`NoConsole`], [`NoDisplay`], [`NoButton`] or
 //! [`NoBattery`].
+//!
+//! Drivers for particular chips, such as the SX1262 in `mcrs-sx1262`,
+//! implement these traits in crates of their own, so the repeater depends on
+//! no hardware.
 
 pub mod storage;
 
@@ -60,14 +64,6 @@ pub trait Storage {
     fn write_atomic(&mut self, key: &str, data: &[u8]) -> Result<(), storage::Error>;
 }
 
-/// Radio hardware that the repeater starts once it has loaded the radio
-/// settings.
-pub trait RadioHardware {
-    type Radio: Radio;
-
-    fn start(self, config: RadioConfig) -> impl Future<Output = Result<Self::Radio, ()>>;
-}
-
 /// A packet that [`Radio::wait_for_read`] copied into the caller's buffer.
 pub struct ReceivedPacket {
     pub len: usize,
@@ -77,8 +73,16 @@ pub struct ReceivedPacket {
     pub snr_quarters: i16,
 }
 
-/// Sends and receives LoRa packets with the configured modulation.
+/// A LoRa radio, which the repeater starts once it has loaded the radio
+/// settings. Whatever the settings, packets have MeshCore's format: an
+/// explicit header, a CRC, standard IQ, the private sync word and a preamble of
+/// [`RadioConfig::PREAMBLE_LENGTH`] symbols.
 pub trait Radio {
+    /// Sets the radio up with `config`, failing if the chip can't use a
+    /// setting. The repeater calls this once, before any other method, and
+    /// runs without the radio if it fails.
+    fn start(&mut self, config: RadioConfig) -> impl Future<Output = Result<(), ()>>;
+
     fn wait_for_read(
         &mut self,
         buffer: &mut [u8],

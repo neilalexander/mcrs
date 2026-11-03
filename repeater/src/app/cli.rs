@@ -1,6 +1,7 @@
 use crate::{
     app::{
         AppContext,
+        config::{Bandwidth, CodingRate, RadioConfig, SpreadingFactor},
         crypto::{encode_cli_text_response, encode_login_response},
     },
     platform::{Platform, Storage},
@@ -866,9 +867,9 @@ async fn handle_command<P: Platform, S: Storage>(
             format!(
                 "Radio: freq={} bw={} sf={} cr=4/{} tx_power={}dBm dutycycle={}% region.default={}",
                 format_scaled(radio.receive_frequency_hz, 1_000_000, 3),
-                format_scaled(radio.bandwidth_hz, 1_000, 3),
-                radio.spreading_factor,
-                radio.coding_rate_denominator,
+                format_scaled(radio.bandwidth.hz(), 1_000, 3),
+                radio.spreading_factor.factor(),
+                radio.coding_rate.denominator(),
                 radio.transmit_power_dbm,
                 context
                     .with_config(|config| config.duty_cycle_percent())
@@ -958,9 +959,9 @@ async fn handle_get_command<P: Platform, S: Storage>(
             format!(
                 "> {},{},{},{}",
                 format_scaled(radio.receive_frequency_hz, 1_000_000, 3),
-                format_scaled(radio.bandwidth_hz, 1_000, 3),
-                radio.spreading_factor,
-                radio.coding_rate_denominator
+                format_scaled(radio.bandwidth.hz(), 1_000, 3),
+                radio.spreading_factor.factor(),
+                radio.coding_rate.denominator()
             )
         }
         "tx" => {
@@ -1740,24 +1741,21 @@ fn handle_time_set_command<P: Platform, S: Storage>(
     }
 }
 
-fn parse_radio_config(
-    input: &str,
-    mut current: crate::app::config::RadioConfig,
-) -> Option<crate::app::config::RadioConfig> {
+fn parse_radio_config(input: &str, mut current: RadioConfig) -> Option<RadioConfig> {
     let mut parts = input.split(|byte: char| byte.is_ascii_whitespace() || byte == ',');
     let frequency = parts.next().filter(|part| !part.is_empty())?;
     let bandwidth = parts.next().filter(|part| !part.is_empty())?;
-    let spreading_factor = parts.next()?.parse::<u8>().ok()?;
-    let coding_rate_denominator = parts.next()?.parse::<u8>().ok()?;
+    let spreading_factor = SpreadingFactor::from_factor(parts.next()?.parse().ok()?)?;
+    let coding_rate = CodingRate::from_denominator(parts.next()?.parse().ok()?)?;
 
     if parts.any(|part| !part.is_empty()) {
         return None;
     }
 
     current.receive_frequency_hz = parse_decimal_scaled(frequency, 1_000_000)?;
-    current.bandwidth_hz = parse_decimal_scaled(bandwidth, 1_000)?;
+    current.bandwidth = Bandwidth::from_hz(parse_decimal_scaled(bandwidth, 1_000)?)?;
     current.spreading_factor = spreading_factor;
-    current.coding_rate_denominator = coding_rate_denominator;
+    current.coding_rate = coding_rate;
     Some(current)
 }
 
@@ -2131,7 +2129,9 @@ impl CliPrivilege {
 
 #[cfg(test)]
 mod tests {
-    use super::split_cli_correlation_prefix;
+    use super::{
+        Bandwidth, CodingRate, RadioConfig, SpreadingFactor, split_cli_correlation_prefix,
+    };
 
     #[test]
     fn anonymous_basic_response_reports_disabled_repeater() {
@@ -2209,6 +2209,37 @@ mod tests {
             split_cli_correlation_prefix("aF|  get radio  "),
             (Some("aF|"), "get radio")
         );
+    }
+
+    #[test]
+    fn set_radio_accepts_lora_settings_and_rejects_the_rest() {
+        let current = RadioConfig {
+            receive_frequency_hz: 869_618_000,
+            spreading_factor: SpreadingFactor::Sf8,
+            bandwidth: Bandwidth::Khz62_5,
+            coding_rate: CodingRate::Cr4_6,
+            transmit_power_dbm: 14,
+        };
+        assert_eq!(
+            super::parse_radio_config("869.525,7.8,12,5", current),
+            Some(RadioConfig {
+                receive_frequency_hz: 869_525_000,
+                spreading_factor: SpreadingFactor::Sf12,
+                bandwidth: Bandwidth::Khz7_8,
+                coding_rate: CodingRate::Cr4_5,
+                ..current
+            })
+        );
+        for params in [
+            "869.618,100,8,6",
+            "869.618,7,8,6",
+            "869.618,62.5,4,6",
+            "869.618,62.5,13,6",
+            "869.618,62.5,8,4",
+            "869.618,62.5,8,9",
+        ] {
+            assert_eq!(super::parse_radio_config(params, current), None, "{params}");
+        }
     }
 
     #[test]

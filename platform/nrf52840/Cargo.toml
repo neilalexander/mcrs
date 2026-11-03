@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 mcrs-repeater = { path = "../../repeater" }
+mcrs-sx1262 = { path = "../peripherals/sx1262" }
 
 embassy-executor = { version = "0.10.0", features = [
     "platform-cortex-m",
@@ -36,9 +37,6 @@ cortex-m = { version = "0.7.6", features = [
 cortex-m-rt = "0.7.0"
 panic-probe = { version = "1.0.0", features = ["print-defmt"] }
 
-# The release mcrs-repeater uses: its SX1262 board settings are lora-phy types.
-# todo remove this dep
-lora-phy = { git = "https://github.com/lora-rs/lora-rs", rev = "15332dab3b4dd39d809990b712cf3ce1f73b14a9" }
 embedded-hal-bus = { version = "0.3.0", features = ["async", "defmt-03"] }
 embedded-alloc = "0.7.0"
 

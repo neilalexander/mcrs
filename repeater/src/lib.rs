@@ -5,7 +5,6 @@ extern crate alloc;
 
 pub mod app;
 pub mod memory;
-pub mod modules;
 pub mod platform;
 
 pub mod radio_metrics;

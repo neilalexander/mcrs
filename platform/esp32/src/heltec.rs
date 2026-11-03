@@ -16,8 +16,7 @@ use esp_hal::{
 };
 use esp_radio::wifi::{AuthenticationMethod, Config, ap::AccessPointConfig, sta::StationConfig};
 use mcrs_repeater::{
-    VERSION,
-    app::AppContext,
+    app::{AppContext, config::RadioConfig},
     memory::MemoryProfile,
     platform::{Battery, Platform, Radio, ReceivedPacket, Storage},
 };
@@ -689,6 +688,10 @@ where
     R: Radio,
     FRONTEND: RadioFrontend,
 {
+    async fn start(&mut self, config: RadioConfig) -> Result<(), ()> {
+        self.receiver.start(config).await
+    }
+
     async fn wait_for_read(&mut self, buffer: &mut [u8]) -> Result<ReceivedPacket, ()> {
         self.frontend.set_rx_mode();
         self.receiver.wait_for_read(buffer).await

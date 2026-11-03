@@ -14,13 +14,12 @@ use embassy_nrf::{
 use embassy_time::Delay;
 use embedded_alloc::LlffHeap as Heap;
 use embedded_hal_bus::spi::ExclusiveDevice;
-use lora_phy::sx126x::TcxoCtrlVoltage;
-use mcrs_nrf::{HEAP_SIZE, NrfPlatform, NrfRadio};
+use mcrs_nrf::{HEAP_SIZE, NrfPlatform};
 use mcrs_repeater::{
     Repeater,
-    modules::sx1262::BoardConfig,
     platform::{NoBattery, NoButton, NoConsole, NoDisplay, NoStorage},
 };
+use mcrs_sx1262::{BoardConfig, Sx1262, TcxoCtrlVoltage};
 use panic_probe as _;
 
 const MODEL: &str = "nRF52840";
@@ -50,11 +49,12 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     let spim = Spim::new(p.TWISPI1, Irqs, p.P1_13, p.P1_14, p.P1_15, spi_config);
     let spi = ExclusiveDevice::new(spim, nss, Delay).unwrap();
 
-    let radio = NrfRadio::new(
+    let radio = Sx1262::new(
         spi,
         reset,
         dio1,
         busy,
+        Delay,
         BoardConfig {
             tcxo_ctrl: Some(TcxoCtrlVoltage::Ctrl1V7),
             use_dcdc: true,
