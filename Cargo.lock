@@ -799,6 +799,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mcrs-ssd1306"
+version = "0.1.0"
+dependencies = [
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
+ "mcrs-repeater",
+]
+
+[[package]]
 name = "nb"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

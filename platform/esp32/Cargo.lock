@@ -1973,6 +1973,7 @@ dependencies = [
  "esp-rtos",
  "littlefs2-rust",
  "mcrs-repeater",
+ "mcrs-ssd1306",
  "nb 1.1.0",
  "rand_core 0.6.4",
  "static_cell",
@@ -2012,6 +2013,15 @@ dependencies = [
  "sha1",
  "sha2 0.11.1",
  "time",
+]
+
+[[package]]
+name = "mcrs-ssd1306"
+version = "0.1.0"
+dependencies = [
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
+ "mcrs-repeater",
 ]
 
 [[package]]

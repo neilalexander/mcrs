@@ -1,4 +1,4 @@
 [workspace]
-members = ["protocol", "repeater", "fuzz"]
+members = ["protocol", "repeater", "fuzz", "platform/peripherals/ssd1306"]
 exclude = ["platform/esp32", "platform/nrf52840"]
 resolver = "3"

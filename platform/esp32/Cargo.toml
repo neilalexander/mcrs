@@ -8,6 +8,7 @@ mqtt = ["dep:rand_core", "mcrs-repeater/mqtt"]
 
 [dependencies]
 mcrs-repeater = { path = "../../repeater" }
+mcrs-ssd1306 = { path = "../peripherals/ssd1306" }
 
 # esp-radio 0.18 and esp-rtos 0.3 require the HAL 1.1 series.
 esp-hal = { version = "1.1.2", features = ["esp32s3", "unstable", "defmt"] }

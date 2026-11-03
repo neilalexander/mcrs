@@ -42,13 +42,10 @@ use esp_hal::{
 use mcrs_repeater::{
     app::config::RadioConfig,
     memory::MemoryProfile,
-    modules::{
-        spi_device::BlockingExclusiveSpiDevice,
-        ssd1306::{self, PowerActiveLevel},
-        sx1262,
-    },
+    modules::{spi_device::BlockingExclusiveSpiDevice, sx1262},
     platform::{Platform, RadioHardware},
 };
+use mcrs_ssd1306::PowerActiveLevel;
 
 pub use mcrs_repeater::modules::sx1262::BoardConfig;
 
@@ -58,7 +55,8 @@ pub type RadioReceiver = sx1262::Receiver<
     Input<'static>,
     RadioDelay,
 >;
-pub type OledDisplay = ssd1306::Display<I2c<'static, Blocking>, Output<'static>, Output<'static>>;
+pub type OledDisplay =
+    mcrs_ssd1306::Display<I2c<'static, Blocking>, Output<'static>, Output<'static>>;
 
 /// The peripherals that every Heltec board wires the same way.
 pub struct CommonPeripherals {
@@ -211,7 +209,7 @@ impl<F: RadioFrontend> Devices<F> {
                 let reset = Output::new(display_reset, Level::High, output_config);
                 let i2c = i2c.with_sda(display_sda).with_scl(display_scl);
 
-                ssd1306::Display::new_with_power_active_level(
+                mcrs_ssd1306::Display::new_with_power_active_level(
                     i2c,
                     reset,
                     power,
