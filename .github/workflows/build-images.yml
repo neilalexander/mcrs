@@ -79,6 +79,15 @@ jobs:
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
 
+      # Fetch what earlier jobs and runs built from mcrs.cachix.org, and push
+      # what this job builds. PRs from forks don't get the token, so they only
+      # fetch.
+      - name: Use Cachix
+        uses: cachix/cachix-action@v16
+        with:
+          name: mcrs
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
       # flake.lock pins esp-rs-nix to an SSH URL, but runners have no GitHub
       # SSH key. The repository is public, so fetch it over HTTPS instead.
       - name: Fetch flake inputs over HTTPS
