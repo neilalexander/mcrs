@@ -12,6 +12,10 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     crane.url = "github:ipetkov/crane";
+    elf2flash = {
+      url = "github:fmckeogh/elf2flash";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -21,6 +25,7 @@
       rust-overlay,
       esp-rs-nix,
       crane,
+      elf2flash,
       ...
     }:
     let
@@ -127,7 +132,7 @@
                 root = ./.;
                 fileset = lib.fileset.unions [
                   ./board
-                  ./platform/${platform}
+                  ./platform
                   ./profiles
                   ./protocol
                   ./repeater
@@ -254,21 +259,41 @@
               ''
           );
 
-          # The nRF52840 board, as the ELF that probe-rs flashes
+          # An nRF52840 board, as a UF2 image for its UF2 bootloader, made from the finished ELF like
+          # the Heltec images
           nrfFirmware = lib.makeOverridable (
             {
+              board,
               profile ? null,
             }:
-            mkFirmware {
-              name = "mcrs-nrf52840${profileSuffix profile}";
-              inherit profile;
-              platform = "nrf52840";
-              bin = "mcrs-nrf";
-            }
+            let
+              name = "mcrs-${board}${profileSuffix profile}";
+              elf = mkFirmware {
+                inherit name profile;
+                pname = "${name}-elf";
+                platform = "nrf52840";
+                bin = "mcrs-${board}";
+              };
+            in
+            pkgs.runCommand "${name}-${version}"
+              {
+                nativeBuildInputs = [ elf2flash.packages.${system}.default ];
+                allowedReferences = [ ];
+              }
+              ''
+                mkdir -p $out
+                elf2flash convert --family 0xada52840 ${elf}/${name}.elf $out/${name}.uf2
+              ''
+          );
+
+          # The nRF52840 boards, one for each binary in platform/nrf52840 (`mcrs-<board>`), so adding a
+          # board there adds its package
+          nrfBoards = map (lib.removePrefix "mcrs-") (
+            lib.catAttrs "name" (lib.importTOML ./platform/nrf52840/Cargo.toml).bin
           );
 
           # The board packages take `.override { profile = "nemesh.conf"; }`, and the Heltec ones `mqtt`
-          packages = {
+          boards = {
             heltec-v3 = heltecFirmware {
               board = "heltec-v3";
               flashSize = "8mb";
@@ -281,21 +306,18 @@
               board = "heltec-wsl3";
               flashSize = "8mb";
             };
-            nrf52840 = nrfFirmware { };
+          }
+          // lib.genAttrs nrfBoards (board: nrfFirmware { inherit board; });
 
-            heltec-v3-mqtt = packages.heltec-v3.override { mqtt = true; };
-            heltec-v4-mqtt = packages.heltec-v4.override { mqtt = true; };
-            heltec-wsl3-mqtt = packages.heltec-wsl3.override { mqtt = true; };
+          packages = boards // {
+            heltec-v3-mqtt = boards.heltec-v3.override { mqtt = true; };
+            heltec-v4-mqtt = boards.heltec-v4.override { mqtt = true; };
+            heltec-wsl3-mqtt = boards.heltec-wsl3.override { mqtt = true; };
 
-            # The four boards
+            # Every board
             default = pkgs.symlinkJoin {
               name = "mcrs-firmware-${version}";
-              paths = with packages; [
-                heltec-v3
-                heltec-v4
-                heltec-wsl3
-                nrf52840
-              ];
+              paths = lib.attrValues boards;
             };
           };
         in
@@ -306,6 +328,8 @@
           devShells.default = pkgs.mkShell {
             packages = [
               rust
+
+              pkgs.cargo-binutils
               # Runner for `cargo run` in platform/* (see .cargo/config.toml)
               pkgs.probe-rs-tools
               # Image and flashing tool for the Heltec targets (see Makefile)
