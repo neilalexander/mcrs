@@ -7,6 +7,15 @@ fn main() {
 
 fn version() -> String {
     let package = env::var("CARGO_PKG_VERSION").expect("CARGO_PKG_VERSION must be set");
+
+    // A build from a copy of the tree without its git history, such as Nix's,
+    // passes the commit in as git would give it: the short hash, followed by
+    // `.dirty` if there were uncommitted changes.
+    println!("cargo:rerun-if-env-changed=MCRS_GIT_COMMIT");
+    if let Ok(commit) = env::var("MCRS_GIT_COMMIT") {
+        return format!("{package}+{commit}");
+    }
+
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR must be set");
     let manifest_dir = Path::new(&manifest_dir);
 
