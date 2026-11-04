@@ -83,7 +83,7 @@ jobs:
       # what this job builds. PRs from forks don't get the token, so they only
       # fetch.
       - name: Use Cachix
-        uses: cachix/cachix-action@v16
+        uses: cachix/cachix-action@v17
         with:
           name: mcrs
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
