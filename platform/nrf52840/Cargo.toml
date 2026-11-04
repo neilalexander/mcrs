@@ -40,7 +40,6 @@ panic-probe = { version = "1.0.0", features = ["print-defmt"] }
 embedded-hal-bus = { version = "0.3.0", features = ["async", "defmt-03"] }
 embedded-alloc = "0.7.0"
 
-
 [profile.release]
 opt-level = 3
 lto = "fat"
@@ -48,8 +47,12 @@ codegen-units = 1
 debug = 2
 
 [[bin]]
-name = "mcrs-nrf"
-path = "../../board/nrf52840.rs"
+name = "mcrs-xiao-nrf52840"
+path = "../../board/xiao-nrf52840.rs"
+
+[[bin]]
+name = "mcrs-solar-p1"
+path = "../../board/solar-p1.rs"
 
 [workspace]
 resolver = "3"
