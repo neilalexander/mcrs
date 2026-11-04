@@ -12,12 +12,17 @@ on:
         required: false
         default: ""
         type: string
+      PROFILE:
+        description: "Profile (filename in profiles/)"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: build-images-${{ github.workflow }}-${{ inputs.REF || github.ref }}
+  group: build-images-${{ github.workflow }}-${{ inputs.REF || github.ref }}-${{ inputs.PROFILE || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -79,12 +84,24 @@ jobs:
       - name: Fetch flake inputs over HTTPS
         run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
 
+      # A profile is an override of the package, which `nix build .#package`
+      # can't apply, so the package comes from an expression. It reads the
+      # package and profile from the environment, so neither is spliced into it.
+      # Builds without a profile go the same way, so every run tests it.
       - name: Build images
         id: build
         env:
           PACKAGE: ${{ matrix.package }}
+          PROFILE: ${{ inputs.PROFILE || '' }}
         run: |
-          out=$(nix build --print-build-logs --no-link --print-out-paths ".#$PACKAGE")
+          out=$(nix build --print-build-logs --no-link --print-out-paths --impure --expr '
+            let
+              flake = builtins.getFlake (toString ./.);
+              package = flake.packages.${builtins.currentSystem}.${builtins.getEnv "PACKAGE"};
+              profile = builtins.getEnv "PROFILE";
+            in
+            if profile == "" then package else package.override { inherit profile; }
+          ')
           echo "path=$out" >> "$GITHUB_OUTPUT"
           # The store path without its hash: the images' name and version,
           # e.g. mcrs-heltec-v3-mqtt-0.1.3+1a2b3c4d
