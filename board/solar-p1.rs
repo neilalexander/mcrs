@@ -1,4 +1,4 @@
-//! MCRS repeater for an nRF52840 with an SX1262 radio. It has no storage,
+//! MCRS repeater for the SenseCAP Solar Node P1. It has no storage,
 //! status screen, button, console or battery monitor.
 #![no_std]
 #![no_main]
@@ -22,7 +22,7 @@ use mcrs_repeater::{
 use mcrs_sx1262::{BoardConfig, Sx1262, TcxoCtrlVoltage};
 use panic_probe as _;
 
-const MODEL: &str = "nRF52840";
+const MODEL: &str = "SenseCAP Solar Node P1";
 
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
