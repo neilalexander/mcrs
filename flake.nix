@@ -16,6 +16,10 @@
       url = "github:BjornTheProgrammer/elf2flash";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    zipdfu = {
+      url = "github:fmckeogh/zipdfu";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -26,6 +30,7 @@
       esp-rs-nix,
       crane,
       elf2flash,
+      zipdfu,
       ...
     }:
     let
@@ -259,8 +264,9 @@
               ''
           );
 
-          # An nRF52840 board, as a UF2 image for its UF2 bootloader, made from the finished ELF like
-          # the Heltec images
+          # An nRF52840 board, with images for its bootloader made from the finished ELF like the
+          # Heltec images: a UF2 image to copy onto the USB drive the bootloader shows, and a DFU
+          # package to send it over Bluetooth for OTA updates
           nrfFirmware = lib.makeOverridable (
             {
               board,
@@ -277,12 +283,27 @@
             in
             pkgs.runCommand "${name}-${version}"
               {
-                nativeBuildInputs = [ elf2flash.packages.${system}.default ];
+                nativeBuildInputs = [
+                  elf2flash.packages.${system}.default
+                  zipdfu.packages.${system}.default
+                  pkgs.llvm
+                  pkgs.strip-nondeterminism
+                ];
                 allowedReferences = [ ];
               }
               ''
                 mkdir -p $out
                 elf2flash convert --family 0xada52840 ${elf}/${name}.elf $out/${name}.uf2
+
+                # The bootloader writes the firmware straight after its SoftDevice, so the package
+                # requires the one platform/nrf52840/memory.x leaves room for, S140 7.3.0 (0x0123),
+                # and a bootloader with another refuses it. 0x0052 is the device type Adafruit's
+                # tools use. zipdfu reads Intel HEX, not ELF
+                llvm-objcopy -O ihex ${elf}/${name}.elf ${name}.hex
+                zipdfu --dev-type 0x0052 --sd-req 0x0123 --application ${name}.hex $out/${name}.zip
+                # The zip dates its files with when zipdfu wrote them. Resetting the dates
+                # makes every build of the package the same
+                strip-nondeterminism $out/${name}.zip
               ''
           );
 
