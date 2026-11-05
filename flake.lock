@@ -102,18 +102,40 @@
         "type": "github"
       }
     },
-    "zipdfu": {
+    "rust-overlay_2": {
       "inputs": {
         "nixpkgs": [
+          "zipdfu",
           "nixpkgs"
         ]
       },
       "locked": {
-        "lastModified": 1793882378,
-        "narHash": "sha256-IS8WxIiV2+GQspGivoY4Icjb8Hf6yL1hWf1dbg4ou2k=",
+        "lastModified": 1793870170,
+        "narHash": "sha256-0psEeQjs1g9oWQ6eVVGlCom+X3/uHyr6jSMyHVU57u8=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "19e0e6c951a7a8a7d3232c64e58d26b89df44c60",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "zipdfu": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ],
+        "rust-overlay": "rust-overlay_2"
+      },
+      "locked": {
+        "lastModified": 1793891789,
+        "narHash": "sha256-XHIyrdd7ZkMb9FriXbAeC68k2hmuro8cXErd2awNl+8=",
         "owner": "fmckeogh",
         "repo": "zipdfu",
-        "rev": "fe55e0e7303da9c99e5aa45a1ce08beed7a2dbdc",
+        "rev": "2042dcb7f0f317c9af9fab3198393c3c6a16bbc7",
         "type": "github"
       },
       "original": {
