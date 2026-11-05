@@ -22,15 +22,15 @@
         ]
       },
       "locked": {
-        "lastModified": 1793827518,
-        "narHash": "sha256-SyE3X+84LM0uMJ8zb6olGV4EEa3bMpqfovkXnhXIXXc=",
-        "owner": "fmckeogh",
+        "lastModified": 1793864352,
+        "narHash": "sha256-4yx6STurLAG2+u86SsxxfX1tDiLcobKDHfMuckpNv8I=",
+        "owner": "BjornTheProgrammer",
         "repo": "elf2flash",
-        "rev": "789ce86e80e95814d023d44910f9668df5c6ab0f",
+        "rev": "30bd7c7d13a8cdc406277161b6dfbd5b0540ece2",
         "type": "github"
       },
       "original": {
-        "owner": "fmckeogh",
+        "owner": "BjornTheProgrammer",
         "repo": "elf2flash",
         "type": "github"
       }

@@ -13,7 +13,7 @@
     };
     crane.url = "github:ipetkov/crane";
     elf2flash = {
-      url = "github:fmckeogh/elf2flash";
+      url = "github:BjornTheProgrammer/elf2flash";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
