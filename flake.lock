@@ -48,12 +48,12 @@
         "rev": "e039ce3fcf0b25a23a02effb16d80a3d8fbf46dc",
         "revCount": 68,
         "type": "git",
-        "url": "ssh://git@github.com/leighleighleigh/esp-rs-nix.git"
+        "url": "https://github.com/leighleighleigh/esp-rs-nix.git"
       },
       "original": {
         "ref": "refs/tags/v3.0.1",
         "type": "git",
-        "url": "ssh://git@github.com/leighleighleigh/esp-rs-nix.git"
+        "url": "https://github.com/leighleighleigh/esp-rs-nix.git"
       }
     },
     "nixpkgs": {

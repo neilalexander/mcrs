@@ -8,7 +8,7 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     esp-rs-nix = {
-      url = "git+ssh://git@github.com/leighleighleigh/esp-rs-nix.git?ref=refs/tags/v3.0.1";
+      url = "git+https://github.com/leighleighleigh/esp-rs-nix.git?ref=refs/tags/v3.0.1";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     crane.url = "github:ipetkov/crane";
