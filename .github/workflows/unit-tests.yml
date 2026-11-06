@@ -48,6 +48,7 @@ jobs:
           restore-keys: |
             unit-tests-${{ runner.os }}-${{ hashFiles('flake.lock') }}-
 
+      # also implicitly/partially tests the dev shell
       - name: Run unit tests
         run: nix develop --command cargo test --locked
 
@@ -71,11 +72,6 @@ jobs:
         with:
           name: mcrs
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
-
-      # # flake.lock pins esp-rs-nix to an SSH URL, but runners have no GitHub
-      # # SSH key. The repository is public, so fetch it over HTTPS instead.
-      # - name: Fetch flake inputs over HTTPS
-      #   run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
 
       # The toolchain comes from flake.lock, so only reuse build output built by it.
       - name: Cache Cargo
