@@ -2,13 +2,21 @@
 
 //! The repeater platform for an nRF52840. The board chooses the radio.
 use core::cell::{Cell, RefCell};
-use embassy_nrf::{mode::Blocking, rng::Rng};
+use embassy_nrf::{mode::Blocking, pac::POWER, rng::Rng};
 use embassy_time::{Delay, Instant};
-use mcrs_repeater::{memory::MemoryProfile, platform::Platform};
+use mcrs_repeater::{
+    memory::MemoryProfile,
+    platform::{OtaStatus, Platform},
+};
 
 /// The heap the repeater's tables and queues are allocated from.
 pub const HEAP_SIZE: usize = 64 * 1024;
 const MEMORY_PROFILE: MemoryProfile = MemoryProfile::new(HEAP_SIZE, 8, 16, 64, 256);
+
+/// https://github.com/adafruit/Adafruit_nRF52_Bootloader/blob/master/src/main.c#L96
+///
+/// Will need changing if we ever use SoftDevice
+const DFU_MAGIC_OTA_RESET: u8 = 0xA8;
 
 /// The services the nRF52840 provides.
 pub struct NrfPlatform {
@@ -79,6 +87,27 @@ impl Platform for NrfPlatform {
 
     fn reboot(&self) -> ! {
         cortex_m::peripheral::SCB::sys_reset()
+    }
+
+    fn start_ota(&self) {
+        // GPREGRET keeps its value through the reboot the repeater does once
+        // it has replied, and the bootloader then finds the magic value and
+        // starts its update mode instead of the firmware
+        POWER
+            .gpregret()
+            .write(|w| w.set_gpregret(DFU_MAGIC_OTA_RESET));
+    }
+
+    fn stop_ota(&self) {
+        POWER.gpregret().write(|w| w.set_gpregret(0));
+    }
+
+    fn ota_status(&self) -> OtaStatus {
+        if POWER.gpregret().read().gpregret() == DFU_MAGIC_OTA_RESET {
+            OtaStatus::PendingBootloader
+        } else {
+            OtaStatus::Stopped
+        }
     }
 }
 

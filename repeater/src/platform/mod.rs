@@ -1,14 +1,14 @@
 //! The boundary between the repeater and the hardware it runs on.
 //!
 //! A board crate implements [`Platform`] for the services the whole board
-//! provides: clocks, randomness, delays and rebooting. It passes that to
-//! [`crate::Repeater::new`] along with each device the repeater drives, and
-//! every device has its own trait in this module. Devices that a standard
-//! embedded trait already describes use that trait instead: the console is an
-//! `embedded-io-async` stream and the button an `embedded-hal-async` input. A
-//! board without storage, a console, status screen, button or battery monitor
-//! passes [`NoStorage`], [`NoConsole`], [`NoDisplay`], [`NoButton`] or
-//! [`NoBattery`].
+//! provides: clocks, randomness, delays, rebooting and firmware updates. It
+//! passes that to [`crate::Repeater::new`] along with each device the repeater
+//! drives, and every device has its own trait in this module. Devices that a
+//! standard embedded trait already describes use that trait instead: the
+//! console is an `embedded-io-async` stream and the button an
+//! `embedded-hal-async` input. A board without storage, a console, status
+//! screen, button or battery monitor passes [`NoStorage`], [`NoConsole`],
+//! [`NoDisplay`], [`NoButton`] or [`NoBattery`].
 //!
 //! Drivers for particular chips, such as the SX1262 in `mcrs-sx1262`,
 //! implement these traits in crates of their own, so the repeater depends on
@@ -17,7 +17,7 @@
 pub mod storage;
 
 use crate::{app::config::RadioConfig, memory::MemoryProfile};
-use core::{convert::Infallible, future::Future};
+use core::{convert::Infallible, future::Future, net::SocketAddrV4};
 use embedded_hal_async::{delay::DelayNs, digital::Wait};
 use embedded_io_async::{Read, Write};
 
@@ -52,6 +52,31 @@ pub trait Platform {
     fn random_u32(&self) -> u32;
 
     fn reboot(&self) -> !;
+
+    /// Starts taking a firmware update, as [`Platform::ota_status`] then
+    /// describes. When the board's bootloader takes it
+    /// ([`OtaStatus::PendingBootloader`]), the repeater reboots into the
+    /// bootloader once it has replied.
+    fn start_ota(&self);
+
+    /// Stops taking a firmware update.
+    fn stop_ota(&self);
+
+    fn ota_status(&self) -> OtaStatus;
+}
+
+/// Where a firmware update started with [`Platform::start_ota`] stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OtaStatus {
+    /// No update has been started, or it has been stopped.
+    Stopped,
+    /// Started, and waiting for a network to serve the update page on.
+    Waiting,
+    /// The update page is served at this address, for a browser to upload
+    /// the new firmware to.
+    Serving(SocketAddrV4),
+    /// Pending reset into bootloader
+    PendingBootloader,
 }
 
 /// Keeps small files, such as the configuration, across reboots.

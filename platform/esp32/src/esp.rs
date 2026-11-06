@@ -113,11 +113,11 @@ pub fn init_storage(layout: mcrs_repeater::platform::storage::Layout) -> EspStor
     }
 }
 
-pub fn ota_status() -> OtaStatus {
+pub fn ota_partitions() -> OtaPartitions {
     let mut flash = RomFlash;
     let mut partition_table = [0u8; esp_bootloader_esp_idf::partitions::PARTITION_TABLE_MAX_LEN];
     let Ok(mut updater) = OtaUpdater::new(&mut flash, &mut partition_table) else {
-        return OtaStatus {
+        return OtaPartitions {
             available: false,
             selected: "unavailable",
             next: None,
@@ -134,7 +134,7 @@ pub fn ota_status() -> OtaStatus {
         .map(|(partition, slot)| (Some(app_partition_name(slot)), partition.partition_size()))
         .unwrap_or((None, 0));
 
-    OtaStatus {
+    OtaPartitions {
         available: true,
         selected,
         next,
@@ -345,8 +345,9 @@ pub struct EspStorage {
     inner: Option<super::littlefs::LittleFsStorage>,
 }
 
+/// The app partitions an OTA update writes to, for the update page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct OtaStatus {
+pub struct OtaPartitions {
     pub available: bool,
     pub selected: &'static str,
     pub next: Option<&'static str>,
