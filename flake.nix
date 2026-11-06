@@ -3,19 +3,29 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+
+    # used in the dev environment, prepares a Rust toolchain from the rust-toolchain.toml
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    # ESP Rust toolchain
     esp-rs-nix = {
       url = "git+https://github.com/leighleighleigh/esp-rs-nix.git?ref=refs/tags/v3.0.1";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    # tool for building Rust projects in Nix, used for the firmwares
     crane.url = "github:ipetkov/crane";
+
+    # ELF to UF2
     elf2flash = {
       url = "github:BjornTheProgrammer/elf2flash";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    # ELF to ZIP
     zipdfu = {
       url = "github:fmckeogh/zipdfu";
       inputs.nixpkgs.follows = "nixpkgs";
