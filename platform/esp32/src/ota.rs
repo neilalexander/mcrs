@@ -1,5 +1,5 @@
 use crate::{
-    EspPlatform, EspStorage, OtaError, begin_ota_update, finish_ota_update, ota_status,
+    EspPlatform, EspStorage, OtaError, begin_ota_update, finish_ota_update, ota_partitions,
     write_ota_update,
 };
 use embedded_io_async::{Read, Write};
@@ -97,7 +97,7 @@ where
     }
 
     if request.starts_with(b"GET /status ") {
-        let status = ota_status();
+        let status = ota_partitions();
         let body = alloc::format!(
             "Current firmware: MCRS {}\nSelected for next boot: {}\nNext upload partition: {}\nUpload capacity: {} bytes\n",
             VERSION,

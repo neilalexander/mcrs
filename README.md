@@ -157,15 +157,18 @@ additional authentication, so only enable it on a trusted network.
 
 ### OTA updates
 
-OTA updates can be performed over Wi-Fi on supported boards with the `ota start`
-command on the management CLI, which serves the OTA upload page on port 80.
+Start an update with the `ota start` command on the management CLI. `ota status`
+shows how the update stands, and `ota stop` stops it.
 
+On the Heltec boards, `ota start` serves the OTA upload page over Wi-Fi on port 80.
 Only `-upgrade.bin` images should be uploaded for OTA.
 
 If connected to an existing Wi-Fi network, the OTA page will become available
 over plain HTTP on port 80 on the connected Wi-Fi network. If Wi-Fi is not
 configured, the repeater will instead start its own Wi-Fi access point and assigns
 itself the IP address `192.168.4.1/24`.
+
+On the nRF52840 boards, `ota start` reboots into the bootloader ([Adafruit_nRF52_Bootloader_OTAFIX](https://github.com/oltaco/Adafruit_nRF52_Bootloader_OTAFIX)) in OTA mode where the Nordic DFU app may be used to upload a `.zip` image.
 
 ### Optional MQTT
 

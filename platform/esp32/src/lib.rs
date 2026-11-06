@@ -25,6 +25,11 @@ use crate::{
     },
     spi_device::BlockingExclusiveSpiDevice,
 };
+use core::{
+    cell::{Cell, RefCell},
+    net::SocketAddrV4,
+    task::Waker,
+};
 use defmt::error;
 use esp_hal::{
     Blocking,
@@ -43,7 +48,10 @@ use esp_hal::{
     time::Rate,
     timer::timg::TimerGroup,
 };
-use mcrs_repeater::{memory::MemoryProfile, platform::Platform};
+use mcrs_repeater::{
+    memory::MemoryProfile,
+    platform::{OtaStatus, Platform},
+};
 use mcrs_ssd1306::PowerActiveLevel;
 use mcrs_sx1262::Sx1262;
 
@@ -258,6 +266,17 @@ impl<F: RadioFrontend> Devices<F> {
 pub struct EspPlatform {
     model: &'static str,
     identity_seed: [u8; 32],
+    /// Whether the OTA update page is wanted. The CLI sets it through
+    /// [`Platform::start_ota`] and [`Platform::stop_ota`], and the Wi-Fi task
+    /// serves the page while it's set.
+    ota_requested: Cell<bool>,
+    /// Where the Wi-Fi task serves the page, once it has an address.
+    ota_address: Cell<Option<SocketAddrV4>>,
+    /// Wakes the Wi-Fi task when the request changes.
+    ota_waker: RefCell<Option<Waker>>,
+    /// Counts the changes, so the Wi-Fi task notices a stop and a start
+    /// between its polls.
+    ota_generation: Cell<u32>,
 }
 
 impl EspPlatform {
@@ -267,6 +286,39 @@ impl EspPlatform {
         Self {
             model,
             identity_seed,
+            ota_requested: Cell::new(false),
+            ota_address: Cell::new(None),
+            ota_waker: RefCell::new(None),
+            ota_generation: Cell::new(0),
+        }
+    }
+
+    pub(crate) fn ota_requested(&self) -> bool {
+        self.ota_requested.get()
+    }
+
+    pub(crate) fn ota_generation(&self) -> u32 {
+        self.ota_generation.get()
+    }
+
+    pub(crate) fn register_ota_waker(&self, waker: &Waker) {
+        self.ota_waker.borrow_mut().replace(waker.clone());
+    }
+
+    pub(crate) fn set_ota_address(&self, address: Option<SocketAddrV4>) {
+        self.ota_address.set(address);
+    }
+
+    /// Starting again doesn't restart the page, so an upload in progress
+    /// carries on.
+    fn request_ota(&self, requested: bool) {
+        if self.ota_requested.replace(requested) == requested {
+            return;
+        }
+        self.ota_generation
+            .set(self.ota_generation.get().wrapping_add(1));
+        if let Some(waker) = self.ota_waker.borrow_mut().take() {
+            waker.wake();
         }
     }
 }
@@ -308,5 +360,21 @@ impl Platform for EspPlatform {
 
     fn reboot(&self) -> ! {
         esp::reboot()
+    }
+
+    fn start_ota(&self) {
+        self.request_ota(true);
+    }
+
+    fn stop_ota(&self) {
+        self.request_ota(false);
+    }
+
+    fn ota_status(&self) -> OtaStatus {
+        match (self.ota_requested.get(), self.ota_address.get()) {
+            (false, _) => OtaStatus::Stopped,
+            (true, None) => OtaStatus::Waiting,
+            (true, Some(address)) => OtaStatus::Serving(address),
+        }
     }
 }

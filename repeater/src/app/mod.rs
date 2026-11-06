@@ -10,7 +10,6 @@ pub mod identity;
 pub mod mqtt;
 
 mod neighbours;
-//pub mod ota;
 pub mod periodic;
 mod protocol_log;
 pub mod regions;
@@ -25,7 +24,7 @@ use core::{
     future::{Future, poll_fn},
     pin::pin,
     sync::atomic::{AtomicI16, AtomicU8, AtomicU16, AtomicU32, Ordering},
-    task::{Poll, Waker},
+    task::Poll,
 };
 use defmt::{debug, error, info, warn};
 use embassy_sync::{
@@ -125,11 +124,6 @@ pub struct AppContext<P, S> {
     #[cfg(feature = "mqtt")]
     pub mqtt: mqtt::MqttContext,
 
-    ota_requested: Cell<bool>,
-    ota_address: Cell<Option<core::net::SocketAddrV4>>,
-    ota_waker: RefCell<Option<Waker>>,
-    ota_generation: Cell<u32>,
-
     reboot_after_next_remote_reply: Cell<bool>,
     seen_packets: RefCell<SeenPacketCache>,
     pending_forwards: RefCell<Vec<[u8; 8]>>,
@@ -168,11 +162,6 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
 
             #[cfg(feature = "mqtt")]
             mqtt: MqttContext::new(),
-
-            ota_requested: Cell::new(false),
-            ota_address: Cell::new(None),
-            ota_waker: RefCell::new(None),
-            ota_generation: Cell::new(0),
 
             reboot_after_next_remote_reply: Cell::new(false),
             seen_packets: RefCell::new(SeenPacketCache::new_with_capacity(
@@ -536,44 +525,6 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
 
     pub fn request_reboot_after_next_remote_reply(&self) {
         self.reboot_after_next_remote_reply.set(true);
-    }
-
-    pub fn request_ota_start(&self) {
-        self.ota_requested.set(true);
-        self.wake_ota();
-    }
-
-    pub fn request_ota_stop(&self) {
-        self.ota_requested.set(false);
-        self.wake_ota();
-    }
-
-    pub fn ota_requested(&self) -> bool {
-        self.ota_requested.get()
-    }
-
-    pub fn ota_address(&self) -> Option<core::net::SocketAddrV4> {
-        self.ota_address.get()
-    }
-
-    pub fn set_ota_address(&self, address: Option<core::net::SocketAddrV4>) {
-        self.ota_address.set(address);
-    }
-
-    pub fn ota_generation(&self) -> u32 {
-        self.ota_generation.get()
-    }
-
-    pub fn register_ota_waker(&self, waker: &Waker) {
-        self.ota_waker.borrow_mut().replace(waker.clone());
-    }
-
-    fn wake_ota(&self) {
-        self.ota_generation
-            .set(self.ota_generation.get().wrapping_add(1));
-        if let Some(waker) = self.ota_waker.borrow_mut().take() {
-            waker.wake();
-        }
     }
 
     fn take_reboot_after_next_remote_reply(&self) -> bool {

@@ -122,7 +122,7 @@ async fn run_ota_ap_mode(
     context: &AppContext<EspPlatform, EspStorage>,
 ) -> ! {
     let mut stack_resources = embassy_net::StackResources::<4>::new();
-    context.set_ota_address(Some(core::net::SocketAddrV4::new(OTA_AP_IP, OTA_HTTP_PORT)));
+    context.platform.set_ota_address(Some(core::net::SocketAddrV4::new(OTA_AP_IP, OTA_HTTP_PORT)));
     loop {
         wait_for_ota_requested_idle(context, true).await;
 
@@ -132,7 +132,7 @@ async fn run_ota_ap_mode(
                     Ok(wifi) => wifi,
                     Err(error) => {
                         error!("Wi-Fi: device init failed: {}", error);
-                        context.request_ota_stop();
+                        context.platform.stop_ota();
                         continue;
                     }
                 };
@@ -182,14 +182,14 @@ async fn run_ota_ap_session<'a>(
     );
     if dhcp_socket.bind(OTA_DHCP_SERVER_PORT).is_err() {
         error!("OTA: DHCP bind failed");
-        context.request_ota_stop();
+        context.platform.stop_ota();
         return;
     }
     let mut dhcp = pin!(dhcp_server(&dhcp_socket));
     let ssid = ota_ssid(context).await;
     if let Err(error) = start_ota_ap(&mut controller, &ssid).await {
         error!("OTA: AP start failed: {}", error);
-        context.request_ota_stop();
+        context.platform.stop_ota();
         return;
     }
     info!("OTA: AP started ssid={} url=http://{}/", ssid, OTA_AP_IP,);
@@ -345,7 +345,7 @@ async fn run_ota_station_mode<'a>(
     });
     poll_fn(|cx| {
         let _ = runner.as_mut().poll(cx);
-        context.set_ota_address(
+        context.platform.set_ota_address(
             stack.config_v4().map(|config| {
                 core::net::SocketAddrV4::new(config.address.address(), OTA_HTTP_PORT)
             }),
@@ -449,7 +449,7 @@ async fn serve_ota_session(
     stack: embassy_net::Stack<'_>,
     context: &AppContext<EspPlatform, EspStorage>,
 ) {
-    while context.ota_requested() {
+    while context.platform.ota_requested() {
         let mut rx_buffer = [0u8; 2048];
         let mut tx_buffer = [0u8; 2048];
         let mut socket = embassy_net::tcp::TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
@@ -473,13 +473,13 @@ async fn accept_ota_connection<'a>(
     context: &AppContext<EspPlatform, EspStorage>,
     socket: &mut embassy_net::tcp::TcpSocket<'a>,
 ) -> bool {
-    let generation = context.ota_generation();
+    let generation = context.platform.ota_generation();
     let mut accept = pin!(socket.accept(OTA_HTTP_PORT));
     poll_fn(|cx| {
-        if !context.ota_requested() || context.ota_generation() != generation {
+        if !context.platform.ota_requested() || context.platform.ota_generation() != generation {
             return Poll::Ready(false);
         }
-        context.register_ota_waker(cx.waker());
+        context.platform.register_ota_waker(cx.waker());
         match accept.as_mut().poll(cx) {
             Poll::Ready(Ok(())) => Poll::Ready(true),
             Poll::Ready(Err(_)) => Poll::Ready(false),
@@ -498,13 +498,13 @@ async fn handle_ota_connection<'a>(
     context: &AppContext<EspPlatform, EspStorage>,
     socket: &mut embassy_net::tcp::TcpSocket<'a>,
 ) -> OtaConnectionResult {
-    let generation = context.ota_generation();
+    let generation = context.platform.ota_generation();
     let mut connection = pin!(crate::ota::handle_connection(context, socket));
     poll_fn(|cx| {
-        if !context.ota_requested() || context.ota_generation() != generation {
+        if !context.platform.ota_requested() || context.platform.ota_generation() != generation {
             return Poll::Ready(OtaConnectionResult::Stopped);
         }
-        context.register_ota_waker(cx.waker());
+        context.platform.register_ota_waker(cx.waker());
         match connection.as_mut().poll(cx) {
             Poll::Ready(result) => Poll::Ready(OtaConnectionResult::Complete(result)),
             Poll::Pending => Poll::Pending,
@@ -628,19 +628,20 @@ async fn wait_for_ota_requested_idle(
     context: &AppContext<EspPlatform, EspStorage>,
     requested: bool,
 ) {
+    let platform = &context.platform;
     loop {
-        if context.ota_requested() == requested {
+        if platform.ota_requested() == requested {
             return;
         }
 
-        let generation = context.ota_generation();
+        let generation = platform.ota_generation();
         poll_fn(|cx| {
-            if context.ota_requested() == requested || context.ota_generation() != generation {
+            if platform.ota_requested() == requested || platform.ota_generation() != generation {
                 return Poll::Ready(());
             }
 
-            context.register_ota_waker(cx.waker());
-            if context.ota_requested() == requested || context.ota_generation() != generation {
+            platform.register_ota_waker(cx.waker());
+            if platform.ota_requested() == requested || platform.ota_generation() != generation {
                 Poll::Ready(())
             } else {
                 Poll::Pending

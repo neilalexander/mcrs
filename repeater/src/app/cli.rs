@@ -4,7 +4,7 @@ use crate::{
         config::{Bandwidth, CodingRate, RadioConfig, SpreadingFactor},
         crypto::{encode_cli_text_response, encode_login_response},
     },
-    platform::{Platform, Storage},
+    platform::{OtaStatus, Platform, Storage},
 };
 use alloc::{format, string::String, vec, vec::Vec};
 use core::fmt::Write;
@@ -689,11 +689,6 @@ async fn handle_command<P: Platform, S: Storage>(
         return Some(command_response(request, output));
     }
 
-    // if command == "ota" || command.starts_with("ota ") {
-    //     let output = handle_ota_command(command, context, request);
-    //     return Some(command_response(request, output));
-    // }
-
     #[cfg(feature = "mqtt")]
     if command == "mqtt status" {
         let output = if request.origin.is_local() {
@@ -771,6 +766,28 @@ async fn handle_command<P: Platform, S: Storage>(
                 String::from("OK - rebooting")
             }
         }
+        "ota start" => {
+            if !request.privilege.is_passworded() {
+                denied_text()
+            } else {
+                context.platform.start_ota();
+                let status = context.platform.ota_status();
+                // The bootloader starts at the next reboot, once the reply is out
+                if status == OtaStatus::PendingBootloader {
+                    post_reply = Some(PostReplyAction::Reboot);
+                }
+                ota_status_text(status)
+            }
+        }
+        "ota stop" => {
+            if !request.privilege.is_passworded() {
+                denied_text()
+            } else {
+                context.platform.stop_ota();
+                ota_status_text(context.platform.ota_status())
+            }
+        }
+        "ota status" => ota_status_text(context.platform.ota_status()),
         "erase config" => {
             if !request.privilege.is_passworded() {
                 denied_text()
@@ -1676,50 +1693,14 @@ async fn handle_region_command<P: Platform, S: Storage>(
     }
 }
 
-// fn handle_ota_command<P: Platform, S: Storage>(
-//     command: &str,
-//     context: &AppContext<P, S>,
-//     request: CliRequest,
-// ) -> String {
-//     let mut parts = command.split_ascii_whitespace();
-//     let _ota = parts.next();
-//     match parts.next() {
-//         None | Some("status") => ota_status_text(),
-//         Some("start") => {
-//             if !request.privilege.is_passworded() {
-//                 denied_text()
-//             } else {
-//                 context.request_ota_start();
-//                 match context.ota_address() {
-//                     Some(address) => format!("OTA: start requested; http://{}/", address),
-//                     None => String::from("OTA: start requested; waiting for Wi-Fi"),
-//                 }
-//             }
-//         }
-//         Some("stop") => {
-//             if !request.privilege.is_passworded() {
-//                 denied_text()
-//             } else {
-//                 context.request_ota_stop();
-//                 String::from("OTA: stop requested")
-//             }
-//         }
-//         _ => String::from("Err - use 'ota status', 'ota start', or 'ota stop'"),
-//     }
-// }
-
-// fn ota_status_text<P: Platform, S: Storage>(context: &AppContext<P, S>) -> String {
-//     let status = context.platform.ota_status();
-//     if !status.available {
-//         return String::from("OTA: unavailable");
-//     }
-
-//     let next = status.next.unwrap_or("unknown");
-//     format!(
-//         "OTA: selected={} next={} next_size={}",
-//         status.selected, next, status.next_size
-//     )
-// }
+fn ota_status_text(status: OtaStatus) -> String {
+    match status {
+        OtaStatus::Stopped => String::from("OTA: stopped"),
+        OtaStatus::Waiting => String::from("OTA: waiting for the network"),
+        OtaStatus::Serving(address) => format!("OTA: serving http://{}/", address),
+        OtaStatus::PendingBootloader => String::from("OTA: rebooting into the bootloader"),
+    }
+}
 
 fn handle_time_set_command<P: Platform, S: Storage>(
     context: &AppContext<P, S>,
