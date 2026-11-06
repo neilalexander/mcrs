@@ -1,9 +1,0 @@
-{
-    "rust-analyzer.check.allTargets": false,
-    "rust-analyzer.checkOnSave": true,
-    "rust-analyzer.linkedProjects": [
-        "platform/esp32/Cargo.toml",
-        "platform/nrf52840/Cargo.toml",
-        "Cargo.toml",
-    ],
-}
