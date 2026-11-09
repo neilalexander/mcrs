@@ -17,7 +17,7 @@ use embedded_hal_bus::spi::ExclusiveDevice;
 use mcrs_nrf::{HEAP_SIZE, NrfPlatform};
 use mcrs_repeater::{
     Repeater,
-    platform::{NoBattery, NoButton, NoConsole, NoDisplay, NoStorage},
+    platform::{NoBattery, NoButton, NoConsole, NoDisplay, NoStorage, Radio},
 };
 use mcrs_sx1262::{BoardConfig, Sx1262, TcxoCtrlVoltage};
 use panic_probe as _;
@@ -49,7 +49,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     let spim = Spim::new(p.TWISPI1, Irqs, p.P1_13, p.P1_14, p.P1_15, spi_config);
     let spi = ExclusiveDevice::new(spim, nss, Delay).unwrap();
 
-    let radio = Sx1262::new(
+    let mut radio = Sx1262::new(
         spi,
         reset,
         dio1,
@@ -63,9 +63,16 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     );
     let platform = NrfPlatform::new(MODEL, Rng::new_blocking(p.RNG));
 
+    let mut console = NoConsole;
+    let mut display = NoDisplay;
+    let mut button = NoButton;
+    let mut battery = NoBattery;
     Repeater::new(
-        platform, NoStorage, radio, NoConsole, NoDisplay, NoButton, NoBattery,
+        platform, NoStorage, &mut radio, &mut console, &mut display, &mut button, &mut battery,
     )
-    .run()
-    .await
+    .run(0) // Battery monitoring disabled.
+    .await;
+    // Brownout has no timer recovery on these boards yet.
+    let _ = radio.shutdown().await;
+    core::future::pending().await
 }

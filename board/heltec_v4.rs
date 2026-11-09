@@ -2,7 +2,7 @@
 #![no_main]
 
 use defmt::info;
-use embassy_futures::join::join;
+use embassy_futures::select::select;
 use embedded_hal_async::delay::DelayNs;
 use esp_hal::{
     gpio::{Flex, InputConfig, Level, Output, OutputConfig},
@@ -15,37 +15,55 @@ use mcrs_esp32s3::{
 };
 
 const MODEL: &str = "Heltec V4";
+// Provisional values; validate against this board's battery and regulator.
+const STARTUP_MIN_MV: u16 = 3300;
+const VOLTAGE_WARNING_MV: u16 = 3000;
 
 #[esp_rtos::main]
 async fn main(_spawner: embassy_executor::Spawner) -> ! {
     let (peripherals, board) = mcrs_esp32s3::init();
 
-    let console = UsbSerialJtag::new(board.USB_DEVICE).into_async();
-
-    let output_config = OutputConfig::default();
-    let frontend = HeltecV4Frontend::detect(
-        Output::new(board.GPIO7, Level::High, output_config),
-        Flex::new(board.GPIO2),
-        Output::new(board.GPIO5, Level::High, output_config),
-        Output::new(board.GPIO46, Level::Low, output_config),
-        &InputConfig::default(),
+    let (platform, storage, mut devices) = Devices::new(
+        peripherals,
+        MODEL,
+        BoardConfig::heltec_v4(),
+        STARTUP_MIN_MV,
+        async {
+            let output_config = OutputConfig::default();
+            HeltecV4Frontend::detect(
+                Output::new(board.GPIO7, Level::Low, output_config),
+                Flex::new(board.GPIO2),
+                Output::new(board.GPIO5, Level::Low, output_config),
+                Output::new(board.GPIO46, Level::Low, output_config),
+                &InputConfig::default(),
+            )
+            .await
+        },
     )
     .await;
+    let mut console = UsbSerialJtag::new(board.USB_DEVICE).into_async();
 
-    let devices = Devices::new(peripherals, MODEL, BoardConfig::heltec_v4(), frontend);
+    {
+        let repeater = Repeater::new(
+            platform,
+            storage,
+            &mut devices.radio,
+            &mut console,
+            &mut devices.display,
+            &mut devices.button,
+            &mut devices.battery,
+        );
+        let context = repeater.context();
+        select(
+            repeater.run(VOLTAGE_WARNING_MV),
+            wifi_task(&mut devices.wifi, context),
+        )
+        .await;
+    } // Both futures are dropped; main owns the devices again.
 
-    let repeater = Repeater::new(
-        devices.platform,
-        devices.storage,
-        devices.radio,
-        console,
-        devices.display,
-        devices.button,
-        devices.battery,
-    );
-    let context = repeater.context();
-    let (never, _) = join(repeater.run(), wifi_task(devices.wifi, context)).await;
-    never
+    info!("Entering low-power recovery");
+    devices.shutdown().await;
+    mcrs_esp32s3::deep_sleep(mcrs_esp32s3::RECOVERY_SLEEP)
 }
 
 struct HeltecV4Frontend {
@@ -81,7 +99,7 @@ impl HeltecV4Frontend {
             HeltecV4FrontendKind::Gc1109
         };
         let mut frontend = Self::new(pa_power, shared_enable, kct_ctx, gc_tx_enable, kind);
-        frontend.set_rx_mode();
+        frontend.shutdown();
         match kind {
             HeltecV4FrontendKind::Gc1109 => info!("Radio frontend: Heltec v4 GC1109"),
             HeltecV4FrontendKind::Kct8103l => info!("Radio frontend: Heltec v4.3 KCT8103L"),
@@ -96,7 +114,7 @@ impl HeltecV4Frontend {
         gc_tx_enable: RadioOutput,
         kind: HeltecV4FrontendKind,
     ) -> Self {
-        shared_enable.set_level(Level::High);
+        shared_enable.set_level(Level::Low);
         shared_enable.apply_output_config(&OutputConfig::default());
         shared_enable.set_output_enable(true);
         shared_enable.set_input_enable(false);

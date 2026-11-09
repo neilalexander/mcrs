@@ -1999,6 +1999,7 @@ dependencies = [
  "curve25519-dalek",
  "defmt 1.2.0",
  "ed25519-dalek",
+ "embassy-futures",
  "embassy-net",
  "embassy-sync 0.8.0",
  "embassy-time",

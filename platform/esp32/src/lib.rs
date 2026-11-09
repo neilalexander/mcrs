@@ -19,6 +19,9 @@ pub(crate) mod rng;
 
 pub use esp::*;
 
+/// Recheck the battery after 30 seconds in deep sleep.
+pub const RECOVERY_SLEEP: core::time::Duration = core::time::Duration::from_secs(30);
+
 use crate::{
     heltec::{
         BatteryMonitor, BoardRadio, MEMORY_PROFILE, RadioFrontend, STORAGE_LAYOUT, WifiResources,
@@ -30,7 +33,7 @@ use core::{
     net::SocketAddrV4,
     task::Waker,
 };
-use defmt::error;
+use defmt::{error, info};
 use esp_hal::{
     Blocking,
     gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull},
@@ -50,7 +53,7 @@ use esp_hal::{
 };
 use mcrs_repeater::{
     memory::MemoryProfile,
-    platform::{OtaStatus, Platform},
+    platform::{Battery, OtaStatus, Platform, Radio},
 };
 use mcrs_ssd1306::PowerActiveLevel;
 use mcrs_sx1262::Sx1262;
@@ -149,28 +152,46 @@ pub fn init() -> (CommonPeripherals, BoardPeripherals) {
     (common, board)
 }
 
-/// The devices that every Heltec board wires the same way. A board passes
-/// them to [`mcrs_repeater::Repeater::new`] with its console.
+/// Owns the board devices across normal operation and shutdown.
 pub struct Devices<F> {
-    pub platform: EspPlatform,
-    pub storage: EspStorage,
     pub radio: HeltecRadio<F>,
     pub display: OledDisplay,
     pub button: Input<'static>,
-    pub battery: BatteryMonitor,
+    pub battery: BatteryMonitor<'static>,
     /// Reserved for the Wi-Fi tasks.
     pub wifi: WifiResources,
 }
 
 impl<F: RadioFrontend> Devices<F> {
+    /// Shuts down externally powered devices after normal tasks have stopped.
+    /// Drop the Wi-Fi task first so it releases its controller.
+    /// Attempts every device, logging failures before the board enters sleep.
+    pub async fn shutdown(&mut self) {
+        self.battery.shutdown();
+        if self.display.sleep().is_err() {
+            error!("Display shutdown failed");
+        }
+        match embassy_time::with_timeout(
+            embassy_time::Duration::from_secs(2),
+            self.radio.shutdown(),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(())) => error!("Radio shutdown failed"),
+            Err(_) => error!("Radio shutdown timed out"),
+        }
+    }
+
     /// Sets up the shared hardware. `model` names the board in MQTT status
-    /// reports.
-    pub fn new(
+    /// reports. Battery sensing runs first if minimum_mv is above zero.
+    pub async fn new(
         peripherals: CommonPeripherals,
         model: &'static str,
         board_config: BoardConfig,
-        frontend: F,
-    ) -> Self {
+        minimum_mv: u16,
+        frontend: impl core::future::Future<Output = F>,
+    ) -> (EspPlatform, EspStorage, Self) {
         let CommonPeripherals {
             radio_spi,
             radio_sck,
@@ -188,13 +209,38 @@ impl<F: RadioFrontend> Devices<F> {
             button,
             rng,
             mut adc,
-            battery_sense,
-            battery_ctrl,
+            mut battery_sense,
+            mut battery_ctrl,
             wifi,
         } = peripherals;
 
         let output_config = OutputConfig::default();
         let input_config = InputConfig::default();
+
+        // Keep the display rail off and NSS high while checking the battery.
+        // Do not initialise SPI, I2C, the frontend, entropy or storage yet.
+        let display_power = Output::new(display_power, Level::High, output_config);
+        let radio_cs = Output::new(radio_cs, Level::High, output_config);
+        if minimum_mv > 0 {
+            let mut battery = BatteryMonitor::new(
+                adc.reborrow(),
+                battery_sense.reborrow(),
+                battery_ctrl.reborrow(),
+            );
+            let voltage = battery.millivolts().await;
+            match voltage {
+                Some(mv) => info!("Startup battery: {}mV (minimum {}mV)", mv, minimum_mv),
+                None => info!("Startup battery: voltage unavailable"),
+            }
+            battery.shutdown();
+            if !voltage.is_some_and(|mv| mv >= minimum_mv) {
+                deep_sleep(RECOVERY_SLEEP);
+            }
+        }
+        // ADC1 is free again for the entropy source before the permanent
+        // battery monitor takes ownership. The frontend is constructed now.
+        let identity_seed = heltec::generate_identity_seed(rng, adc.reborrow());
+        let frontend = frontend.await;
 
         let spi = match Spi::new(
             radio_spi,
@@ -217,7 +263,7 @@ impl<F: RadioFrontend> Devices<F> {
             I2cConfig::default().with_frequency(Rate::from_khz(400)),
         ) {
             Ok(i2c) => {
-                let power = Output::new(display_power, Level::Low, output_config);
+                let power = display_power;
                 let reset = Output::new(display_reset, Level::High, output_config);
                 let i2c = i2c.with_sda(display_sda).with_scl(display_scl);
 
@@ -234,18 +280,12 @@ impl<F: RadioFrontend> Devices<F> {
             }
         };
 
-        let identity_seed = heltec::generate_identity_seed(rng, adc.reborrow());
-
-        Self {
-            platform: EspPlatform::new(model, identity_seed),
-            storage: esp::init_storage(STORAGE_LAYOUT),
+        let platform = EspPlatform::new(model, identity_seed);
+        let storage = esp::init_storage(STORAGE_LAYOUT);
+        let devices = Self {
             radio: BoardRadio::new(
                 Sx1262::new(
-                    BlockingExclusiveSpiDevice::new(
-                        spi,
-                        Output::new(radio_cs, Level::High, output_config),
-                        esp::spi_delay(),
-                    ),
+                    BlockingExclusiveSpiDevice::new(spi, radio_cs, esp::spi_delay()),
                     Output::new(radio_reset, Level::High, output_config),
                     Input::new(radio_dio1, input_config),
                     Input::new(radio_busy, input_config),
@@ -258,7 +298,8 @@ impl<F: RadioFrontend> Devices<F> {
             button: Input::new(button, InputConfig::default().with_pull(Pull::Up)),
             battery: BatteryMonitor::new(adc, battery_sense, battery_ctrl),
             wifi: WifiResources { wifi },
-        }
+        };
+        (platform, storage, devices)
     }
 }
 

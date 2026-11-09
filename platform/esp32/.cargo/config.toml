@@ -11,3 +11,7 @@ build-std = ["alloc", "core"]
 
 [build]
 target = "xtensa-esp32s3-none-elf"
+
+[env]
+# Serial CLI replies use defmt::info; defmt otherwise defaults to error only.
+DEFMT_LOG = "info"

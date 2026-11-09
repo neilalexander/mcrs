@@ -1,8 +1,8 @@
 use alloc::vec;
 use core::{
     cell::{Cell, RefCell},
-    fmt,
     hint::spin_loop,
+    time::Duration,
 };
 use critical_section::Mutex;
 use defmt::{Debug2Format, error, info, warn};
@@ -14,9 +14,14 @@ use esp_bootloader_esp_idf::{
     ota_updater::OtaUpdater,
     partitions::{AppPartitionSubType, PartitionType},
 };
-use esp_hal::{clock::CpuClock, peripherals::Peripherals, rtc_cntl::Rtc, time::Instant};
-use esp_println::{print, println};
-use mcrs_repeater::{VERSION, radio_metrics::SnrDb};
+use esp_hal::{
+    clock::CpuClock,
+    peripherals::Peripherals,
+    rtc_cntl::{Rtc, sleep::TimerWakeupSource},
+    time::Instant,
+};
+use esp_println::println;
+use mcrs_repeater::VERSION;
 
 // Use the HAL's supported descriptor section, preserving the git-derived version.
 esp_bootloader_esp_idf::esp_app_desc!(
@@ -51,6 +56,12 @@ pub fn init() -> Peripherals {
 
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::_80MHz);
     let peripherals = esp_hal::init(config);
+    // Release the digital pad levels latched for deep sleep before configuring
+    // this boot's GPIOs (including battery-divider polarity detection).
+    esp_hal::peripherals::LPWR::regs().dig_iso().modify(|_, w| {
+        w.dg_pad_autohold_en().clear_bit();
+        w.clr_dg_pad_autohold().set_bit()
+    });
     init_rtc_clock();
 
     log_starting();
@@ -740,6 +751,23 @@ pub fn set_wall_clock_if_forward(unix_seconds: u32) -> bool {
     });
     refresh_retained_wall_clock(unix_seconds);
     true
+}
+
+/// Enters deep sleep after the board has shut down its external peripherals.
+/// The RTC timer boots the firmware again; this function never returns.
+pub fn deep_sleep(duration: Duration) -> ! {
+    refresh_retained_wall_clock(now_seconds());
+    let timer = TimerWakeupSource::new(duration);
+    // The existing platform-owned RTC handle is the sole LPWR owner. Take it
+    // out of the mutex so interrupts are not masked throughout sleep entry.
+    let mut rtc = critical_section::with(|cs| RTC_CLOCK.borrow_ref_mut(cs).take())
+        .expect("RTC initialized before sleep");
+    // Preserve shutdown levels on digital pads while their power domain is off.
+    // This includes GPIO36/37 (display/divider) and GPIO46 (V4 FEM control).
+    esp_hal::peripherals::LPWR::regs()
+        .dig_iso()
+        .modify(|_, w| w.dg_pad_autohold_en().set_bit());
+    rtc.sleep_deep(&[&timer]);
 }
 
 pub fn reboot() -> ! {

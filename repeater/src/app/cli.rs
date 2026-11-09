@@ -50,6 +50,16 @@ pub struct CliResponse {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PostReplyAction {
     Reboot,
+    Brownout,
+}
+
+impl PostReplyAction {
+    pub(crate) fn execute<P: Platform, S: Storage>(self, context: &AppContext<P, S>) {
+        match self {
+            Self::Reboot => context.platform.reboot(),
+            Self::Brownout => context.request_brownout(),
+        }
+    }
 }
 
 impl Cli {
@@ -118,9 +128,9 @@ impl Cli {
         self.len = 0;
 
         if let Some(response) = handle_command(command.trim(), context, CliRequest::serial()).await
-            && response.post_reply == Some(PostReplyAction::Reboot)
+            && let Some(action) = response.post_reply
         {
-            context.platform.reboot();
+            action.execute(context);
         }
     }
 }
@@ -286,10 +296,7 @@ async fn handle_anonymous_request<P: Platform, S: Storage>(
     let request = CliRequest::remote(cli_privilege_for_remote(privilege), timestamp);
 
     let response = handle_command(command, context, request).await?;
-    if response.post_reply == Some(PostReplyAction::Reboot) {
-        context.request_reboot_after_next_remote_reply();
-    }
-    encode_remote_cli_reply(
+    let reply = encode_remote_cli_reply(
         context,
         &decrypted.shared_secret,
         &decrypted.sender_pubkey,
@@ -297,7 +304,9 @@ async fn handle_anonymous_request<P: Platform, S: Storage>(
         timestamp,
         response.text,
         reply_path,
-    )
+    )?;
+    context.set_remote_reply_action(response.post_reply);
+    Some(reply)
 }
 
 async fn handle_authenticated_text_message<P: Platform, S: Storage>(
@@ -350,13 +359,10 @@ async fn handle_authenticated_text_message<P: Platform, S: Storage>(
         plaintext.timestamp,
     );
     let mut response = handle_command(command, context, request).await?;
-    if response.post_reply == Some(PostReplyAction::Reboot) {
-        context.request_reboot_after_next_remote_reply();
-    }
     if let Some(prefix) = correlation_prefix {
         response.text.insert_str(0, prefix);
     }
-    encode_remote_cli_reply(
+    let reply = encode_remote_cli_reply(
         context,
         &decrypted.shared_secret,
         &decrypted.sender_pubkey,
@@ -364,7 +370,9 @@ async fn handle_authenticated_text_message<P: Platform, S: Storage>(
         plaintext.timestamp,
         response.text,
         decrypted.reply_path,
-    )
+    )?;
+    context.set_remote_reply_action(response.post_reply);
+    Some(reply)
 }
 
 fn split_cli_correlation_prefix(command: &str) -> (Option<&str>, &str) {
@@ -756,6 +764,14 @@ async fn handle_command<P: Platform, S: Storage>(
                     .await
             } else {
                 String::from("CLI: denied, export config requires privileged serial or telnet")
+            }
+        }
+        "brownout" => {
+            if !request.privilege.is_passworded() {
+                denied_text()
+            } else {
+                post_reply = Some(PostReplyAction::Brownout);
+                String::from("OK - entering brownout")
             }
         }
         "reboot" => {

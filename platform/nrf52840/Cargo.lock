@@ -938,6 +938,7 @@ dependencies = [
  "curve25519-dalek",
  "defmt 1.2.0",
  "ed25519-dalek",
+ "embassy-futures",
  "embassy-net",
  "embassy-sync",
  "embedded-hal 1.0.0",

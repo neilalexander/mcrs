@@ -170,7 +170,13 @@ where
     }
 
     async fn shutdown(&mut self) -> Result<(), ()> {
-        self.started()?.lora.sleep(false).await.map_err(|error| {
+        let started = self.started()?;
+        // Cancelling continuous receive leaves the chip in RX. SetSleep is
+        // only valid from standby; lora-phy's sleep() does not enter it for us.
+        started.lora.enter_standby().await.map_err(|error| {
+            error!("sx1262 shutdown standby: {}", Debug2Format(&error));
+        })?;
+        started.lora.sleep(false).await.map_err(|error| {
             error!("error on shutdown sx1262: {}", Debug2Format(&error));
         })
     }

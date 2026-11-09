@@ -14,7 +14,11 @@ use embedded_hal_async::{delay::DelayNs, digital::Wait};
 const DISPLAY_AWAKE_MS: u32 = 5_000;
 const ADVERT_HOLD_MS: u32 = 2_000;
 
-pub(crate) async fn run<P, S, D, B>(mut display: D, button: B, context: &AppContext<P, S>) -> !
+pub(crate) async fn run<P, S, D, B>(
+    display: &mut D,
+    button: &mut B,
+    context: &AppContext<P, S>,
+) -> !
 where
     P: Platform,
     S: Storage,
@@ -31,7 +35,7 @@ where
         error!("display init failed");
         handle_button(&mut button, context).await
     }
-    if show_status(&mut display, context, None).await.is_err() {
+    if show_status(display, context, None).await.is_err() {
         error!("display write failed");
         handle_button(&mut button, context).await
     }
@@ -48,12 +52,12 @@ where
                     }
                 }
                 DisplayEvent::ButtonPressed => {
-                    if show_status(&mut display, context, None).await.is_err() {
+                    if show_status(display, context, None).await.is_err() {
                         error!("display status error after button press");
                     }
                     debug!("Display wake extended");
                     let action = button.release_or_hold().await;
-                    show_advert_message_if_sent(&mut display, context, action).await;
+                    show_advert_message_if_sent(display, context, action).await;
                 }
             }
         } else {
@@ -81,10 +85,10 @@ where
                 (wake_result, action)
             };
 
-            if wake_result.is_ok() && show_status(&mut display, context, None).await.is_ok() {
+            if wake_result.is_ok() && show_status(display, context, None).await.is_ok() {
                 debug!("Display woken by button");
                 awake = true;
-                show_advert_message_if_sent(&mut display, context, action).await;
+                show_advert_message_if_sent(display, context, action).await;
             } else {
                 error!("display status or wake result error");
             }

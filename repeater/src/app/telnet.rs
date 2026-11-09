@@ -1,4 +1,4 @@
-use super::{AppContext, cli::PostReplyAction};
+use super::AppContext;
 use crate::platform::{Platform, Storage};
 use defmt::info;
 use embedded_io_async::Write as _;
@@ -82,8 +82,8 @@ async fn handle_connection<P: Platform, S: Storage>(
                             socket.write_all(b"\r\n").await.map_err(|_| ())?;
                         }
                         socket.flush().await.map_err(|_| ())?;
-                        if response.post_reply == Some(PostReplyAction::Reboot) {
-                            context.platform.reboot();
+                        if let Some(action) = response.post_reply {
+                            action.execute(context);
                         }
                     }
                     socket.write_all(b"> ").await.map_err(|_| ())?;

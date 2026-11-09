@@ -124,7 +124,8 @@ pub struct AppContext<P, S> {
     #[cfg(feature = "mqtt")]
     pub mqtt: mqtt::MqttContext,
 
-    reboot_after_next_remote_reply: Cell<bool>,
+    remote_reply_action: Cell<Option<cli::PostReplyAction>>,
+    brownout_requested: Signal<CriticalSectionRawMutex, ()>,
     seen_packets: RefCell<SeenPacketCache>,
     pending_forwards: RefCell<Vec<[u8; 8]>>,
     pending_discover: RefCell<Option<PendingDiscover>>,
@@ -163,7 +164,8 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
             #[cfg(feature = "mqtt")]
             mqtt: MqttContext::new(),
 
-            reboot_after_next_remote_reply: Cell::new(false),
+            remote_reply_action: Cell::new(None),
+            brownout_requested: Signal::new(),
             seen_packets: RefCell::new(SeenPacketCache::new_with_capacity(
                 SEEN_PACKET_TTL_MS,
                 memory.seen_packet_cache_len,
@@ -474,20 +476,15 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
         packet: Vec<u8>,
         delay_ms: u32,
     ) -> Result<(), OutboundError> {
-        self.enqueue_outbound_after_internal(packet, delay_ms, false)
+        self.enqueue_outbound_item(packet, delay_ms, None, None)
     }
 
-    pub fn enqueue_outbound_reboot_after_tx(&self, packet: Vec<u8>) -> Result<(), OutboundError> {
-        self.enqueue_outbound_after_internal(packet, 0, true)
-    }
-
-    fn enqueue_outbound_after_internal(
+    fn enqueue_outbound_reply(
         &self,
         packet: Vec<u8>,
-        delay_ms: u32,
-        reboot_after_tx: bool,
+        action: Option<cli::PostReplyAction>,
     ) -> Result<(), OutboundError> {
-        self.enqueue_outbound_item(packet, delay_ms, reboot_after_tx, None)
+        self.enqueue_outbound_item(packet, 0, action, None)
     }
 
     fn enqueue_forward(
@@ -499,7 +496,7 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
         if !self.reserve_forward(signature)? {
             return Ok(false);
         }
-        if let Err(error) = self.enqueue_outbound_item(packet, delay_ms, false, Some(signature)) {
+        if let Err(error) = self.enqueue_outbound_item(packet, delay_ms, None, Some(signature)) {
             self.release_forward(signature, false);
             return Err(error);
         }
@@ -510,7 +507,7 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
         &self,
         packet: Vec<u8>,
         delay_ms: u32,
-        reboot_after_tx: bool,
+        post_tx_action: Option<cli::PostReplyAction>,
         dedup_signature: Option<[u8; 8]>,
     ) -> Result<(), OutboundError> {
         let queued = QueuedTransmit {
@@ -518,19 +515,21 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
             attempts: 0,
             packet,
             dedup_signature,
-            reboot_after_tx,
+            post_tx_action,
         };
         self.outbound.try_send(queued)
     }
 
-    pub fn request_reboot_after_next_remote_reply(&self) {
-        self.reboot_after_next_remote_reply.set(true);
+    pub(crate) fn set_remote_reply_action(&self, action: Option<cli::PostReplyAction>) {
+        self.remote_reply_action.set(action);
     }
 
-    fn take_reboot_after_next_remote_reply(&self) -> bool {
-        let reboot = self.reboot_after_next_remote_reply.get();
-        self.reboot_after_next_remote_reply.set(false);
-        reboot
+    pub(crate) fn request_brownout(&self) {
+        self.brownout_requested.signal(());
+    }
+
+    pub(crate) async fn wait_for_brownout(&self) {
+        self.brownout_requested.wait().await;
     }
 
     fn is_seen_or_pending(&self, signature: [u8; 8]) -> bool {
@@ -679,7 +678,7 @@ struct QueuedTransmit {
     attempts: u8,
     packet: Vec<u8>,
     dedup_signature: Option<[u8; 8]>,
-    reboot_after_tx: bool,
+    post_tx_action: Option<cli::PostReplyAction>,
 }
 
 #[derive(Clone, Copy)]
@@ -981,11 +980,8 @@ async fn handle_rx_event<P: Platform, S: Storage>(context: &AppContext<P, S>, ev
             if let Some(response) = cli::handle_remote_packet(&protocol_packet, context).await {
                 debug!("Remote response: queueing {} bytes", response.len());
 
-                let result = if context.take_reboot_after_next_remote_reply() {
-                    context.enqueue_outbound_reboot_after_tx(response)
-                } else {
-                    context.enqueue_outbound(response)
-                };
+                let action = context.remote_reply_action.take();
+                let result = context.enqueue_outbound_reply(response, action);
                 if result.is_err() {
                     error!("Remote response: outbound queue full");
                 }
@@ -1135,8 +1131,8 @@ async fn transmit_eligible_outbound<P: Platform, S: Storage, R, D>(
             ),
         }
     }
-    if queued.reboot_after_tx {
-        context.platform.reboot();
+    if let Some(action) = queued.post_tx_action {
+        action.execute(context);
     }
 }
 
@@ -1614,7 +1610,7 @@ mod tests {
             attempts: 0,
             packet: Vec::new(),
             dedup_signature: None,
-            reboot_after_tx: false,
+            post_tx_action: None,
         }
     }
 

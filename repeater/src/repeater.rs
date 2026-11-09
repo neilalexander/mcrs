@@ -5,31 +5,27 @@ use crate::{
     platform::{Battery, Platform, Radio, StatusDisplay, Storage},
 };
 use alloc::{boxed::Box, string::String};
-use core::{
-    future::{Future, poll_fn},
-    pin::pin,
-    task::Poll,
-};
 use defmt::{error, info};
+use embassy_futures::{join::join5, select::select3};
 use embedded_hal_async::digital::Wait;
 use embedded_io_async::{Read, Write};
 
 /// The repeater for one board, with the devices it drives.
-pub struct Repeater<PLATFORM, STORAGE, RADIO, CONSOLE, DISPLAY, BUTTON, BATTERY>
+pub struct Repeater<'a, PLATFORM, STORAGE, RADIO, CONSOLE, DISPLAY, BUTTON, BATTERY>
 where
     PLATFORM: 'static,
     STORAGE: 'static,
 {
     context: &'static AppContext<PLATFORM, STORAGE>,
-    radio: RADIO,
-    console: CONSOLE,
-    display: DISPLAY,
-    button: BUTTON,
-    battery: BATTERY,
+    radio: &'a mut RADIO,
+    console: &'a mut CONSOLE,
+    display: &'a mut DISPLAY,
+    button: &'a mut BUTTON,
+    battery: &'a mut BATTERY,
 }
 
-impl<PLATFORM, STORAGE, RADIO, CONSOLE, DISPLAY, BUTTON, BATTERY>
-    Repeater<PLATFORM, STORAGE, RADIO, CONSOLE, DISPLAY, BUTTON, BATTERY>
+impl<'a, PLATFORM, STORAGE, RADIO, CONSOLE, DISPLAY, BUTTON, BATTERY>
+    Repeater<'a, PLATFORM, STORAGE, RADIO, CONSOLE, DISPLAY, BUTTON, BATTERY>
 where
     PLATFORM: Platform + 'static,
     STORAGE: Storage + 'static,
@@ -46,11 +42,11 @@ where
     pub fn new(
         platform: PLATFORM,
         mut storage: STORAGE,
-        radio: RADIO,
-        console: CONSOLE,
-        display: DISPLAY,
-        button: BUTTON,
-        battery: BATTERY,
+        radio: &'a mut RADIO,
+        console: &'a mut CONSOLE,
+        display: &'a mut DISPLAY,
+        button: &'a mut BUTTON,
+        battery: &'a mut BATTERY,
     ) -> Self {
         log_memory_profile(platform.memory_profile());
 
@@ -78,83 +74,51 @@ where
         self.context
     }
 
-    /// Starts the radio and runs the repeater. It only stops when the board
-    /// reboots.
-    pub async fn run(self) -> ! {
+    /// Runs until low voltage or the brownout command stops normal operation.
+    /// The board supplies the running voltage cutoff in millivolts; zero
+    /// disables battery monitoring.
+    /// Returning drops all internal task futures and releases device borrows.
+    pub async fn run(self, voltage_warning_mv: u16) {
         let Self {
             context,
-            mut radio,
+            radio,
             console,
             display,
             button,
             battery,
         } = self;
 
-        let radio_config = context.with_config(|config| config.radio()).await;
-        // Without a radio the CLI keeps running, so the settings can be fixed.
-        let radio = match radio.start(radio_config).await {
-            Ok(()) => Some(radio),
-            Err(()) => {
-                error!("Radio: start failed");
-                None
-            }
-        };
-
-        let mut ui_future = pin!(ui::run(display, button, context));
-        let mut console_future = pin!(cli::serve_console(console, context));
-        let mut handler_future = pin!(app::handler_loop(context));
-        let mut battery_future = pin!(battery::run(battery, context));
-        let mut periodic_future = pin!(periodic::run(context));
-        let mut radio_future = pin!(radio_task(radio, context));
-
-        poll_fn(|cx| {
-            match ui_future.as_mut().poll(cx) {
-                Poll::Ready(never) => match never {},
-                Poll::Pending => {}
-            }
-
-            match console_future.as_mut().poll(cx) {
-                Poll::Ready(never) => match never {},
-                Poll::Pending => {}
-            }
-
-            match handler_future.as_mut().poll(cx) {
-                Poll::Ready(never) => match never {},
-                Poll::Pending => {}
-            }
-
-            match battery_future.as_mut().poll(cx) {
-                Poll::Ready(never) => match never {},
-                Poll::Pending => {}
-            }
-
-            match periodic_future.as_mut().poll(cx) {
-                Poll::Ready(never) => match never {},
-                Poll::Pending => {}
-            }
-
-            match radio_future.as_mut().poll(cx) {
-                Poll::Ready(never) => match never {},
-                Poll::Pending => Poll::Pending,
-            }
-        })
-        .await
+        select3(
+            context.wait_for_brownout(),
+            battery::run(battery, context, voltage_warning_mv),
+            join5(
+                ui::run(display, button, context),
+                cli::serve_console(console, context),
+                app::handler_loop(context),
+                periodic::run(context),
+                radio_task(radio, context),
+            ),
+        )
+        .await;
     }
 }
 
-async fn radio_task<P, S, R>(radio: Option<R>, context: &AppContext<P, S>) -> !
+async fn radio_task<P, S, R>(radio: &mut R, context: &AppContext<P, S>) -> !
 where
     P: Platform,
     S: Storage,
     R: Radio,
 {
-    let Some(mut radio) = radio else {
+    let config = context.with_config(|config| config.radio()).await;
+    if radio.start(config).await.is_err() {
+        error!("Radio: start failed");
+        // Keep the CLI running so the settings can be fixed before rebooting.
         loop {
             core::future::pending::<()>().await;
         }
-    };
+    }
     let mut delay = context.platform.delay();
-    app::radio_loop(&mut radio, context, &mut delay).await
+    app::radio_loop(radio, context, &mut delay).await
 }
 
 fn log_memory_profile(memory: MemoryProfile) {

@@ -25,8 +25,8 @@ use static_cell::StaticCell;
 pub type RadioOutput = Output<'static>;
 pub type RadioInput = Input<'static>;
 
-pub type BatteryAdc = Adc<'static, ADC1<'static>, Blocking>;
-pub type BatterySensePin = AdcPin<GPIO1<'static>, ADC1<'static>, AdcCalCurve<ADC1<'static>>>;
+pub type BatteryAdc<'d> = Adc<'d, ADC1<'d>, Blocking>;
+pub type BatterySensePin<'d> = AdcPin<GPIO1<'d>, ADC1<'d>, AdcCalCurve<ADC1<'d>>>;
 
 const OTA_AP_IP: embassy_net::Ipv4Address = embassy_net::Ipv4Address::new(192, 168, 4, 1);
 const OTA_AP_PREFIX: u8 = 24;
@@ -59,10 +59,10 @@ pub struct WifiResources {
     pub wifi: WIFI<'static>,
 }
 
-pub struct BatteryMonitor {
-    pub adc: BatteryAdc,
-    pub sense: BatterySensePin,
-    pub ctrl: Flex<'static>,
+pub struct BatteryMonitor<'d> {
+    pub adc: BatteryAdc<'d>,
+    pub sense: BatterySensePin<'d>,
+    pub ctrl: Flex<'d>,
     pub ctrl_active_level: Level,
     pub ctrl_inactive_level: Level,
 }
@@ -98,24 +98,25 @@ pub fn generate_identity_seed(rng: RNG<'_>, adc: ADC1<'_>) -> [u8; 32] {
 }
 
 pub async fn wifi_task(
-    mut wifi: WifiResources,
+    wifi: &mut WifiResources,
     context: &AppContext<EspPlatform, EspStorage>,
 ) -> ! {
     if context
         .with_config(|config| config.wifi().ssid().is_empty())
         .await
     {
-        run_ota_ap_mode(&mut wifi, context).await
+        run_ota_ap_mode(wifi, context).await
     }
 
-    let (controller, interfaces) = match esp_radio::wifi::new(wifi.wifi, Default::default()) {
-        Ok(wifi) => wifi,
-        Err(error) => {
-            error!("Wi-Fi: device init failed: {}", error);
-            core::future::pending::<()>().await;
-            unreachable!()
-        }
-    };
+    let (controller, interfaces) =
+        match esp_radio::wifi::new(wifi.wifi.reborrow(), Default::default()) {
+            Ok(wifi) => wifi,
+            Err(error) => {
+                error!("Wi-Fi: device init failed: {}", error);
+                core::future::pending::<()>().await;
+                unreachable!()
+            }
+        };
     run_ota_station_mode(controller, interfaces.station, context).await
 }
 
@@ -124,7 +125,9 @@ async fn run_ota_ap_mode(
     context: &AppContext<EspPlatform, EspStorage>,
 ) -> ! {
     let mut stack_resources = embassy_net::StackResources::<4>::new();
-    context.platform.set_ota_address(Some(core::net::SocketAddrV4::new(OTA_AP_IP, OTA_HTTP_PORT)));
+    context
+        .platform
+        .set_ota_address(Some(core::net::SocketAddrV4::new(OTA_AP_IP, OTA_HTTP_PORT)));
     loop {
         wait_for_ota_requested_idle(context, true).await;
 
@@ -720,7 +723,7 @@ where
     }
 }
 
-impl Battery for BatteryMonitor {
+impl Battery for BatteryMonitor<'_> {
     async fn millivolts(&mut self) -> Option<u16> {
         let mut delay = crate::radio_delay();
         let sample = self.sample(&mut delay).await?;
@@ -732,8 +735,13 @@ impl Battery for BatteryMonitor {
     }
 }
 
-impl BatteryMonitor {
-    pub fn new(adc: ADC1<'static>, sense: GPIO1<'static>, ctrl: GPIO37<'static>) -> Self {
+impl<'d> BatteryMonitor<'d> {
+    /// Disables sensing, including after cancellation during ADC settling.
+    pub fn shutdown(&mut self) {
+        self.ctrl.set_level(self.ctrl_inactive_level);
+    }
+
+    pub fn new(adc: ADC1<'d>, sense: GPIO1<'d>, ctrl: GPIO37<'d>) -> Self {
         let mut adc_config = AdcConfig::new();
         let sense = adc_config.enable_pin_with_cal::<_, AdcCalCurve<_>>(sense, Attenuation::_0dB);
         let adc = Adc::new(adc, adc_config);

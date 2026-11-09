@@ -22,6 +22,7 @@ embedded-io-async = "0.7.0"
 embassy-net = { version = "0.9.1", features = ["dhcpv4", "dns", "medium-ethernet", "proto-ipv4", "tcp", "udp"] }
 embassy-time = { version = "0.5.1", optional = true }
 embassy-sync = "0.8.0"
+embassy-futures = "0.1.1"
 
 embedded-storage = "0.3.1"
 
@@ -36,3 +37,6 @@ defmt = { version = "1.2.0", features = ["alloc"] }
 [dev-dependencies]
 # Host tests need a critical section implementation; the firmware's HAL provides one.
 critical-section = { version = "1.2.0", features = ["std"] }
+
+# Exercise CLI logging in host tests without a firmware logger.
+defmt = { version = "1.2.0", features = ["unstable-test"] }

@@ -7,19 +7,31 @@ use defmt::info;
 use embedded_hal_async::delay::DelayNs;
 
 const SAMPLE_INTERVAL_MS: u32 = 60_000;
+const LOW_BATTERY_SAMPLES: u8 = 3;
+// TODO: These percentages may not apply to all platforms/batteries.
 const PERCENT_MIN_MV: u16 = 3300;
 const PERCENT_MAX_MV: u16 = 4100;
 
-pub(crate) async fn run<P, S, B>(mut battery: B, context: &AppContext<P, S>) -> !
-where
+pub(crate) async fn run<P, S, B>(
+    battery: &mut B,
+    context: &AppContext<P, S>,
+    voltage_warning_mv: u16,
+) where
     P: Platform,
     S: Storage,
     B: Battery,
 {
+    // Boards without battery sensing pass zero. Do not touch the driver or
+    // set up periodic sampling when monitoring is disabled.
+    if voltage_warning_mv == 0 {
+        core::future::pending::<()>().await;
+    }
     let mut delay = context.platform.delay();
 
+    let mut low_samples = 0;
     loop {
-        match battery.millivolts().await {
+        let reading = battery.millivolts().await;
+        match reading {
             Some(millivolts) => {
                 let percent = level_percent(millivolts);
                 info!("Battery: {}mV {}%", millivolts, percent);
@@ -32,8 +44,21 @@ where
             }
         }
 
+        if update_low_samples(&mut low_samples, reading, voltage_warning_mv) {
+            return;
+        }
+
         delay.delay_ms(SAMPLE_INTERVAL_MS).await;
     }
+}
+
+fn update_low_samples(count: &mut u8, reading: Option<u16>, voltage_warning_mv: u16) -> bool {
+    if reading.is_some_and(|mv| mv <= voltage_warning_mv) {
+        *count = count.saturating_add(1);
+    } else {
+        *count = 0;
+    }
+    *count >= LOW_BATTERY_SAMPLES
 }
 
 fn level_percent(millivolts: u16) -> u8 {
@@ -52,7 +77,33 @@ fn level_percent(millivolts: u16) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::level_percent;
+    use super::{level_percent, update_low_samples};
+
+    #[test]
+    fn shutdown_requires_consecutive_valid_low_readings() {
+        let mut count = 0;
+        assert!(!update_low_samples(&mut count, Some(3300), 3300));
+        assert!(!update_low_samples(&mut count, Some(3200), 3300));
+        assert!(!update_low_samples(&mut count, Some(3301), 3300));
+        assert_eq!(count, 0);
+        assert!(!update_low_samples(&mut count, Some(3200), 3300));
+        assert!(!update_low_samples(&mut count, None, 3300));
+        assert_eq!(count, 0);
+        assert!(!update_low_samples(&mut count, Some(3300), 3300));
+        assert!(!update_low_samples(&mut count, Some(3300), 3300));
+        assert!(update_low_samples(&mut count, Some(3300), 3300));
+    }
+
+    #[test]
+    fn voltage_cutoff_comes_from_the_board() {
+        let mut count = 0;
+        for _ in 0..3 {
+            assert!(!update_low_samples(&mut count, Some(3400), 3300));
+        }
+        assert!(!update_low_samples(&mut count, Some(3400), 3400));
+        assert!(!update_low_samples(&mut count, Some(3400), 3400));
+        assert!(update_low_samples(&mut count, Some(3400), 3400));
+    }
 
     #[test]
     fn level_is_linear_between_empty_and_full() {
