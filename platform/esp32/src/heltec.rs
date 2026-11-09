@@ -70,6 +70,7 @@ pub struct BatteryMonitor {
 pub trait RadioFrontend {
     fn set_rx_mode(&mut self);
     fn set_tx_mode(&mut self);
+    fn shutdown(&mut self);
 }
 
 #[allow(dead_code)]
@@ -78,6 +79,7 @@ pub struct NoRadioFrontend;
 impl RadioFrontend for NoRadioFrontend {
     fn set_rx_mode(&mut self) {}
     fn set_tx_mode(&mut self) {}
+    fn shutdown(&mut self) {}
 }
 
 pub fn generate_identity_seed(rng: RNG<'_>, adc: ADC1<'_>) -> [u8; 32] {
@@ -708,6 +710,13 @@ where
         let result = self.receiver.transmit(payload).await;
         self.frontend.set_rx_mode();
         result
+    }
+
+    async fn shutdown(&mut self) -> Result<(), ()> {
+        // Disable the frontend even if the transceiver sleep command fails
+        // or stalls. No normal radio operations may run after this point.
+        self.frontend.shutdown();
+        self.receiver.shutdown().await
     }
 }
 

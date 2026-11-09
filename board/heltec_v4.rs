@@ -112,6 +112,13 @@ impl HeltecV4Frontend {
 }
 
 impl RadioFrontend for HeltecV4Frontend {
+    fn shutdown(&mut self) {
+        let _ = self.gc_tx_enable.set_low();
+        let _ = self.kct_ctx.set_low();
+        self.shared_enable.set_level(Level::Low);
+        let _ = self.pa_power.set_low();
+    }
+
     fn set_rx_mode(&mut self) {
         let _ = self.pa_power.set_high();
         self.shared_enable.set_level(Level::High);

@@ -117,6 +117,8 @@ pub trait Radio {
     fn channel_is_busy(&mut self) -> impl Future<Output = Result<bool, ()>>;
 
     fn transmit(&mut self, payload: &[u8]) -> impl Future<Output = Result<(), ()>>;
+
+    fn shutdown(&mut self) -> impl Future<Output = Result<(), ()>>;
 }
 
 /// What the status screen shows.

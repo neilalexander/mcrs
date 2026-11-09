@@ -168,6 +168,12 @@ where
     async fn transmit(&mut self, payload: &[u8]) -> Result<(), ()> {
         self.started()?.transmit(payload).await
     }
+
+    async fn shutdown(&mut self) -> Result<(), ()> {
+        self.started()?.lora.sleep(false).await.map_err(|error| {
+            error!("error on shutdown sx1262: {}", Debug2Format(&error));
+        })
+    }
 }
 
 impl<SPI, CTRL, WAIT, DLY> Started<SPI, CTRL, WAIT, DLY>
