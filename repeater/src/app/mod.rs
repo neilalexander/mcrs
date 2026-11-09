@@ -34,7 +34,10 @@ use embassy_sync::{
     signal::Signal,
 };
 use embedded_hal_async::delay::DelayNs;
-use mcrs_protocol::{HashSize, Packet, Path, PayloadKind, RoutePath, RouteType, SeenPacketCache};
+use mcrs_protocol::{
+    AckPayload, HashSize, MultipartPayload, Packet, Path, Payload, PayloadKind, RoutePath,
+    RouteType, SeenPacketCache,
+};
 
 #[cfg(feature = "mqtt")]
 use crate::app::mqtt::MqttContext;
@@ -98,6 +101,7 @@ const OUTBOUND_QUEUE_CAPACITY: usize = 16;
 const SEEN_PACKET_TTL_MS: u64 = 15_000;
 const FORWARD_DELAY_BASE_MS: u32 = 40;
 const FORWARD_DELAY_JITTER_MS: u32 = 120;
+const MULTI_ACK_SPACING_MS: u32 = 300;
 const OUTBOUND_MAX_ATTEMPTS: u8 = 5;
 const OUTBOUND_RETRY_DELAY_MIN_MS: u32 = 50;
 const OUTBOUND_RETRY_DELAY_MAX_MS: u32 = 500;
@@ -503,6 +507,56 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
         Ok(true)
     }
 
+    fn enqueue_ack_forward(
+        &self,
+        packet: Packet,
+        signature: [u8; 8],
+        delay_ms: u32,
+        multi_acks: bool,
+    ) -> Result<bool, OutboundError> {
+        // Preserve space for the ordinary ACK. Both enqueues are synchronous:
+        // no task can consume the reserved queue capacity between them.
+        let extra = multi_acks && self.outbound.capacity.saturating_sub(self.outbound.len()) >= 2;
+        let Ok(encoded) = packet.encode() else {
+            return Ok(false);
+        };
+        let Payload::Ack(ack) = packet.payload else {
+            return Ok(false);
+        };
+        let final_delay = delay_ms.saturating_add(if extra { MULTI_ACK_SPACING_MS } else { 0 });
+        if !self.enqueue_forward(encoded, final_delay, signature)? {
+            return Ok(false);
+        }
+        if extra {
+            let multipart = Packet {
+                payload: Payload::Multipart(MultipartPayload {
+                    remaining: 1,
+                    sub_type: PayloadKind::Ack,
+                    sub_payload: ack.ack_hash,
+                }),
+                ..packet
+            };
+            if let Ok(packet) = multipart.encode() {
+                // Only the final ACK owns the logical duplicate reservation.
+                let queued = QueuedTransmit {
+                    packet,
+                    eligible_at_ms: self
+                        .platform
+                        .now_millis()
+                        .saturating_add(u64::from(delay_ms)),
+                    attempts: 0,
+                    dedup_signature: None,
+                    post_tx_action: None,
+                    is_forward: true,
+                };
+                if self.outbound.try_send(queued).is_err() {
+                    warn!("Multi-ACK: extra copy could not be queued");
+                }
+            }
+        }
+        Ok(true)
+    }
+
     fn enqueue_outbound_item(
         &self,
         packet: Vec<u8>,
@@ -516,6 +570,7 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
             packet,
             dedup_signature,
             post_tx_action,
+            is_forward: dedup_signature.is_some(),
         };
         self.outbound.try_send(queued)
     }
@@ -679,6 +734,7 @@ struct QueuedTransmit {
     packet: Vec<u8>,
     dedup_signature: Option<[u8; 8]>,
     post_tx_action: Option<cli::PostReplyAction>,
+    is_forward: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -738,7 +794,7 @@ impl SortedOutboundChannel {
     fn next(&self) -> Option<NextOutbound> {
         self.queue.lock(|queue| {
             queue.borrow().first().map(|queued| NextOutbound {
-                is_forward: queued.dedup_signature.is_some(),
+                is_forward: queued.is_forward,
                 eligible_at_ms: queued.eligible_at_ms,
                 packet_len: queued.packet.len(),
             })
@@ -1211,6 +1267,21 @@ async fn apply_repeater_rules<P: Platform, S: Storage>(
         ForwardDecision::Forward { packet, signature } => {
             queue_repeater_packet(context, packet, signature, node_hash, "forward").await;
         }
+        ForwardDecision::Ack {
+            packet,
+            signature,
+            wait_ms,
+        } => {
+            let multi_acks = context.with_config(|config| config.multi_acks()).await;
+            let delay_ms = forwarding_delay_ms(signature, node_hash).saturating_add(wait_ms);
+            match context.enqueue_ack_forward(packet, signature, delay_ms, multi_acks) {
+                Ok(true) => {}
+                Ok(false) => {
+                    context.duplicates_direct.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(OutboundError::QueueFull) => error!("ACK forward: outbound queue full"),
+            }
+        }
         ForwardDecision::Capture { packet, signature } => {
             queue_repeater_packet(context, packet, signature, node_hash, "capture").await;
         }
@@ -1297,6 +1368,9 @@ async fn prepare_forward<P: Platform, S: Storage>(
 
     match packet.payload.kind() {
         PayloadKind::Trace => prepare_trace_forward(packet, snr_quarters, node_hash),
+        PayloadKind::Ack | PayloadKind::Multipart if packet.route_type.is_direct() => {
+            prepare_direct_ack_forward(packet, node_hash)
+        }
         _ if packet.route_type.is_flood() => {
             prepare_flood_forward(context, packet, node_hash).await
         }
@@ -1384,6 +1458,40 @@ async fn prepare_flood_forward<P: Platform, S: Storage>(
         ForwardDecision::Capture { packet, signature }
     } else {
         ForwardDecision::Forward { packet, signature }
+    }
+}
+
+fn prepare_direct_ack_forward(mut packet: Packet, node_hash: &[u8]) -> ForwardDecision {
+    let (ack, wait_ms) = match &mut packet.payload {
+        Payload::Ack(_) => (None, 0),
+        Payload::Multipart(payload) if payload.sub_type == PayloadKind::Ack => {
+            let ack = match AckPayload::decode(&payload.sub_payload) {
+                Ok(ack) => ack,
+                Err(_) => return ForwardDecision::Drop("invalid multipart ACK"),
+            };
+            let wait_ms = (u32::from(payload.remaining) + 1) * MULTI_ACK_SPACING_MS;
+            // Ignore the count in duplicate detection, retaining the multipart
+            // namespace until prepare_direct_forward has computed the signature.
+            payload.remaining = 0;
+            (Some(ack), wait_ms)
+        }
+        _ => return ForwardDecision::Drop("unsupported multipart subtype"),
+    };
+    match prepare_direct_forward(packet, node_hash) {
+        ForwardDecision::Forward {
+            mut packet,
+            signature,
+        } => {
+            if let Some(ack) = ack {
+                packet.payload = Payload::Ack(ack);
+            }
+            ForwardDecision::Ack {
+                packet,
+                signature,
+                wait_ms,
+            }
+        }
+        other => other,
     }
 }
 
@@ -1525,8 +1633,19 @@ fn div_ceil_u64(numerator: u64, denominator: u64) -> u64 {
 }
 
 enum ForwardDecision {
-    Forward { packet: Packet, signature: [u8; 8] },
-    Capture { packet: Packet, signature: [u8; 8] },
+    Forward {
+        packet: Packet,
+        signature: [u8; 8],
+    },
+    Capture {
+        packet: Packet,
+        signature: [u8; 8],
+    },
+    Ack {
+        packet: Packet,
+        signature: [u8; 8],
+        wait_ms: u32,
+    },
     DoNotForward,
     Drop(&'static str),
 }
@@ -1534,6 +1653,95 @@ enum ForwardDecision {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ack_packet(size: usize, len: usize, remaining: Option<u8>) -> Packet {
+        let hash = alloc::vec![0x42; len];
+        Packet {
+            route_type: RouteType::Direct,
+            transport_codes: None,
+            path: RoutePath::Normal(
+                Path::new(
+                    HashSize::new(size).unwrap(),
+                    [alloc::vec![0x11; size], alloc::vec![0x22; size]].concat(),
+                )
+                .unwrap(),
+            ),
+            payload: match remaining {
+                None => Payload::Ack(AckPayload { ack_hash: hash }),
+                Some(remaining) => Payload::Multipart(MultipartPayload {
+                    remaining,
+                    sub_type: PayloadKind::Ack,
+                    sub_payload: hash,
+                }),
+            },
+        }
+    }
+
+    #[test]
+    fn direct_acks_preserve_extended_hashes_and_consume_one_hop() {
+        for size in 1..=3 {
+            for len in 4..=6 {
+                for remaining in [None, Some(0), Some(1), Some(15)] {
+                    let input = ack_packet(size, len, remaining);
+                    let input = Packet::decode(&input.encode().unwrap()).unwrap();
+                    let ForwardDecision::Ack {
+                        packet, wait_ms, ..
+                    } = prepare_direct_ack_forward(input, &[0x11; 3])
+                    else {
+                        panic!("ACK not forwarded")
+                    };
+                    assert_eq!(
+                        packet.normal_path().unwrap().bytes(),
+                        alloc::vec![0x22; size]
+                    );
+                    assert_eq!(
+                        packet.payload,
+                        Payload::Ack(AckPayload {
+                            ack_hash: alloc::vec![0x42; len]
+                        })
+                    );
+                    assert_eq!(wait_ms, remaining.map_or(0, |n| (u32::from(n) + 1) * 300));
+                    assert_eq!(Packet::decode(&packet.encode().unwrap()).unwrap(), packet);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn multipart_ack_dedup_ignores_remaining_but_keeps_ordinary_namespace() {
+        let signature = |remaining| {
+            let ForwardDecision::Ack { signature, .. } =
+                prepare_direct_ack_forward(ack_packet(1, 4, remaining), &[0x11])
+            else {
+                panic!("ACK not forwarded")
+            };
+            signature
+        };
+        assert_eq!(signature(Some(0)), signature(Some(15)));
+        assert_ne!(signature(None), signature(Some(0)));
+    }
+
+    #[test]
+    fn rejects_invalid_multipart_acks_and_wrong_next_hop() {
+        for len in [0, 3, 7] {
+            assert!(matches!(
+                prepare_direct_ack_forward(ack_packet(1, len, Some(1)), &[0x11]),
+                ForwardDecision::Drop(_)
+            ));
+        }
+        assert!(!matches!(
+            prepare_direct_ack_forward(ack_packet(1, 4, None), &[0x33]),
+            ForwardDecision::Ack { .. }
+        ));
+        let mut packet = ack_packet(1, 4, Some(1));
+        if let Payload::Multipart(payload) = &mut packet.payload {
+            payload.sub_type = PayloadKind::Advert;
+        }
+        assert!(matches!(
+            prepare_direct_ack_forward(packet, &[0x11]),
+            ForwardDecision::Drop(_)
+        ));
+    }
 
     #[test]
     fn mode_names_and_default() {
@@ -1611,6 +1819,7 @@ mod tests {
             packet: Vec::new(),
             dedup_signature: None,
             post_tx_action: None,
+            is_forward: false,
         }
     }
 

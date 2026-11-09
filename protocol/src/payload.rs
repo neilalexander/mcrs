@@ -75,7 +75,7 @@ impl Payload {
             | Self::Response(payload)
             | Self::TextMessage(payload)
             | Self::Path(payload) => payload.encode(&mut out),
-            Self::Ack(payload) => payload.encode(&mut out),
+            Self::Ack(payload) => payload.encode(&mut out)?,
             Self::Advert(payload) => payload.encode(&mut out)?,
             Self::GroupText(payload) | Self::GroupData(payload) => payload.encode(&mut out),
             Self::AnonymousRequest(payload) => payload.encode(&mut out),

@@ -55,6 +55,7 @@ pub struct AppConfig {
     advert_interval_minutes: u32,
     flood_advert_interval_hours: u32,
     loop_detection: LoopDetection,
+    multi_acks: bool,
     path_hash_mode: u8,
     tier: u8,
     duty_cycle_percent: u8,
@@ -256,6 +257,7 @@ impl AppConfig {
             advert_interval_minutes: stored.advert_interval_minutes,
             flood_advert_interval_hours: stored.flood_advert_interval_hours,
             loop_detection: stored.loop_detection,
+            multi_acks: stored.multi_acks,
             path_hash_mode: stored.path_hash_mode,
             tier: stored.tier,
             duty_cycle_percent: stored.duty_cycle_percent,
@@ -464,6 +466,7 @@ impl AppConfig {
                 self.flood_advert_interval_hours = defaults.flood_advert_interval_hours
             }
             "loop.detect" => self.loop_detection = defaults.loop_detection,
+            "multi.acks" => self.multi_acks = defaults.multi_acks,
             "path.hash.mode" => self.path_hash_mode = defaults.path_hash_mode,
             "tier" => self.tier = defaults.tier,
             _ => return Err(ConfigError::UnknownSetting),
@@ -529,6 +532,14 @@ impl AppConfig {
         }
         self.tier = tier;
         Ok(())
+    }
+
+    pub fn multi_acks(&self) -> bool {
+        self.multi_acks
+    }
+
+    pub fn set_multi_acks(&mut self, enabled: bool) {
+        self.multi_acks = enabled;
     }
 
     pub fn loop_detection(&self) -> LoopDetection {
@@ -787,6 +798,7 @@ struct StoredAppConfig {
     advert_interval_minutes: u32,
     flood_advert_interval_hours: u32,
     loop_detection: LoopDetection,
+    multi_acks: bool,
     path_hash_mode: u8,
     duty_cycle_percent: u8,
     #[cfg(feature = "mqtt")]
@@ -834,6 +846,7 @@ impl StoredAppConfig {
             advert_interval_minutes: 0,
             flood_advert_interval_hours: 0,
             loop_detection: LoopDetection::default(),
+            multi_acks: false,
             path_hash_mode: 0,
             duty_cycle_percent: 0,
             #[cfg(feature = "mqtt")]
@@ -869,6 +882,7 @@ impl StoredAppConfig {
             advert_interval_minutes: config.advert_interval_minutes,
             flood_advert_interval_hours: config.flood_advert_interval_hours,
             loop_detection: config.loop_detection,
+            multi_acks: config.multi_acks,
             path_hash_mode: config.path_hash_mode,
             duty_cycle_percent: config.duty_cycle_percent,
             #[cfg(feature = "mqtt")]
@@ -1051,6 +1065,13 @@ fn decode_config_layer(
             }
             "tier" => {
                 config.tier = value.parse::<u8>().ok().filter(|tier| *tier <= 10)?;
+            }
+            "multi.acks" => {
+                config.multi_acks = match value.as_str() {
+                    "0" => false,
+                    "1" => true,
+                    _ => return None,
+                };
             }
             "loop.detect" => {
                 config.loop_detection = LoopDetection::parse(&value)?;
@@ -1304,6 +1325,9 @@ fn encode_sparse_config_text_redacted(
     if config.tier != defaults.tier {
         let _ = writeln!(&mut out, "tier={}", config.tier);
     }
+    if config.multi_acks != defaults.multi_acks {
+        let _ = writeln!(&mut out, "multi.acks={}", u8::from(config.multi_acks));
+    }
     if config.loop_detection != defaults.loop_detection {
         let _ = writeln!(&mut out, "loop.detect={}", config.loop_detection.as_str());
     }
@@ -1436,6 +1460,7 @@ fn encode_full_config_text_redacted(config: &StoredAppConfig, redact_secrets: bo
     );
     let _ = writeln!(&mut out, "path.hash.mode={}", config.path_hash_mode);
     let _ = writeln!(&mut out, "tier={}", config.tier);
+    let _ = writeln!(&mut out, "multi.acks={}", u8::from(config.multi_acks));
     let _ = writeln!(&mut out, "loop.detect={}", config.loop_detection.as_str());
     #[cfg(feature = "mqtt")]
     for (index, mqtt) in config.mqtt.iter().enumerate() {
@@ -2234,6 +2259,44 @@ mod tests {
             assert!(
                 decode_config_text(text.as_bytes(), &image).is_none(),
                 "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn multi_acks_defaults_persist_and_reset() {
+        let mut config = AppConfig::generated_defaults([7; 32]);
+        assert!(!config.multi_acks());
+        assert!(
+            !decode_config_text(b"version=1\n", &defaults())
+                .unwrap()
+                .multi_acks
+        );
+        config.set_multi_acks(true);
+        let stored = StoredAppConfig::from_app_config(&config);
+        for encoded in [
+            encode_config_text(&stored),
+            encode_full_config_text_redacted(&stored, false),
+        ] {
+            let decoded = decode_config_text(&encoded, &defaults()).unwrap();
+            assert!(AppConfig::from_stored(decoded, "storage").multi_acks());
+        }
+        config.unset("multi.acks").unwrap();
+        assert!(!config.multi_acks());
+        assert!(
+            !core::str::from_utf8(&encode_config_text(&StoredAppConfig::from_app_config(
+                &config
+            )))
+            .unwrap()
+            .contains("multi.acks=")
+        );
+        for invalid in ["2", "-1", "on", "true"] {
+            assert!(
+                decode_config_text(
+                    alloc::format!("version=1\nmulti.acks={}\n", invalid).as_bytes(),
+                    &defaults()
+                )
+                .is_none()
             );
         }
     }

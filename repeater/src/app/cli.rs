@@ -1092,6 +1092,11 @@ async fn handle_get_command<P: Platform, S: Storage>(
                 .with_config(|config| format!("> {}", config.tier()))
                 .await
         }
+        "multi.acks" => {
+            context
+                .with_config(|config| format!("> {}", u8::from(config.multi_acks())))
+                .await
+        }
         "loop.detect" => {
             context
                 .with_config(|config| format!("> {}", config.loop_detection().as_str()))
@@ -1456,6 +1461,24 @@ async fn handle_set_command<P: Platform, S: Storage>(
         };
         return match context.update_config(|config| config.set_tier(tier)).await {
             Ok(()) => format!("OK - tier now: {}", tier),
+            Err(error) => format!("Error: {}", error),
+        };
+    }
+
+    if let Some(value) = config.strip_prefix("multi.acks ").map(str::trim) {
+        let enabled = match value {
+            "0" => false,
+            "1" => true,
+            _ => return String::from("Error, expected 0 or 1"),
+        };
+        return match context
+            .update_config(|config| {
+                config.set_multi_acks(enabled);
+                Ok(())
+            })
+            .await
+        {
+            Ok(()) => String::from("OK"),
             Err(error) => format!("Error: {}", error),
         };
     }

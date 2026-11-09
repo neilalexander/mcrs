@@ -27,7 +27,7 @@ fn normal_packet_round_trips_with_transport_codes_and_path() {
             Path::from_hashes(HashSize::Two, &[&[0xaa, 0xbb], &[0xcc, 0xdd]]).unwrap(),
         ),
         payload: Payload::Ack(AckPayload {
-            ack_hash: [1, 2, 3, 4],
+            ack_hash: vec![1, 2, 3, 4],
         }),
     };
 
@@ -609,4 +609,19 @@ fn repeater_login_response_roundtrips() {
         RepeaterLoginResponsePlaintext::decode(&encoded),
         Ok(response)
     );
+}
+
+#[test]
+fn ack_payloads_preserve_four_to_six_bytes() {
+    for len in 0..=7 {
+        let raw = vec![0x42; len];
+        if (4..=6).contains(&len) {
+            let ack = AckPayload::decode(&raw).unwrap();
+            assert_eq!(ack.ack_hash, raw);
+            assert_eq!(Payload::Ack(ack).encode().unwrap(), raw);
+        } else {
+            assert!(AckPayload::decode(&raw).is_err());
+            assert!(Payload::Ack(AckPayload { ack_hash: raw }).encode().is_err());
+        }
+    }
 }

@@ -137,6 +137,7 @@ Telnet has the same privilege level as the serial console and requires no additi
 | `set flood.max.unscoped <hops>` | `5` | Integer `0`–`63` | Maximum hops for messages being flooded without a region. |
 | `set flood.max.advert <hops>` | `3` | Integer `0`–`63` | Maximum hops for flooded node advertisements. |
 | `set path.hash.mode <mode>` | `2` | `0` = 1 byte, `1` = 2 bytes, `2` = 3 bytes | Size of node identifiers in this repeater’s advert paths. Larger identifiers reduce collisions but use more space. |
+| `set multi.acks <state>` | `0` | `0`, `1` | Adds a multipart copy when forwarding direct ACKs, followed by the ordinary ACK 300 ms later. Incoming multipart ACKs are supported with either setting. |
 | `set loop.detect <mode>` | `minimal` | `off`, `minimal`, `moderate`, `strict` | Stops forwarding packets that appear to have visited this repeater already. `strict` rejects on the first match; `minimal` tolerates more matches with short identifiers. |
 
 ## MQTT
