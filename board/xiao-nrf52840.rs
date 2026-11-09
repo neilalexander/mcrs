@@ -1,5 +1,5 @@
-//! MCRS repeater for an XIAO nRF52840 with an SX1262 radio. It has no storage,
-//! status screen, button, console or battery monitor.
+//! MCRS repeater for an XIAO nRF52840 with an SX1262 radio. It has no status
+//! screen, button, console or battery monitor.
 #![no_std]
 #![no_main]
 
@@ -7,6 +7,7 @@ use defmt_rtt as _;
 use embassy_nrf::{
     bind_interrupts,
     gpio::{Input, Level, Output, OutputDrive, Pull},
+    nvmc::Nvmc,
     peripherals,
     rng::Rng,
     spim::{self, Spim},
@@ -14,10 +15,10 @@ use embassy_nrf::{
 use embassy_time::Delay;
 use embedded_alloc::LlffHeap as Heap;
 use embedded_hal_bus::spi::ExclusiveDevice;
-use mcrs_nrf::{HEAP_SIZE, NrfPlatform};
+use mcrs_nrf::{HEAP_SIZE, NrfPlatform, NrfStorage};
 use mcrs_repeater::{
     Repeater,
-    platform::{NoBattery, NoButton, NoConsole, NoDisplay, NoStorage, Radio},
+    platform::{NoBattery, NoButton, NoConsole, NoDisplay, Radio},
 };
 use mcrs_sx1262::{BoardConfig, Sx1262, TcxoCtrlVoltage};
 use panic_probe as _;
@@ -62,13 +63,21 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         },
     );
     let platform = NrfPlatform::new(MODEL, Rng::new_blocking(p.RNG));
+    let storage = NrfStorage::new(Nvmc::new(p.NVMC));
 
     let mut console = NoConsole;
     let mut display = NoDisplay;
     let mut button = NoButton;
     let mut battery = NoBattery;
+
     Repeater::new(
-        platform, NoStorage, &mut radio, &mut console, &mut display, &mut button, &mut battery,
+        platform,
+        storage,
+        &mut radio,
+        &mut console,
+        &mut display,
+        &mut button,
+        &mut battery,
     )
     .run(0) // Battery monitoring disabled.
     .await;

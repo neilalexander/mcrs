@@ -1,6 +1,8 @@
 #![no_std]
 
 //! The repeater platform for an nRF52840. The board chooses the radio.
+extern crate alloc;
+
 use core::cell::{Cell, RefCell};
 use embassy_nrf::{mode::Blocking, pac::POWER, rng::Rng};
 use embassy_time::{Delay, Instant};
@@ -8,6 +10,10 @@ use mcrs_repeater::{
     memory::MemoryProfile,
     platform::{OtaStatus, Platform},
 };
+
+mod littlefs;
+
+pub use littlefs::NrfStorage;
 
 /// The heap the repeater's tables and queues are allocated from.
 pub const HEAP_SIZE: usize = 64 * 1024;
