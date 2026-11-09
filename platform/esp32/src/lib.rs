@@ -19,8 +19,8 @@ pub(crate) mod rng;
 
 pub use esp::*;
 
-/// Recheck the battery after 30 seconds in deep sleep.
-pub const RECOVERY_SLEEP: core::time::Duration = core::time::Duration::from_secs(30);
+/// Recheck the battery after five minutes in deep sleep.
+pub const RECOVERY_SLEEP: core::time::Duration = core::time::Duration::from_secs(5 * 60);
 
 use crate::{
     heltec::{

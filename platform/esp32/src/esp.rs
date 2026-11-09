@@ -819,7 +819,7 @@ fn rtc_elapsed_seconds() -> Option<u32> {
 }
 
 fn read_retained_wall_clock() -> Option<(u32, u32)> {
-    let (checksum, unix_seconds, rtc_seconds) = read_retained_wall_clock_words()?;
+    let (checksum, unix_seconds, rtc_seconds) = read_retained_wall_clock_words();
     (checksum == retained_wall_clock_checksum(unix_seconds, rtc_seconds))
         .then_some((unix_seconds, rtc_seconds))
 }
@@ -832,31 +832,21 @@ fn write_retained_wall_clock(unix_seconds: u32, rtc_seconds: u32) {
     );
 }
 
-#[cfg(feature = "esp32s3")]
-fn read_retained_wall_clock_words() -> Option<(u32, u32, u32)> {
+fn read_retained_wall_clock_words() -> (u32, u32, u32) {
     let rtc = esp_hal::peripherals::LPWR::regs();
-    Some((
+    (
         rtc.store0().read().bits(),
         rtc.store6().read().bits(),
         rtc.store7().read().bits(),
-    ))
+    )
 }
 
-#[cfg(feature = "esp32s3")]
 fn write_retained_wall_clock_words(checksum: u32, unix_seconds: u32, rtc_seconds: u32) {
     let rtc = esp_hal::peripherals::LPWR::regs();
     rtc.store0().write(|w| unsafe { w.bits(checksum) });
     rtc.store6().write(|w| unsafe { w.bits(unix_seconds) });
     rtc.store7().write(|w| unsafe { w.bits(rtc_seconds) });
 }
-
-#[cfg(not(feature = "esp32s3"))]
-fn read_retained_wall_clock_words() -> Option<(u32, u32, u32)> {
-    None
-}
-
-#[cfg(not(feature = "esp32s3"))]
-fn write_retained_wall_clock_words(_checksum: u32, _unix_seconds: u32, _rtc_seconds: u32) {}
 
 fn retained_wall_clock_checksum(unix_seconds: u32, rtc_seconds: u32) -> u32 {
     WALL_CLOCK_RTC_MAGIC
