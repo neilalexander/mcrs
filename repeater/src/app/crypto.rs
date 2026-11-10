@@ -96,8 +96,9 @@ pub fn decrypt_authenticated_direct_payload(
     None
 }
 
-pub fn encode_login_response<P: Platform, S: Storage>(
+pub async fn encode_login_response<P: Platform, S: Storage>(
     context: &AppContext<P, S>,
+    request: &Packet,
     shared_secret: &[u8; 32],
     requester_public_key: &[u8; 32],
     responder_public_key: &[u8; 32],
@@ -117,6 +118,24 @@ pub fn encode_login_response<P: Platform, S: Storage>(
         ),
         firmware_version_level: 2,
     };
+
+    if request.route_type.is_flood() {
+        let region = context
+            .with_config(|config| config.regions().match_flood_region(request))
+            .await?;
+        let mut packet = encode_path_response_packet(
+            shared_secret,
+            requester_public_key,
+            responder_public_key,
+            &response.encode(),
+            request.normal_path()?.clone(),
+        )?;
+        context
+            .with_config(|config| config.regions().apply_scope(&mut packet, &region))
+            .await
+            .ok()?;
+        return packet.encode().ok();
+    }
 
     encode_response_plaintext(
         shared_secret,

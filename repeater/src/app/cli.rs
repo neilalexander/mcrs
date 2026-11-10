@@ -202,7 +202,7 @@ pub async fn handle_remote_packet<P: Platform, S: Storage>(
         } else {
             return None;
         };
-        return handle_anonymous_request(payload, reply_path, context).await;
+        return handle_anonymous_request(packet, payload, reply_path, context).await;
     }
 
     match &packet.payload {
@@ -225,6 +225,7 @@ pub async fn handle_remote_packet<P: Platform, S: Storage>(
 }
 
 async fn handle_anonymous_request<P: Platform, S: Storage>(
+    packet: &Packet,
     payload: &mcrs_protocol::AnonymousRequestPayload,
     reply_path: mcrs_protocol::Path,
     context: &AppContext<P, S>,
@@ -287,12 +288,14 @@ async fn handle_anonymous_request<P: Platform, S: Storage>(
         );
         return encode_login_response(
             context,
+            packet,
             &decrypted.shared_secret,
             &decrypted.sender_pubkey,
             &responder_public_key,
             acl_permissions_for(privilege),
             reply_path,
-        );
+        )
+        .await;
     }
 
     let command = body.strip_prefix(REMOTE_CLI_PREFIX).map(str::trim)?;
