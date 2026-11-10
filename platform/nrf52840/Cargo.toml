@@ -40,6 +40,9 @@ panic-probe = { version = "1.0.0", features = ["print-defmt"] }
 embedded-hal-bus = { version = "0.3.0", features = ["async", "defmt-03"] }
 embedded-alloc = "0.7.0"
 embedded-storage = "0.3.1"
+embassy-usb = { version = "0.6.0", features = ["defmt"] }
+embassy-futures = "0.1.1"
+embedded-io-async = "0.7.0"
 littlefs-rust = { package = "littlefs2-rust", version = "0.1.0", default-features = false }
 
 [profile.release]
@@ -47,6 +50,10 @@ opt-level = 3
 lto = "fat"
 codegen-units = 1
 debug = 2
+
+[[bin]]
+name = "mcrs-rak4631"
+path = "../../board/rak4631.rs"
 
 [[bin]]
 name = "mcrs-xiao-nrf52840"

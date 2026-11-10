@@ -7,7 +7,9 @@ MEMORY
 
      They were extracted from the Arduino IDE plugin linked indirectly at https://wiki.seeedstudio.com/XIAO_BLE/
   */
-  FLASH (rx)     : ORIGIN = 0x27000, LENGTH = 0xED000 - 0x27000
+  /* A board may override the S140 7.3.0 default (RAK4631 uses 6.1.1). */
+  FLASH (rx)     : ORIGIN = DEFINED(__application_origin) ? __application_origin : 0x27000,
+                   LENGTH = 0xED000 - (DEFINED(__application_origin) ? __application_origin : 0x27000)
 
   /*
      Nothing is linked into the next two regions. With no attributes, the linker never

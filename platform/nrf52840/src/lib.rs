@@ -12,6 +12,7 @@ use mcrs_repeater::{
 };
 
 mod littlefs;
+pub mod usb_console;
 
 pub use littlefs::NrfStorage;
 

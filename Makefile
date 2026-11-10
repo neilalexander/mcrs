@@ -18,6 +18,8 @@ HELTEC_WSL3_FLASH_FREQ := 40mhz
 HELTEC_WSL3_ELF := target/xtensa-esp32s3-none-elf/release/mcrs-heltec_wsl3
 DIST_DIR := dist
 MQTT ?= 0
+ARM_OBJCOPY ?= arm-none-eabi-objcopy
+
 # One optional profile file, applied after defaults.conf.
 # Bare filenames are resolved in profiles/; paths are relative to the workspace.
 PROFILE ?=
@@ -41,6 +43,14 @@ endif
 
 heltec-v3-build:
 	cd platform/esp32 && cargo +esp build --release --bin mcrs-heltec_v3 $(MQTT_FEATURE)
+
+.PHONY: rak4631-build rak4631-uf2
+rak4631-build:
+	cd platform/nrf52840 && cargo build --release --locked --bin mcrs-rak4631
+
+rak4631-uf2: rak4631-build | $(DIST_DIR)
+	$(ARM_OBJCOPY) -O binary platform/nrf52840/target/thumbv7em-none-eabi/release/mcrs-rak4631 $(DIST_DIR)/mcrs-rak4631.bin
+	python3 tools/nrf-uf2.py --base 0x26000 $(DIST_DIR)/mcrs-rak4631.bin $(DIST_DIR)/mcrs-rak4631$(PROFILE_SUFFIX)-$(VERSION).uf2
 
 heltec-v3-run heltec-v3-flash:
 	cd platform/esp32 && cargo +esp run --release --bin mcrs-heltec_v3 $(MQTT_FEATURE)

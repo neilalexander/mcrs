@@ -26,6 +26,8 @@ fn main() {
     // `memory.x` is changed.
     println!("cargo:rerun-if-changed=memory.x");
 
+    // RAK4631 ships S140 6.1.1; the other boards retain the 7.3.0 layout.
+    println!("cargo:rustc-link-arg-bin=mcrs-rak4631=--defsym=__application_origin=0x26000");
     println!("cargo:rustc-link-arg-bins=--nmagic");
     println!("cargo:rustc-link-arg-bins=-Tlink.x");
     println!("cargo:rustc-link-arg-bins=-Tdefmt.x");

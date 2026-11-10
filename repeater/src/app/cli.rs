@@ -101,9 +101,9 @@ impl Cli {
         &mut self,
         byte: u8,
         context: &AppContext<P, S>,
-    ) {
+    ) -> Option<CliResponse> {
         match byte {
-            b'\r' | b'\n' => self.submit(context).await,
+            b'\r' | b'\n' => return self.submit(context).await,
             0x08 | 0x7f => {
                 self.len = self.len.saturating_sub(1);
             }
@@ -117,21 +117,21 @@ impl Cli {
                 self.len = 0;
             }
         }
+        None
     }
 
-    async fn submit<P: Platform, S: Storage>(&mut self, context: &AppContext<P, S>) {
+    async fn submit<P: Platform, S: Storage>(
+        &mut self,
+        context: &AppContext<P, S>,
+    ) -> Option<CliResponse> {
         if self.len == 0 {
-            return;
+            return None;
         }
 
         let command = String::from(core::str::from_utf8(&self.line[..self.len]).unwrap_or(""));
         self.len = 0;
 
-        if let Some(response) = handle_command(command.trim(), context, CliRequest::serial()).await
-            && let Some(action) = response.post_reply
-        {
-            action.execute(context);
-        }
+        handle_command(command.trim(), context, CliRequest::serial()).await
     }
 }
 
@@ -164,9 +164,19 @@ where
                     let _ = console.write_all(echo).await;
                     let _ = console.flush().await;
                 }
-                cli.accept_byte(byte[0], context).await;
+                if let Some(response) = cli.accept_byte(byte[0], context).await {
+                    for line in response.text.lines() {
+                        let _ = console.write_all(line.as_bytes()).await;
+                        let _ = console.write_all(b"\r\n").await;
+                    }
+                    let _ = console.flush().await;
+                    if let Some(action) = response.post_reply {
+                        action.execute(context);
+                    }
+                }
             }
-            Ok(_) | Err(_) => {}
+            Ok(_) => {}
+            Err(_) => cli = Cli::new(),
         }
     }
 }
@@ -1929,12 +1939,8 @@ fn encode_remote_cli_reply<P: Platform, S: Storage>(
 
 fn log_command_output(request: CliRequest, output: &str) {
     match request.origin {
-        CliOrigin::Serial => {
-            for line in output.lines() {
-                info!("{}", line);
-            }
-        }
-        CliOrigin::Tcp => {}
+        // Local transports write the response to their own stream.
+        CliOrigin::Serial | CliOrigin::Tcp => {}
         CliOrigin::Remote => {
             if output.starts_with("CLI: denied") {
                 warn!("Remote CLI denied: privilege={}", request.privilege.name());
