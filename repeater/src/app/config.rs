@@ -675,8 +675,7 @@ impl AppConfig {
     pub fn export_config_delta(&self) -> String {
         let config = StoredAppConfig::from_app_config(self);
         let defaults = StoredAppConfig::default_with_private_key(self.private_key);
-        String::from_utf8(encode_sparse_config_text_redacted(&config, &defaults, true))
-            .expect("UTF-8 config")
+        String::from_utf8(encode_config_delta(&config, &defaults)).expect("UTF-8 config")
     }
 
     pub fn save<S>(&self, storage: &mut S) -> Result<(), crate::platform::storage::Error>
@@ -694,11 +693,7 @@ impl AppConfig {
     }
 
     pub fn write_effective_config(&self, out: &mut String) {
-        let rendered =
-            encode_full_config_text_redacted(&StoredAppConfig::from_app_config(self), true);
-        if let Ok(text) = core::str::from_utf8(&rendered) {
-            out.push_str(text);
-        }
+        out.push_str(&self.export_config(true));
     }
 }
 
@@ -1150,36 +1145,17 @@ fn validate_wifi_config(wifi: &WifiConfig) -> Result<(), ConfigError> {
 }
 
 fn encode_config_text(config: &StoredAppConfig) -> Vec<u8> {
-    let defaults = StoredAppConfig::default_with_private_key(config.private_key);
-    encode_sparse_config_text(config, &defaults)
+    encode_full_config_text_redacted(config, false)
 }
 
-fn encode_sparse_config_text(config: &StoredAppConfig, defaults: &StoredAppConfig) -> Vec<u8> {
-    encode_sparse_config_text_redacted(config, defaults, false)
-}
-
-fn encode_sparse_config_text_redacted(
-    config: &StoredAppConfig,
-    defaults: &StoredAppConfig,
-    redact_secrets: bool,
-) -> Vec<u8> {
+fn encode_config_delta(config: &StoredAppConfig, defaults: &StoredAppConfig) -> Vec<u8> {
     let mut out = String::new();
     let _ = writeln!(&mut out, "# MCRS app.conf");
     let _ = writeln!(&mut out, "version={}", APP_CONFIG_TEXT_VERSION);
 
     config.acl.write_overrides(&defaults.acl, &mut out);
 
-    // Storage always carries the device identity. A delta export compares
-    // settings against this device's defaults, so the identity is omitted.
-    if !redact_secrets {
-        out.push_str(config.private_key.config_key());
-        out.push('=');
-        for byte in config.private_key.as_bytes() {
-            push_hex_byte(&mut out, *byte);
-        }
-        out.push('\n');
-    }
-
+    // Delta exports omit the device identity and redact changed secrets.
     if config.latitude_microdegrees != defaults.latitude_microdegrees {
         out.push_str("identity.lat=");
         write_optional_coordinate(&mut out, config.latitude_microdegrees);
@@ -1206,11 +1182,7 @@ fn encode_sparse_config_text_redacted(
 
     if config.remote_cli_password != defaults.remote_cli_password {
         out.push_str("remote.password=");
-        if redact_secrets {
-            out.push_str("<redacted>");
-        } else {
-            write_escaped_value(&mut out, &config.remote_cli_password);
-        }
+        out.push_str("<redacted>");
         out.push('\n');
     }
 
@@ -1225,7 +1197,7 @@ fn encode_sparse_config_text_redacted(
     }
     if config.wifi.password != defaults.wifi.password {
         out.push_str("wifi.pass=");
-        if redact_secrets && !config.wifi.password.is_empty() {
+        if !config.wifi.password.is_empty() {
             out.push_str("<redacted>");
         } else {
             write_escaped_value(&mut out, &config.wifi.password);
@@ -1333,13 +1305,7 @@ fn encode_sparse_config_text_redacted(
     }
     #[cfg(feature = "mqtt")]
     for (index, mqtt) in config.mqtt.iter().enumerate() {
-        write_mqtt_config(
-            &mut out,
-            index,
-            mqtt,
-            Some(&defaults.mqtt[index]),
-            redact_secrets,
-        );
+        write_mqtt_config(&mut out, index, mqtt, Some(&defaults.mqtt[index]), true);
     }
 
     out.into_bytes()
@@ -1885,6 +1851,55 @@ mod tests {
     }
 
     #[test]
+    fn full_config_preserves_values_and_merges_profile_collections() {
+        let original = network_defaults(
+            "region.default=home\nregion.home=true\nregion.*=false\nacl.0101010101010101010101010101010101010101010101010101010101010101=admin\n",
+        );
+        let saved = encode_config_text(&original);
+        let mut updated = network_defaults(
+            "node.name=Changed\nowner.info=Changed\nntp=time.example.org\nwifi.ssid=Changed\nwifi.pass=ChangedPassword\nwifi.telnet=true\nrepeat=off\nregion.default=away\nregion.away=true\nregion.*=true\nacl.0202020202020202020202020202020202020202020202020202020202020202=deny\n",
+        );
+        updated.multi_acks = !original.multi_acks;
+        updated.flood_max_unscoped_hops = original.flood_max_unscoped_hops + 1;
+        #[cfg(feature = "mqtt")]
+        {
+            updated.mqtt[0].host = String::from("changed.example.org");
+            updated.mqtt[0].password = String::from("changed");
+        }
+        let loaded = decode_config_text(&saved, &updated).expect("valid config");
+        let mut expected = original.clone();
+        expected
+            .regions
+            .set_region_from_config("away", true)
+            .unwrap();
+        expected.acl.set(&"02".repeat(32), "deny").unwrap();
+        let loaded_text = String::from_utf8(encode_config_text(&loaded)).unwrap();
+        let expected_text = String::from_utf8(encode_config_text(&expected)).unwrap();
+        let mut loaded_lines: Vec<_> = loaded_text.lines().collect();
+        let mut expected_lines: Vec<_> = expected_text.lines().collect();
+        loaded_lines.sort_unstable();
+        expected_lines.sort_unstable();
+        assert_eq!(loaded_lines, expected_lines);
+    }
+
+    #[test]
+    fn missing_options_use_defaults_and_are_included_in_next_save() {
+        let image = network_defaults("ntp=time.example.org\nwifi.ssid=Profile\n");
+        let loaded = decode_config_text(b"version=1\nnode.name=Device\n", &image)
+            .expect("valid sparse config");
+        assert_eq!(loaded.ntp, "time.example.org");
+        assert_eq!(loaded.wifi.ssid, "Profile");
+        let saved = encode_config_text(&loaded);
+        let text = core::str::from_utf8(&saved).unwrap();
+        assert!(text.contains("ntp=time.example.org\n"));
+        assert!(text.contains("wifi.ssid=Profile\n"));
+        let updated = network_defaults("ntp=changed.example.org\nwifi.ssid=Changed\n");
+        let reloaded = decode_config_text(&saved, &updated).unwrap();
+        assert_eq!(reloaded.ntp, loaded.ntp);
+        assert_eq!(reloaded.wifi.ssid, loaded.wifi.ssid);
+    }
+
+    #[test]
     fn embedded_defaults_and_selected_profile_are_valid() {
         #[cfg(mcrs_profile)]
         let profile = include_str!(env!("MCRS_PROFILE_PATH"));
@@ -1911,7 +1926,7 @@ mod tests {
             let mut app = AppConfig::from_stored(image.clone(), "test");
             app.set_advert_interval_minutes(minutes);
             assert_eq!(app.advert_interval_minutes(), expected);
-            let saved = encode_sparse_config_text(&StoredAppConfig::from_app_config(&app), &image);
+            let saved = encode_config_text(&StoredAppConfig::from_app_config(&app));
             assert_eq!(
                 decode_config_text(&saved, &image)
                     .unwrap()
@@ -1932,7 +1947,7 @@ mod tests {
             240
         );
         let device = decode_config_text(b"advert.interval=60\n", &image).unwrap();
-        let saved = encode_sparse_config_text(&device, &image);
+        let saved = encode_config_text(&device);
         assert!(
             core::str::from_utf8(&saved)
                 .unwrap()
@@ -1981,7 +1996,7 @@ mod tests {
             let mut app = AppConfig::from_stored(image.clone(), "test");
             app.set_flood_advert_interval_hours(hours);
             assert_eq!(app.flood_advert_interval_hours(), expected);
-            let saved = encode_sparse_config_text(&StoredAppConfig::from_app_config(&app), &image);
+            let saved = encode_config_text(&StoredAppConfig::from_app_config(&app));
             assert_eq!(
                 decode_config_text(&saved, &image)
                     .unwrap()
@@ -2002,7 +2017,7 @@ mod tests {
             0
         );
         let device = decode_config_text(b"flood.advert.interval=1\n", &image).unwrap();
-        let saved = encode_sparse_config_text(&device, &image);
+        let saved = encode_config_text(&device);
         assert!(
             core::str::from_utf8(&saved)
                 .unwrap()
@@ -2044,7 +2059,7 @@ mod tests {
             app.set_repeat_enabled(enabled);
             assert_eq!(app.repeat_enabled(), enabled);
             let stored = StoredAppConfig::from_app_config(&app);
-            let saved = encode_sparse_config_text(&stored, &image);
+            let saved = encode_config_text(&stored);
             assert_eq!(
                 decode_config_text(&saved, &image).unwrap().repeat_enabled,
                 enabled
@@ -2062,7 +2077,7 @@ mod tests {
         assert!(!disabled_image.repeat_enabled);
         // A saved override must survive a change to the image default.
         let enabled = decode_config_text(b"repeat=on\n", &disabled_image).unwrap();
-        let saved = encode_sparse_config_text(&enabled, &disabled_image);
+        let saved = encode_config_text(&enabled);
         assert!(
             decode_config_text(&saved, &disabled_image)
                 .unwrap()
@@ -2080,7 +2095,7 @@ mod tests {
         let image = network_defaults(
             "node.name=Profile repeater\nflood.max.advert=7\nremote.password=profile-secret\nwifi.pass=profile-wifi\n",
         );
-        let unchanged = encode_sparse_config_text_redacted(&image, &image, true);
+        let unchanged = encode_config_delta(&image, &image);
         assert_eq!(
             core::str::from_utf8(&unchanged).unwrap(),
             "# MCRS app.conf\nversion=1\n"
@@ -2089,7 +2104,7 @@ mod tests {
             b"node.name=My repeater\nflood.max.advert=3\nremote.password=device-secret\nwifi.pass=device-wifi\n",
             &image,
         ).unwrap();
-        let delta = encode_sparse_config_text_redacted(&device, &image, true);
+        let delta = encode_config_delta(&device, &image);
         let delta = core::str::from_utf8(&delta).unwrap();
         assert!(delta.contains("node.name=My repeater\n"));
         // The base default still counts as a change when the profile differs.
@@ -2102,7 +2117,7 @@ mod tests {
         assert!(!delta.contains("identity.expanded="));
         assert!(!delta.contains("radio.frequency_hz="));
         // Saving still preserves identity and secrets for an exact reload.
-        let saved = encode_sparse_config_text(&device, &image);
+        let saved = encode_config_text(&device);
         let loaded = decode_config_text(&saved, &image).unwrap();
         assert_eq!(loaded.private_key, device.private_key);
         assert_eq!(loaded.remote_cli_password, device.remote_cli_password);
@@ -2114,13 +2129,13 @@ mod tests {
     fn delta_export_redacts_only_changed_mqtt_passwords() {
         let image = network_defaults("mqtt.1.password=profile-secret\n");
         let device = decode_config_text(b"mqtt.1.password=device-secret\n", &image).unwrap();
-        let delta = encode_sparse_config_text_redacted(&device, &image, true);
+        let delta = encode_config_delta(&device, &image);
         let delta = core::str::from_utf8(&delta).unwrap();
         assert!(delta.contains("mqtt.1.password=<redacted>\n"));
         assert!(!delta.contains("device-secret"));
         assert!(!delta.contains("mqtt.2.password="));
         let cleared = decode_config_text(b"mqtt.1.password=\n", &image).unwrap();
-        let delta = encode_sparse_config_text_redacted(&cleared, &image, true);
+        let delta = encode_config_delta(&cleared, &image);
         assert!(
             core::str::from_utf8(&delta)
                 .unwrap()
@@ -2129,11 +2144,11 @@ mod tests {
     }
 
     #[test]
-    fn saved_differences_survive_changes_to_image_defaults() {
+    fn delta_export_tracks_changes_to_image_defaults() {
         let image = network_defaults("flood.max.unscoped=4\nflood.max.advert=2\n");
         let device =
             decode_config_text(b"flood.max.unscoped=4\nflood.max.advert=1\n", &image).unwrap();
-        let saved = encode_sparse_config_text(&device, &image);
+        let saved = encode_config_delta(&device, &image);
         let text = core::str::from_utf8(&saved).unwrap();
         assert!(!text.contains("flood.max.unscoped="));
         assert!(text.contains("flood.max.advert=1"));
@@ -2142,21 +2157,20 @@ mod tests {
         let loaded = decode_config_text(&saved, &updated).unwrap();
         assert_eq!(loaded.flood_max_unscoped_hops, 3);
         assert_eq!(loaded.flood_max_advert_hops, 1);
-        assert_eq!(loaded.private_key, device.private_key);
 
         let matching = network_defaults("flood.max.unscoped=3\nflood.max.advert=1\n");
-        let saved = encode_sparse_config_text(&loaded, &matching);
+        let saved = encode_config_delta(&loaded, &matching);
         assert!(!core::str::from_utf8(&saved).unwrap().contains("flood.max."));
     }
 
     #[test]
-    fn region_overrides_are_additive_and_only_differences_are_saved() {
+    fn region_delta_export_is_additive_and_omits_unchanged_values() {
         let image = network_defaults(
             "region.default=northeast\nregion.northeast=true\nregion.other=true\n",
         );
         let device =
             decode_config_text(b"region.local=true\nregion.northeast=false\n", &image).unwrap();
-        let saved = encode_sparse_config_text(&device, &image);
+        let saved = encode_config_delta(&device, &image);
         let text = core::str::from_utf8(&saved).unwrap();
         assert!(text.contains("region.northeast=false\n"));
         assert!(text.contains("region.local=true\n"));
@@ -2245,7 +2259,7 @@ mod tests {
         // Earlier firmware saved the bandwidth as typed, such as 7.8 kHz.
         let device = decode_config_text(b"radio.bandwidth_hz=7800\n", &image).unwrap();
         assert_eq!(device.radio.bandwidth, Bandwidth::Khz7_8);
-        let saved = encode_sparse_config_text(&device, &image);
+        let saved = encode_config_text(&device);
         assert!(
             core::str::from_utf8(&saved)
                 .unwrap()
@@ -2274,21 +2288,17 @@ mod tests {
         );
         config.set_multi_acks(true);
         let stored = StoredAppConfig::from_app_config(&config);
-        for encoded in [
-            encode_config_text(&stored),
-            encode_full_config_text_redacted(&stored, false),
-        ] {
-            let decoded = decode_config_text(&encoded, &defaults()).unwrap();
-            assert!(AppConfig::from_stored(decoded, "storage").multi_acks());
-        }
+        let encoded = encode_config_text(&stored);
+        let decoded = decode_config_text(&encoded, &defaults()).unwrap();
+        assert!(AppConfig::from_stored(decoded, "storage").multi_acks());
         config.unset("multi.acks").unwrap();
         assert!(!config.multi_acks());
         assert!(
-            !core::str::from_utf8(&encode_config_text(&StoredAppConfig::from_app_config(
+            core::str::from_utf8(&encode_config_text(&StoredAppConfig::from_app_config(
                 &config
             )))
             .unwrap()
-            .contains("multi.acks=")
+            .contains("multi.acks=0\n")
         );
         for invalid in ["2", "-1", "on", "true"] {
             assert!(
@@ -2315,24 +2325,20 @@ mod tests {
         ] {
             config.set_loop_detection(mode);
             let stored = StoredAppConfig::from_app_config(&config);
-            for encoded in [
-                encode_config_text(&stored),
-                encode_full_config_text_redacted(&stored, false),
-            ] {
-                let decoded = decode_config_text(&encoded, &defaults()).unwrap();
-                assert_eq!(
-                    AppConfig::from_stored(decoded, "storage").loop_detection(),
-                    mode
-                );
-            }
+            let encoded = encode_config_text(&stored);
+            let decoded = decode_config_text(&encoded, &defaults()).unwrap();
+            assert_eq!(
+                AppConfig::from_stored(decoded, "storage").loop_detection(),
+                mode
+            );
         }
         config.unset("loop.detect").unwrap();
         assert_eq!(config.loop_detection(), LoopDetection::Minimal);
         let encoded = encode_config_text(&StoredAppConfig::from_app_config(&config));
         assert!(
-            !core::str::from_utf8(&encoded)
+            core::str::from_utf8(&encoded)
                 .unwrap()
-                .contains("loop.detect=")
+                .contains("loop.detect=minimal\n")
         );
         assert!(decode_config_text(b"version=1\nloop.detect=unknown\n", &defaults()).is_none());
     }
@@ -2343,23 +2349,19 @@ mod tests {
         assert_eq!(config.owner_info(), "");
         config.set_owner_info("Alice|alice@example.org|Back\\yard");
         let stored = StoredAppConfig::from_app_config(&config);
-        for encoded in [
-            encode_config_text(&stored),
-            encode_full_config_text_redacted(&stored, false),
-        ] {
-            let decoded = decode_config_text(&encoded, &defaults()).unwrap();
-            let reloaded = AppConfig::from_stored(decoded, "storage");
-            assert_eq!(
-                reloaded.owner_info(),
-                "Alice\nalice@example.org\nBack\\yard"
-            );
-        }
+        let encoded = encode_config_text(&stored);
+        let decoded = decode_config_text(&encoded, &defaults()).unwrap();
+        let reloaded = AppConfig::from_stored(decoded, "storage");
+        assert_eq!(
+            reloaded.owner_info(),
+            "Alice\nalice@example.org\nBack\\yard"
+        );
         config.unset("owner.info").unwrap();
         let encoded = encode_config_text(&StoredAppConfig::from_app_config(&config));
         assert!(
-            !core::str::from_utf8(&encoded)
+            core::str::from_utf8(&encoded)
                 .unwrap()
-                .contains("owner.info=")
+                .contains("owner.info=\n")
         );
         assert_eq!(
             decode_config_text(&encoded, &defaults())
@@ -2405,11 +2407,11 @@ mod tests {
         config.unset("ntp").unwrap();
         assert_eq!(config.ntp(), "pool.ntp.org");
         assert!(
-            !core::str::from_utf8(&encode_config_text(&StoredAppConfig::from_app_config(
+            core::str::from_utf8(&encode_config_text(&StoredAppConfig::from_app_config(
                 &config
             )))
             .unwrap()
-            .contains("ntp=")
+            .contains("ntp=pool.ntp.org\n")
         );
     }
 
@@ -2453,7 +2455,7 @@ mod tests {
     }
 
     #[test]
-    fn unset_restores_default_and_removes_sparse_override() {
+    fn unset_restores_and_persists_default() {
         let mut config = AppConfig::generated_defaults([7; 32]);
         config.set_wifi_telnet(true);
         config.unset("wifi.telnet").expect("known setting");
@@ -2462,7 +2464,7 @@ mod tests {
         let stored = StoredAppConfig::from_app_config(&config);
         let rendered = encode_config_text(&stored);
         let rendered = core::str::from_utf8(&rendered).expect("UTF-8 config");
-        assert!(!rendered.contains("wifi.telnet="));
+        assert!(rendered.contains("wifi.telnet=false\n"));
     }
 
     #[test]
