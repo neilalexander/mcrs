@@ -105,8 +105,24 @@ jobs:
           if-no-files-found: error
 
   build_nrf52840:
-    name: nRF52840
+    name: ${{ matrix.board.name }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        board:
+          - id: rak4631
+            name: RAK4631
+            binary: mcrs-rak4631
+            uf2_base: "0x26000"
+          - id: solar-p1
+            name: Solar P1
+            binary: mcrs-solar-p1
+            uf2_base: "0x27000"
+          - id: xiao-nrf52840
+            name: XIAO nRF52840
+            binary: mcrs-xiao-nrf52840
+            uf2_base: "0x27000"
 
     steps:
       - name: Check out repository
@@ -132,29 +148,34 @@ jobs:
           path: |
             ~/.cargo
             platform/nrf52840/target
-          key: nrf52840-${{ runner.os }}-${{ hashFiles('platform/nrf52840/flake.lock') }}-${{ hashFiles('platform/nrf52840/Cargo.lock') }}
+          key: ${{ matrix.board.id }}-${{ runner.os }}-${{ hashFiles('platform/nrf52840/Cargo.lock') }}
           restore-keys: |
-            nrf52840-${{ runner.os }}-${{ hashFiles('platform/nrf52840/flake.lock') }}-
+            ${{ matrix.board.id }}-${{ runner.os }}-
 
       - name: Build firmware
         working-directory: platform/nrf52840
-        run: cargo build --release --locked
+        env:
+          MCRS_PROFILE: ${{ inputs.PROFILE || '' }}
+        run: cargo build --release --locked --bin ${{ matrix.board.binary }}
 
       - name: Collect image
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           mkdir -p dist
-          for board in rak4631 xiao-nrf52840 solar-p1; do
-            cp "platform/nrf52840/target/thumbv7em-none-eabi/release/mcrs-$board" "dist/mcrs-$board-$VERSION.elf"
-          done
-          arm-none-eabi-objcopy -O binary platform/nrf52840/target/thumbv7em-none-eabi/release/mcrs-rak4631 dist/mcrs-rak4631.bin
-          python3 tools/nrf-uf2.py --base 0x26000 dist/mcrs-rak4631.bin "dist/mcrs-rak4631-$VERSION.uf2"
+          cp "platform/nrf52840/target/thumbv7em-none-eabi/release/${{ matrix.board.binary }}" "dist/${{ matrix.board.binary }}-$VERSION.elf"
+
+      - name: Create UF2
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          arm-none-eabi-objcopy -O binary "platform/nrf52840/target/thumbv7em-none-eabi/release/${{ matrix.board.binary }}" "dist/${{ matrix.board.binary }}.bin"
+          python3 tools/nrf-uf2.py --base ${{ matrix.board.uf2_base }} "dist/${{ matrix.board.binary }}.bin" "dist/${{ matrix.board.binary }}-$VERSION.uf2"
 
       - name: Upload image
         uses: actions/upload-artifact@v7
         with:
-          name: nrf52840-firmware-${{ steps.version.outputs.version }}
+          name: ${{ matrix.board.id }}-firmware-${{ steps.version.outputs.version }}
           path: |
             dist/*.elf
             dist/*.uf2

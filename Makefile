@@ -44,13 +44,18 @@ endif
 heltec-v3-build:
 	cd platform/esp32 && cargo +esp build --release --bin mcrs-heltec_v3 $(MQTT_FEATURE)
 
-.PHONY: rak4631-build rak4631-uf2
-rak4631-build:
-	cd platform/nrf52840 && cargo build --release --locked --bin mcrs-rak4631
+NRF_BOARDS := rak4631 solar-p1 xiao-nrf52840
+.PHONY: $(addsuffix -build,$(NRF_BOARDS)) $(addsuffix -uf2,$(NRF_BOARDS))
 
-rak4631-uf2: rak4631-build | $(DIST_DIR)
-	$(ARM_OBJCOPY) -O binary platform/nrf52840/target/thumbv7em-none-eabi/release/mcrs-rak4631 $(DIST_DIR)/mcrs-rak4631.bin
-	python3 tools/nrf-uf2.py --base 0x26000 $(DIST_DIR)/mcrs-rak4631.bin $(DIST_DIR)/mcrs-rak4631$(PROFILE_SUFFIX)-$(VERSION).uf2
+$(addsuffix -build,$(NRF_BOARDS)): %-build:
+	cd platform/nrf52840 && cargo build --release --locked --bin mcrs-$*
+
+rak4631-uf2: UF2_BASE := 0x26000
+solar-p1-uf2 xiao-nrf52840-uf2: UF2_BASE := 0x27000
+
+$(addsuffix -uf2,$(NRF_BOARDS)): %-uf2: %-build | $(DIST_DIR)
+	$(ARM_OBJCOPY) -O binary platform/nrf52840/target/thumbv7em-none-eabi/release/mcrs-$* $(DIST_DIR)/mcrs-$*.bin
+	python3 tools/nrf-uf2.py --base $(UF2_BASE) $(DIST_DIR)/mcrs-$*.bin $(DIST_DIR)/mcrs-$*$(PROFILE_SUFFIX)-$(VERSION).uf2
 
 heltec-v3-run heltec-v3-flash:
 	cd platform/esp32 && cargo +esp run --release --bin mcrs-heltec_v3 $(MQTT_FEATURE)
