@@ -7,6 +7,18 @@ mod schedule;
 
 use schedule::Schedule;
 
+/// Attempt one zero-hop advert 30 seconds after successful radio initialization.
+/// This runs independently of the configured periodic advert intervals.
+pub(crate) async fn startup_advert<P: Platform, S: Storage>(context: &AppContext<P, S>) {
+    context.platform.delay().delay_ms(30_000).await;
+    let packet = context
+        .with_config(|config| {
+            super::discovery::zero_hop_advert(config, context.platform.now_seconds())
+        })
+        .await;
+    send_advert(context, packet, "startup zero-hop").await;
+}
+
 pub(crate) async fn run<P: Platform, S: Storage>(context: &AppContext<P, S>) -> ! {
     let mut delay = context.platform.delay();
     let (advert_interval, flood_interval) = context

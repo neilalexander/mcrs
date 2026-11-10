@@ -6,7 +6,10 @@ use crate::{
 };
 use alloc::{boxed::Box, string::String};
 use defmt::{error, info};
-use embassy_futures::{join::join5, select::select3};
+use embassy_futures::{
+    join::{join, join5},
+    select::select3,
+};
 use embedded_hal_async::digital::Wait;
 use embedded_io_async::{Read, Write};
 
@@ -103,7 +106,7 @@ where
     }
 }
 
-async fn radio_task<P, S, R>(radio: &mut R, context: &AppContext<P, S>) -> !
+async fn radio_task<P, S, R>(radio: &mut R, context: &AppContext<P, S>)
 where
     P: Platform,
     S: Storage,
@@ -118,7 +121,11 @@ where
         }
     }
     let mut delay = context.platform.delay();
-    app::radio_loop(radio, context, &mut delay).await
+    join(
+        app::radio_loop(radio, context, &mut delay),
+        periodic::startup_advert(context),
+    )
+    .await;
 }
 
 fn log_memory_profile(memory: MemoryProfile) {
