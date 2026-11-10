@@ -6,3 +6,6 @@
 /fuzz/corpus
 /fuzz/target
 **/.direnv
+result
+result-*
+.vscode

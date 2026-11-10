@@ -1,5 +1,5 @@
 [toolchain]
 channel = "stable"
-profile = "minimal"
+profile = "default"
 components = ["clippy", "rustfmt", "rust-analyzer", "rust-src"]
 targets = ["thumbv7em-none-eabi"]

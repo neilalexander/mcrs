@@ -2,8 +2,6 @@ name: Build Images
 
 on:
   push:
-    branches: [main]
-    tags: ["v[0-9]*"]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -25,39 +23,42 @@ concurrency:
   group: build-images-${{ github.workflow }}-${{ inputs.REF || github.ref }}-${{ inputs.PROFILE || '' }}
   cancel-in-progress: true
 
-env:
-  CARGO_TERM_COLOR: always
-  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
 jobs:
-  build_esp32:
-    name: ${{ matrix.board.name }}${{ matrix.variant.name_suffix }}
+  # One build job for each package in flake.nix: every board, and the Heltec
+  # boards again with MQTT. `default` is all the boards together, so it's left
+  # out.
+  packages:
+    name: Packages
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.packages.outputs.packages }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.REF || '' }}
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: List packages
+        id: packages
+        run: |
+          packages=$(nix eval --json .#packages.x86_64-linux --apply 'packages: builtins.attrNames (removeAttrs packages [ "default" ])')
+          echo "packages=$packages" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: ${{ matrix.package }}
+    needs: packages
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        board:
-          - id: heltec-v3
-            name: Heltec V3
-            build_target: esp32s3
-            make_target: heltec-v3-bins
-          - id: heltec-v4
-            name: Heltec V4
-            build_target: esp32s3
-            make_target: heltec-v4-bins
-          - id: heltec-wsl3
-            name: Heltec WSL3
-            build_target: esp32s3
-            make_target: heltec-wsl3-bins
-        variant:
-          - id: standard
-            name_suffix: ""
-            artifact_suffix: ""
-            mqtt: 0
-          - id: mqtt
-            name_suffix: " MQTT"
-            artifact_suffix: -mqtt
-            mqtt: 1
+        package: ${{ fromJSON(needs.packages.outputs.packages) }}
 
     steps:
       - name: Check out repository
@@ -66,85 +67,46 @@ jobs:
           ref: ${{ inputs.REF || '' }}
           fetch-depth: 0
 
-      - name: Determine image version
-        id: version
-        run: echo "version=$(make --no-print-directory -s print-version)" >> "$GITHUB_OUTPUT"
-
-      - name: Install Rust for Xtensa
-        uses: esp-rs/xtensa-toolchain@v1.7.0
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
         with:
-          buildtargets: ${{ matrix.board.build_target }}
-          default: false
-          ldproxy: false
-          override: false
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Cache Cargo
-        uses: actions/cache@v6
+      # Fetch what earlier jobs and runs built from mcrs.cachix.org, and push
+      # what this job builds. PRs from forks don't get the token, so they only
+      # fetch.
+      - name: Use Cachix
+        uses: cachix/cachix-action@v17
         with:
-          path: |
-            ~/.cargo
-            platform/esp32/target
-          key: ${{ matrix.board.id }}-${{ runner.os }}-${{ hashFiles('platform/esp32/Cargo.lock') }}
-          restore-keys: |
-            ${{ matrix.board.id }}-${{ runner.os }}-
+          name: mcrs
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
-      - name: Install espflash
-        run: cargo install espflash --version 4.4.0 --locked
-
+      # A profile is an override of the package, which `nix build .#package`
+      # can't apply, so the package comes from an expression. It reads the
+      # package and profile from the environment, so neither is spliced into it.
+      # Builds without a profile go the same way, so every run tests it.
       - name: Build images
+        id: build
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          PACKAGE: ${{ matrix.package }}
           PROFILE: ${{ inputs.PROFILE || '' }}
-        run: make VERSION="$VERSION" MQTT=${{ matrix.variant.mqtt }} ${{ matrix.board.make_target }}
+        run: |
+          out=$(nix build --print-build-logs --no-link --print-out-paths --impure --expr '
+            let
+              flake = builtins.getFlake (toString ./.);
+              package = flake.packages.${builtins.currentSystem}.${builtins.getEnv "PACKAGE"};
+              profile = builtins.getEnv "PROFILE";
+            in
+            if profile == "" then package else package.override { inherit profile; }
+          ')
+          echo "path=$out" >> "$GITHUB_OUTPUT"
+          # The store path without its hash: the images' name and version,
+          # e.g. mcrs-heltec-v3-mqtt-0.1.3+1a2b3c4d
+          echo "name=${out#/nix/store/*-}" >> "$GITHUB_OUTPUT"
 
       - name: Upload images
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.board.id }}${{ matrix.variant.artifact_suffix }}-firmware-${{ steps.version.outputs.version }}
-          path: dist/*.bin
-          if-no-files-found: error
-
-  build_nrf52840:
-    name: nRF52840
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.REF || '' }}
-          fetch-depth: 0
-
-      # The version the firmware reports (see repeater/build.rs).
-      - name: Determine image version
-        id: version
-        run: echo "version=$(make --no-print-directory -s print-version)" >> "$GITHUB_OUTPUT"
-
-      # The toolchain comes from flake.lock, so only reuse build output built by it.
-      - name: Cache Cargo
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo
-            platform/nrf52840/target
-          key: nrf52840-${{ runner.os }}-${{ hashFiles('platform/nrf52840/flake.lock') }}-${{ hashFiles('platform/nrf52840/Cargo.lock') }}
-          restore-keys: |
-            nrf52840-${{ runner.os }}-${{ hashFiles('platform/nrf52840/flake.lock') }}-
-
-      - name: Build firmware
-        working-directory: platform/nrf52840
-        run: cargo build --release --locked
-
-      - name: Collect image
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          mkdir -p dist
-          cp platform/nrf52840/target/thumbv7em-none-eabi/release/mcrs-nrf "dist/nrf52840-$VERSION.elf"
-
-      - name: Upload image
-        uses: actions/upload-artifact@v7
-        with:
-          name: nrf52840-firmware-${{ steps.version.outputs.version }}
-          path: dist/*.elf
+          name: ${{ steps.build.outputs.name }}
+          path: ${{ steps.build.outputs.path }}
           if-no-files-found: error
