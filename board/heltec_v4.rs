@@ -82,15 +82,17 @@ enum HeltecV4FrontendKind {
 
 impl HeltecV4Frontend {
     async fn detect(
-        pa_power: RadioOutput,
+        mut pa_power: RadioOutput,
         mut shared_enable: Flex<'static>,
         kct_ctx: RadioOutput,
         gc_tx_enable: RadioOutput,
         input_config: &InputConfig,
     ) -> Self {
+        let _ = pa_power.set_high();
+        let mut delay = radio_delay();
+        delay.delay_ms(1).await;
         shared_enable.apply_input_config(input_config);
         shared_enable.set_input_enable(true);
-        let mut delay = radio_delay();
         delay.delay_ms(1).await;
 
         let kind = if shared_enable.is_high() {
