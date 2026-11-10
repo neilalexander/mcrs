@@ -289,6 +289,7 @@ impl<F: RadioFrontend> Devices<F> {
                     Output::new(radio_reset, Level::High, output_config),
                     Input::new(radio_dio1, input_config),
                     Input::new(radio_busy, input_config),
+                    None,
                     esp::radio_delay(),
                     board_config,
                 ),
