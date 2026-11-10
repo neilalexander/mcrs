@@ -817,6 +817,22 @@ async fn handle_command<P: Platform, S: Storage>(
             }
         }
         "ota status" => ota_status_text(context.platform.ota_status()),
+        "reapply profile" => {
+            if !request.origin.is_local() || !request.privilege.is_passworded() {
+                String::from("CLI: denied, reapply profile requires privileged serial or telnet")
+            } else {
+                match context
+                    .update_config(|config| config.reapply_profile())
+                    .await
+                {
+                    Ok(()) => String::from("OK - profile reapplied and saved; reboot to apply"),
+                    Err(super::ConfigUpdateError::Invalid(
+                        super::config::ConfigError::NoProfile,
+                    )) => String::from("No profile selected; config unchanged"),
+                    Err(error) => format!("Error - profile not saved: {}", error),
+                }
+            }
+        }
         "erase config" => {
             if !request.privilege.is_passworded() {
                 denied_text()

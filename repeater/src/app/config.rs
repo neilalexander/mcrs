@@ -401,6 +401,21 @@ impl AppConfig {
         Ok(())
     }
 
+    pub fn reapply_profile(&mut self) -> Result<(), ConfigError> {
+        if !cfg!(mcrs_profile) {
+            return Err(ConfigError::NoProfile);
+        }
+        let current = StoredAppConfig::from_app_config(self);
+        let updated = current
+            .apply_profile_text(super::PROFILE_CONFIG)
+            .ok_or(ConfigError::CannotReapplyProfile)?;
+        if encode_config_text(&updated).len() > APP_CONFIG_MAX_LEN {
+            return Err(ConfigError::CannotReapplyProfile);
+        }
+        *self = Self::from_stored(updated, self.identity_label);
+        Ok(())
+    }
+
     pub fn unset(&mut self, setting: &str) -> Result<(), ConfigError> {
         if let Some(key) = setting.strip_prefix("acl ") {
             return self.set_acl(key.trim(), "unset");
@@ -852,7 +867,11 @@ impl StoredAppConfig {
             &empty,
             ConfigSource::Defaults,
         )?;
-        decode_config_layer(overlay.as_bytes(), &defaults, ConfigSource::Profile)
+        defaults.apply_profile_text(overlay)
+    }
+
+    fn apply_profile_text(&self, overlay: &str) -> Option<Self> {
+        decode_config_layer(overlay.as_bytes(), self, ConfigSource::Profile)
     }
 
     fn from_app_config(config: &AppConfig) -> Self {
@@ -1516,6 +1535,8 @@ fn write_mqtt_config(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConfigError {
+    CannotReapplyProfile,
+    NoProfile,
     UnknownSetting,
     InvalidName,
     InvalidAcl,
@@ -1538,6 +1559,10 @@ pub enum ConfigError {
 impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            ConfigError::NoProfile => f.write_str("no profile selected; config unchanged"),
+            ConfigError::CannotReapplyProfile => {
+                f.write_str("cannot reapply profile: invalid merged config or config full")
+            }
             ConfigError::UnknownSetting => f.write_str("unknown setting"),
             ConfigError::InvalidAcl => f.write_str("invalid ACL rule or config full"),
             ConfigError::InvalidName => f.write_str("invalid name"),
@@ -1848,6 +1873,92 @@ mod tests {
 
     fn network_defaults(text: &str) -> StoredAppConfig {
         StoredAppConfig::with_defaults_text(PrivateKey::Seed([7; 32]), text).unwrap()
+    }
+
+    #[cfg(not(mcrs_profile))]
+    #[test]
+    fn reapply_profile_without_selected_profile_leaves_config_unchanged() {
+        let mut config = AppConfig::generated_defaults([9; 32]);
+        config.set_ntp("custom.example.org").unwrap();
+        let before = config.export_config(false);
+        assert_eq!(config.reapply_profile(), Err(ConfigError::NoProfile));
+        assert_eq!(config.export_config(false), before);
+    }
+
+    #[cfg(mcrs_profile)]
+    #[test]
+    fn reapply_profile_preserves_identity_name_and_extra_entries() {
+        let mut config = AppConfig::generated_defaults([9; 32]);
+        config.set_node_name("Custom repeater").unwrap();
+        config.set_ntp("custom.example.org").unwrap();
+        config.put_region("custom").unwrap();
+        config.set_acl(&"03".repeat(32), "admin").unwrap();
+        let private_key = config.private_key;
+        let label = config.identity_label;
+        config.reapply_profile().unwrap();
+        assert_eq!(config.private_key, private_key);
+        assert_eq!(config.identity_label, label);
+        assert!(config.regions.find_by_name_prefix("custom").is_some());
+        assert_eq!(
+            config.acl.role(&[3; 32]),
+            Some(super::super::acl::Role::Admin)
+        );
+        let expected = decode_config_layer(
+            super::super::PROFILE_CONFIG.as_bytes(),
+            &decode_config_text(b"ntp=custom.example.org\n", &defaults()).unwrap(),
+            ConfigSource::Profile,
+        )
+        .unwrap();
+        // A name is only replaced if the selected profile specifies one.
+        if !super::super::PROFILE_CONFIG
+            .lines()
+            .any(|line| line.trim().starts_with("node.name="))
+        {
+            assert_eq!(config.node_name, "Custom repeater");
+        }
+        assert_eq!(config.ntp, expected.ntp);
+    }
+
+    #[test]
+    fn reapply_profile_overlays_only_profile_settings() {
+        let current = decode_config_text(
+            b"node.name=Custom\nntp=custom.example.org\nrepeat=off\nregion.custom=true\nregion.home=false\n",
+            &network_defaults(""),
+        ).unwrap();
+        let updated = current
+            .apply_profile_text("ntp=profile.example.org\nregion.home=true\nregion.default=home\n")
+            .unwrap();
+        assert_eq!(updated.ntp, "profile.example.org");
+        assert!(!updated.repeat_enabled);
+        assert_eq!(updated.node_name, "Custom");
+        assert!(
+            updated
+                .regions
+                .find_by_name_prefix("custom")
+                .unwrap()
+                .allows_flood()
+        );
+        assert!(
+            updated
+                .regions
+                .find_by_name_prefix("home")
+                .unwrap()
+                .allows_flood()
+        );
+        assert_eq!(
+            updated.regions.default_region().unwrap().display_name(),
+            "home"
+        );
+        assert_eq!(updated.private_key, current.private_key);
+        let saved = encode_config_text(&updated);
+        let reloaded = decode_config_text(&saved, &network_defaults("")).unwrap();
+        let reloaded_text = String::from_utf8(encode_config_text(&reloaded)).unwrap();
+        let saved_text = String::from_utf8(saved).unwrap();
+        let mut reloaded_lines: Vec<_> = reloaded_text.lines().collect();
+        let mut saved_lines: Vec<_> = saved_text.lines().collect();
+        reloaded_lines.sort_unstable();
+        saved_lines.sort_unstable();
+        assert_eq!(reloaded_lines, saved_lines);
     }
 
     #[test]
