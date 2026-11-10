@@ -245,7 +245,7 @@ impl Wait for NoButton {
     }
 }
 
-/// The battery monitor for a board without one. It never has a reading.
+/// The battery monitor for a board without sensing. It never has a reading.
 pub struct NoBattery;
 
 impl Battery for NoBattery {

@@ -16,10 +16,13 @@ use embassy_nrf::{
 use embassy_time::Delay;
 use embedded_alloc::LlffHeap as Heap;
 use embedded_hal_bus::spi::ExclusiveDevice;
-use mcrs_nrf::{HEAP_SIZE, NrfPlatform, NrfStorage};
+use mcrs_nrf::{
+    HEAP_SIZE, NrfPlatform, NrfStorage,
+    battery::{BatteryConfig, NrfBattery},
+};
 use mcrs_repeater::{
     Repeater,
-    platform::{NoBattery, NoButton, NoDisplay, Radio},
+    platform::{NoButton, NoDisplay, Radio},
 };
 use mcrs_sx1262::{BoardConfig, Sx1262, TcxoCtrlVoltage};
 use panic_probe as _;
@@ -30,6 +33,7 @@ const MODEL: &str = "RAK4631";
 static HEAP: Heap = Heap::empty();
 
 bind_interrupts!(struct Irqs {
+    SAADC => embassy_nrf::saadc::InterruptHandler;
     USBD => embassy_nrf::usb::InterruptHandler<peripherals::USBD>;
     CLOCK_POWER => embassy_nrf::usb::vbus_detect::InterruptHandler;
     TWISPI1 => spim::InterruptHandler<peripherals::TWISPI1>;
@@ -109,7 +113,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
 
     let mut display = NoDisplay;
     let mut button = NoButton;
-    let mut battery = NoBattery;
+    let mut battery = NrfBattery::new(p.SAADC, Irqs, p.P0_05, None, BatteryConfig::rak4631());
 
     let repeater = Repeater::new(
         platform,
@@ -121,6 +125,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         &mut battery,
     );
     // USB enumeration and mesh processing both run without a host connected.
+    // Report battery voltage without automatic low-voltage shutdown.
     embassy_futures::select::select(usb.run(), repeater.run(0)).await;
     // Brownout has no timer recovery on these boards yet.
     let _ = radio.shutdown().await;

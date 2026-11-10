@@ -11,6 +11,7 @@ use mcrs_repeater::{
     platform::{OtaStatus, Platform},
 };
 
+pub mod battery;
 mod littlefs;
 pub mod usb_console;
 

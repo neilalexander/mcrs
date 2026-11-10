@@ -1,5 +1,5 @@
 //! MCRS repeater for an XIAO nRF52840 with an SX1262 radio. It has no status
-//! screen, button, console or battery monitor.
+//! screen, button or console.
 #![no_std]
 #![no_main]
 
@@ -15,10 +15,13 @@ use embassy_nrf::{
 use embassy_time::Delay;
 use embedded_alloc::LlffHeap as Heap;
 use embedded_hal_bus::spi::ExclusiveDevice;
-use mcrs_nrf::{HEAP_SIZE, NrfPlatform, NrfStorage};
+use mcrs_nrf::{
+    HEAP_SIZE, NrfPlatform, NrfStorage,
+    battery::{BatteryConfig, NrfBattery},
+};
 use mcrs_repeater::{
     Repeater,
-    platform::{NoBattery, NoButton, NoConsole, NoDisplay, Radio},
+    platform::{NoButton, NoConsole, NoDisplay, Radio},
 };
 use mcrs_sx1262::{BoardConfig, Sx1262, TcxoCtrlVoltage};
 use panic_probe as _;
@@ -29,6 +32,7 @@ const MODEL: &str = "XIAO nRF52840";
 static HEAP: Heap = Heap::empty();
 
 bind_interrupts!(struct Irqs {
+    SAADC => embassy_nrf::saadc::InterruptHandler;
     TWISPI1 => spim::InterruptHandler<peripherals::TWISPI1>;
 });
 
@@ -71,7 +75,13 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     let mut console = NoConsole;
     let mut display = NoDisplay;
     let mut button = NoButton;
-    let mut battery = NoBattery;
+    let mut battery = NrfBattery::new(
+        p.SAADC,
+        Irqs,
+        p.P0_31,
+        Some(Output::new(p.P0_14, Level::High, OutputDrive::Standard)),
+        BatteryConfig::xiao(),
+    );
 
     Repeater::new(
         platform,
@@ -82,7 +92,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         &mut button,
         &mut battery,
     )
-    .run(0) // Battery monitoring disabled.
+    .run(0) // Report voltage without automatic low-voltage shutdown.
     .await;
     // Brownout has no timer recovery on these boards yet.
     let _ = radio.shutdown().await;

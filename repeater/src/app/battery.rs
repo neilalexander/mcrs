@@ -21,11 +21,6 @@ pub(crate) async fn run<P, S, B>(
     S: Storage,
     B: Battery,
 {
-    // Boards without battery sensing pass zero. Do not touch the driver or
-    // set up periodic sampling when monitoring is disabled.
-    if voltage_warning_mv == 0 {
-        core::future::pending::<()>().await;
-    }
     let mut delay = context.platform.delay();
 
     let mut low_samples = 0;
@@ -53,7 +48,7 @@ pub(crate) async fn run<P, S, B>(
 }
 
 fn update_low_samples(count: &mut u8, reading: Option<u16>, voltage_warning_mv: u16) -> bool {
-    if reading.is_some_and(|mv| mv <= voltage_warning_mv) {
+    if voltage_warning_mv != 0 && reading.is_some_and(|mv| mv <= voltage_warning_mv) {
         *count = count.saturating_add(1);
     } else {
         *count = 0;

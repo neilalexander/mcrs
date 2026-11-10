@@ -76,7 +76,7 @@ where
 
     /// Runs until low voltage or the brownout command stops normal operation.
     /// The board supplies the running voltage cutoff in millivolts; zero
-    /// disables battery monitoring.
+    /// disables low-voltage shutdown while still reporting battery readings.
     /// Returning drops all internal task futures and releases device borrows.
     pub async fn run(self, voltage_warning_mv: u16) {
         let Self {
