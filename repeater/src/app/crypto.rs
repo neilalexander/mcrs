@@ -120,9 +120,6 @@ pub async fn encode_login_response<P: Platform, S: Storage>(
     };
 
     if request.route_type.is_flood() {
-        let region = context
-            .with_config(|config| config.regions().match_flood_region(request))
-            .await?;
         let mut packet = encode_path_response_packet(
             shared_secret,
             requester_public_key,
@@ -131,7 +128,14 @@ pub async fn encode_login_response<P: Platform, S: Storage>(
             request.normal_path()?.clone(),
         )?;
         context
-            .with_config(|config| config.regions().apply_scope(&mut packet, &region))
+            .with_config(|config| {
+                let regions = config.regions();
+                if let Some(region) = regions.match_flood_region(request) {
+                    regions.apply_scope(&mut packet, &region)
+                } else {
+                    regions.apply_default_scope(&mut packet).map(|_| ())
+                }
+            })
             .await
             .ok()?;
         return packet.encode().ok();
