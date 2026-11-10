@@ -62,6 +62,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         reset,
         dio1,
         busy,
+        None,
         Delay,
         BoardConfig {
             tcxo_ctrl: Some(TcxoCtrlVoltage::Ctrl1V7),
@@ -79,7 +80,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         p.SAADC,
         Irqs,
         p.P0_31,
-        Some(Output::new(p.P0_14, Level::High, OutputDrive::Standard)),
+        Some(Output::new(p.P0_14, Level::Low, OutputDrive::Standard)),
         BatteryConfig::xiao(),
     );
 

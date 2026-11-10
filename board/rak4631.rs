@@ -70,21 +70,9 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         embassy_nrf::pac::FICR.deviceid(0).read()
     );
     usb_config.serial_number = Some(&serial);
-    let mut config_descriptor = [0; 256];
-    let mut bos_descriptor = [0; 256];
-    let mut control_buf = [0; 64];
-    let mut state = embassy_usb::class::cdc_acm::State::new();
-    let mut builder = embassy_usb::Builder::new(
-        driver,
-        usb_config,
-        &mut config_descriptor,
-        &mut bos_descriptor,
-        &mut [],
-        &mut control_buf,
-    );
-    let class = embassy_usb::class::cdc_acm::CdcAcmClass::new(&mut builder, &mut state, 64);
-    let mut usb = builder.build();
-    let mut console = mcrs_nrf::usb_console::UsbConsole::new(class);
+    let mut usb_buffers = mcrs_nrf::usb_console::UsbBuffers::new();
+    let (mut usb, mut console) =
+        mcrs_nrf::usb_console::build_console(driver, usb_config, &mut usb_buffers);
 
     let nss = Output::new(p.P1_10, Level::High, OutputDrive::Standard);
     let reset = Output::new(p.P1_06, Level::High, OutputDrive::Standard);
@@ -101,6 +89,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         reset,
         dio1,
         busy,
+        None,
         Delay,
         BoardConfig {
             tcxo_ctrl: Some(TcxoCtrlVoltage::Ctrl1V8),

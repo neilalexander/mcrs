@@ -1,7 +1,7 @@
-//! Battery sensing with board-specific scaling and an optional switched divider.
+//! Battery sensing with board-specific scaling and an optional divider-enable pin.
 use embassy_nrf::{
     Peri,
-    gpio::{Level, Output},
+    gpio::Output,
     interrupt, peripherals,
     saadc::{self, ChannelConfig, Gain, Saadc},
 };
@@ -15,7 +15,6 @@ pub struct BatteryConfig {
     /// Battery voltage corresponding to ADC full scale, including calibration.
     pub full_scale_battery_uv: u32,
     pub settle_ms: u64,
-    pub enable_level: Level,
 }
 
 impl BatteryConfig {
@@ -25,7 +24,6 @@ impl BatteryConfig {
             gain: Gain::Gain1_6,
             full_scale_battery_uv: 6_160_530,
             settle_ms: 0,
-            enable_level: Level::Low,
         }
     }
 
@@ -35,15 +33,17 @@ impl BatteryConfig {
             gain: Gain::Gain1_5,
             full_scale_battery_uv: 9_000_000,
             settle_ms: 50,
-            enable_level: Level::Low,
         }
     }
 }
 
+const SAMPLES: u64 = 8;
+
 /// Samples eight readings, with calibration and a discarded settling sample.
 pub struct NrfBattery<'d> {
     adc: Saadc<'d, 1>,
-    enable: Option<Output<'d>>,
+    // Retain the pin in its board-configured state for the lifetime of sensing.
+    _enable: Option<Output<'d>>,
     config: BatteryConfig,
 }
 
@@ -53,12 +53,9 @@ impl<'d> NrfBattery<'d> {
         irq: impl interrupt::typelevel::Binding<interrupt::typelevel::SAADC, saadc::InterruptHandler>
         + 'd,
         input: impl saadc::Input + 'd,
-        mut enable: Option<Output<'d>>,
+        enable: Option<Output<'d>>,
         config: BatteryConfig,
     ) -> Self {
-        if let Some(pin) = enable.as_mut() {
-            pin.set_level(inactive_level(config.enable_level));
-        }
         let mut channel = ChannelConfig::single_ended(input);
         channel.reference = saadc::Reference::Internal;
         channel.gain = config.gain;
@@ -68,41 +65,15 @@ impl<'d> NrfBattery<'d> {
         adc_config.resolution = saadc::Resolution::_12bit;
         Self {
             adc: Saadc::new(peripheral, irq, adc_config, [channel]),
-            enable,
+            _enable: enable,
             config,
         }
-    }
-}
-
-fn inactive_level(active: Level) -> Level {
-    match active {
-        Level::Low => Level::High,
-        Level::High => Level::Low,
-    }
-}
-
-// Restore the low-power state on completion, error, timeout or cancellation.
-struct DividerGuard<'a, 'd> {
-    pin: &'a mut Output<'d>,
-    inactive: Level,
-}
-
-impl Drop for DividerGuard<'_, '_> {
-    fn drop(&mut self) {
-        self.pin.set_level(self.inactive);
     }
 }
 
 impl Battery for NrfBattery<'_> {
     async fn millivolts(&mut self) -> Option<u16> {
         let config = self.config;
-        let _divider = self.enable.as_mut().map(|pin| {
-            pin.set_level(config.enable_level);
-            DividerGuard {
-                pin,
-                inactive: inactive_level(config.enable_level),
-            }
-        });
         Timer::after_millis(config.settle_ms).await;
 
         let sum = with_timeout(Duration::from_millis(250), async {
@@ -110,7 +81,7 @@ impl Battery for NrfBattery<'_> {
             let mut sample = [0];
             self.adc.sample(&mut sample).await;
             let mut sum = 0i32;
-            for _ in 0..8 {
+            for _ in 0..SAMPLES {
                 self.adc.sample(&mut sample).await;
                 if !(0..4095).contains(&sample[0]) {
                     return None;
@@ -126,7 +97,7 @@ impl Battery for NrfBattery<'_> {
             return None;
         }
         // Average eight 12-bit samples and convert microvolts to millivolts.
-        let denominator = 4096u64 * 8 * 1000;
+        let denominator = 4096 * SAMPLES * 1000;
         let mv =
             (sum as u64 * u64::from(config.full_scale_battery_uv) + denominator / 2) / denominator;
         u16::try_from(mv).ok()

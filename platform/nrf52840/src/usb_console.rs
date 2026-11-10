@@ -1,9 +1,47 @@
 //! A USB CDC packet endpoint presented as a terminal byte stream.
 use embassy_usb::{
-    class::cdc_acm::{CdcAcmClass, CdcAcmError},
+    Builder, Config, UsbDevice,
+    class::cdc_acm::{CdcAcmClass, CdcAcmError, State},
     driver::Driver,
 };
 use embedded_io_async::{ErrorType, Read, Write};
+
+/// Descriptor and control storage kept alive alongside the USB device.
+pub struct UsbBuffers<'d> {
+    config: [u8; 256],
+    bos: [u8; 256],
+    control: [u8; 64],
+    state: State<'d>,
+}
+
+impl<'d> UsbBuffers<'d> {
+    pub const fn new() -> Self {
+        Self {
+            config: [0; 256],
+            bos: [0; 256],
+            control: [0; 64],
+            state: State::new(),
+        }
+    }
+}
+
+/// A CDC terminal with the same packet size and descriptors on each nRF board.
+pub fn build_console<'d, D: Driver<'d>>(
+    driver: D,
+    config: Config<'d>,
+    buffers: &'d mut UsbBuffers<'d>,
+) -> (UsbDevice<'d, D>, UsbConsole<'d, D>) {
+    let mut builder = Builder::new(
+        driver,
+        config,
+        &mut buffers.config,
+        &mut buffers.bos,
+        &mut [],
+        &mut buffers.control,
+    );
+    let class = CdcAcmClass::new(&mut builder, &mut buffers.state, 64);
+    (builder.build(), UsbConsole::new(class))
+}
 
 /// Owns a full USB packet so the CLI can safely read one byte at a time.
 pub struct UsbConsole<'d, D: Driver<'d>> {

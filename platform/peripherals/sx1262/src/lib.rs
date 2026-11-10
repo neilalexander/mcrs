@@ -78,6 +78,7 @@ struct Hardware<SPI, CTRL, WAIT, DLY> {
     busy: WAIT,
     delay: DLY,
     board: BoardConfig,
+    rx_enable: Option<CTRL>,
 }
 
 /// The driver, with the modulation and packet parameters of the repeater's
@@ -108,6 +109,7 @@ where
         reset: CTRL,
         dio1: WAIT,
         busy: WAIT,
+        rx_enable: Option<CTRL>,
         delay: DLY,
         board: BoardConfig,
     ) -> Self {
@@ -119,6 +121,7 @@ where
                 busy,
                 delay,
                 board,
+                rx_enable,
             }),
             started: None,
         }
@@ -200,9 +203,10 @@ where
             busy,
             delay,
             board,
+            rx_enable,
         } = hardware;
 
-        let interface = GenericSx126xInterfaceVariant::new(reset, dio1, busy, None, None)?;
+        let interface = GenericSx126xInterfaceVariant::new(reset, dio1, busy, rx_enable, None)?;
         let chip = Sx126x::new(
             spi,
             interface,
