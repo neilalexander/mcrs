@@ -681,7 +681,12 @@ async fn handle_command<P: Platform, S: Storage>(
     request: CliRequest,
 ) -> Option<CliResponse> {
     if !request.allows_command(command) {
-        let output = denied_text();
+        let output = if request.privilege.is_privileged() && command_requires_local_access(command)
+        {
+            String::from("CLI: denied, command requires serial or telnet")
+        } else {
+            denied_text()
+        };
         return Some(command_response(request, output));
     }
 
@@ -712,7 +717,7 @@ async fn handle_command<P: Platform, S: Storage>(
 
     #[cfg(feature = "mqtt")]
     if command == "mqtt status" {
-        let output = if request.origin.is_local() {
+        let output = if request.privilege.is_privileged() {
             let mut output = String::new();
             for index in 0..super::config::MQTT_SERVER_COUNT {
                 let state = context.mqtt.get_state(index);
@@ -731,7 +736,7 @@ async fn handle_command<P: Platform, S: Storage>(
 
     #[cfg(feature = "mqtt")]
     if command == "mqtt restart" {
-        let output = if request.origin.is_local() && request.privilege.is_passworded() {
+        let output = if request.privilege.is_privileged() {
             context.mqtt.request_restart();
             String::from("OK - MQTT restarting")
         } else {
@@ -741,7 +746,7 @@ async fn handle_command<P: Platform, S: Storage>(
     }
 
     if let Some(password) = command.strip_prefix("password ").map(str::trim) {
-        let output = if request.privilege.is_passworded() {
+        let output = if request.privilege.is_privileged() {
             match context
                 .update_config(|config| {
                     config.set_remote_cli_password(password);
@@ -768,7 +773,7 @@ async fn handle_command<P: Platform, S: Storage>(
         "" => return None,
         "help" | "?" => help_text(),
         "export config" | "export config all" | "export config delta" => {
-            if request.origin.is_local() && request.privilege.is_passworded() {
+            if request.privilege.is_privileged() {
                 context
                     .with_config(|config| match command {
                         "export config delta" => config.export_config_delta(),
@@ -776,11 +781,11 @@ async fn handle_command<P: Platform, S: Storage>(
                     })
                     .await
             } else {
-                String::from("CLI: denied, export config requires privileged serial or telnet")
+                denied_text()
             }
         }
         "brownout" => {
-            if !request.privilege.is_passworded() {
+            if !request.privilege.is_privileged() {
                 denied_text()
             } else {
                 post_reply = Some(PostReplyAction::Brownout);
@@ -788,7 +793,7 @@ async fn handle_command<P: Platform, S: Storage>(
             }
         }
         "reboot" => {
-            if !request.privilege.is_passworded() {
+            if !request.privilege.is_privileged() {
                 denied_text()
             } else {
                 post_reply = Some(PostReplyAction::Reboot);
@@ -796,7 +801,7 @@ async fn handle_command<P: Platform, S: Storage>(
             }
         }
         "ota start" => {
-            if !request.privilege.is_passworded() {
+            if !request.privilege.is_privileged() {
                 denied_text()
             } else {
                 context.platform.start_ota();
@@ -809,7 +814,7 @@ async fn handle_command<P: Platform, S: Storage>(
             }
         }
         "ota stop" => {
-            if !request.privilege.is_passworded() {
+            if !request.privilege.is_privileged() {
                 denied_text()
             } else {
                 context.platform.stop_ota();
@@ -818,8 +823,8 @@ async fn handle_command<P: Platform, S: Storage>(
         }
         "ota status" => ota_status_text(context.platform.ota_status()),
         "reapply profile" => {
-            if !request.origin.is_local() || !request.privilege.is_passworded() {
-                String::from("CLI: denied, reapply profile requires privileged serial or telnet")
+            if !request.privilege.is_privileged() {
+                denied_text()
             } else {
                 match context
                     .update_config(|config| config.reapply_profile())
@@ -834,7 +839,7 @@ async fn handle_command<P: Platform, S: Storage>(
             }
         }
         "erase config" => {
-            if !request.privilege.is_passworded() {
+            if !request.privilege.is_privileged() {
                 denied_text()
             } else {
                 match context.reset_config().await {
@@ -878,7 +883,7 @@ async fn handle_command<P: Platform, S: Storage>(
             output
         }
         "advert.zerohop" => {
-            if !request.privilege.is_passworded() {
+            if !request.privilege.is_privileged() {
                 denied_text()
             } else {
                 let now = context.platform.now_seconds();
@@ -889,7 +894,7 @@ async fn handle_command<P: Platform, S: Storage>(
             }
         }
         "advert" => {
-            if !request.privilege.is_passworded() {
+            if !request.privilege.is_privileged() {
                 denied_text()
             } else {
                 let now = context.platform.now_seconds();
@@ -900,7 +905,7 @@ async fn handle_command<P: Platform, S: Storage>(
             }
         }
         "discover.neighbours" | "discover.neighbors" => {
-            if !request.privilege.is_passworded() {
+            if !request.privilege.is_privileged() {
                 denied_text()
             } else {
                 let now_ms = context.platform.now_millis();
@@ -941,7 +946,7 @@ async fn handle_command<P: Platform, S: Storage>(
         }
         "clock" => format!("Clock: {}", context.platform.now_seconds()),
         "clock sync" => {
-            if !request.privilege.is_passworded() {
+            if !request.privilege.is_privileged() {
                 denied_text()
             } else if request.sender_timestamp == 0 {
                 String::from("Error - no remote timestamp available")
@@ -979,7 +984,7 @@ async fn handle_get_command<P: Platform, S: Storage>(
 ) -> String {
     #[cfg(feature = "mqtt")]
     if let Some((index, key)) = parse_mqtt_setting(config) {
-        if !request.origin.is_local() {
+        if !request.privilege.is_privileged() {
             return denied_text();
         }
         return context
@@ -993,7 +998,7 @@ async fn handle_get_command<P: Platform, S: Storage>(
             .await;
     }
     if let Some(key) = config.strip_prefix("wifi.") {
-        if !request.origin.is_local() {
+        if !request.privilege.is_privileged() {
             return denied_text();
         }
         return context
@@ -1071,14 +1076,14 @@ async fn handle_get_command<P: Platform, S: Storage>(
             append_hex(&mut output, &context.public_key().await);
             output
         }
-        "prv.key" if request.origin.is_local() => {
+        "prv.key" if request.privilege.is_privileged() => {
             let mut output = String::from("> ");
             let key = context.with_config(|config| *config.private_key()).await;
             append_hex(&mut output, key.as_bytes());
             output
         }
         "prv.key" => denied_text(),
-        "password" if request.origin.is_local() => {
+        "password" if request.privilege.is_privileged() => {
             context
                 .with_config(|config| format!("> {}", config.remote_cli_password()))
                 .await
@@ -1146,7 +1151,7 @@ async fn handle_set_command<P: Platform, S: Storage>(
     context: &AppContext<P, S>,
     request: CliRequest,
 ) -> String {
-    if !request.privilege.is_passworded() {
+    if !request.privilege.is_privileged() {
         return denied_text();
     }
 
@@ -1178,9 +1183,6 @@ async fn handle_set_command<P: Platform, S: Storage>(
 
     #[cfg(feature = "mqtt")]
     if let Some(setting) = config.strip_prefix("mqtt.") {
-        if !request.origin.is_local() {
-            return denied_text();
-        }
         let Some((key, value)) = setting.split_once(' ') else {
             return String::from("Error, missing MQTT value");
         };
@@ -1204,9 +1206,6 @@ async fn handle_set_command<P: Platform, S: Storage>(
     }
 
     if let Some(setting) = config.strip_prefix("wifi.") {
-        if !request.origin.is_local() {
-            return denied_text();
-        }
         let (key, value) = match setting.split_once(' ') {
             Some((key, value)) => (key.trim(), value.trim()),
             None if setting.trim() == "pass" => ("pass", ""),
@@ -1528,9 +1527,7 @@ async fn handle_set_command<P: Platform, S: Storage>(
         };
     }
 
-    if request.origin.is_local()
-        && let Some(freq) = config.strip_prefix("freq ").map(str::trim)
-    {
+    if let Some(freq) = config.strip_prefix("freq ").map(str::trim) {
         let Some(receive_frequency_hz) = parse_decimal_scaled(freq, 1_000_000) else {
             return String::from("Error, invalid frequency");
         };
@@ -1561,18 +1558,12 @@ async fn handle_unset_command<P: Platform, S: Storage>(
     context: &AppContext<P, S>,
     request: CliRequest,
 ) -> String {
-    if !request.privilege.is_passworded() {
+    if !request.privilege.is_privileged() {
         return denied_text();
     }
     if setting.is_empty() {
         return String::from("Error, missing config name");
     }
-    if (setting.starts_with("wifi.") || setting.starts_with("mqtt.") || setting == "freq")
-        && !request.origin.is_local()
-    {
-        return denied_text();
-    }
-
     match context.update_config(|config| config.unset(setting)).await {
         #[cfg(feature = "mqtt")]
         Ok(()) if setting.starts_with("mqtt.") => {
@@ -1667,7 +1658,7 @@ async fn handle_region_command<P: Platform, S: Storage>(
                     .await;
                 return format!("Default scope is {}", name);
             };
-            if !request.privilege.is_passworded() {
+            if !request.privilege.is_privileged() {
                 return denied_text();
             }
             let name = (name != "<null>").then_some(name);
@@ -1695,7 +1686,7 @@ async fn handle_region_command<P: Platform, S: Storage>(
                 let enabled = context.with_config(|config| config.region_capture()).await;
                 return format!("Region capture is {}", on_off_text(enabled));
             };
-            if !request.privilege.is_passworded() {
+            if !request.privilege.is_privileged() {
                 return denied_text();
             }
             let Some(enabled) = parse_bool(value) else {
@@ -1710,7 +1701,7 @@ async fn handle_region_command<P: Platform, S: Storage>(
             }
         }
         "put" => {
-            if !request.privilege.is_passworded() {
+            if !request.privilege.is_privileged() {
                 return denied_text();
             }
             let Some(name) = parts.next() else {
@@ -1725,7 +1716,7 @@ async fn handle_region_command<P: Platform, S: Storage>(
             }
         }
         "remove" => {
-            if !request.privilege.is_passworded() {
+            if !request.privilege.is_privileged() {
                 return denied_text();
             }
             let Some(name) = parts.next() else {
@@ -1740,7 +1731,7 @@ async fn handle_region_command<P: Platform, S: Storage>(
             }
         }
         "allowf" | "denyf" => {
-            if !request.privilege.is_passworded() {
+            if !request.privilege.is_privileged() {
                 return denied_text();
             }
             let Some(name) = parts.next() else {
@@ -1775,7 +1766,7 @@ fn handle_time_set_command<P: Platform, S: Storage>(
     seconds: &str,
     request: CliRequest,
 ) -> String {
-    if !request.privilege.is_passworded() {
+    if !request.privilege.is_privileged() {
         return denied_text();
     }
 
@@ -2127,15 +2118,23 @@ impl CliRequest {
     }
 
     fn allows_command(self, command: &str) -> bool {
-        if self.origin != CliOrigin::Remote || self.privilege != CliPrivilege::AnonymousRemote {
-            return true;
+        if command_requires_local_access(command) && self.origin == CliOrigin::Remote {
+            return false;
         }
-
-        matches!(
-            command,
-            "status" | "neighbours" | "neighbors" | "get status"
-        )
+        self.privilege.is_privileged()
+            || matches!(
+                command,
+                "status" | "neighbours" | "neighbors" | "get status"
+            )
     }
+}
+
+fn command_requires_local_access(command: &str) -> bool {
+    let mut words = command.split_ascii_whitespace();
+    matches!(
+        (words.next(), words.next()),
+        (Some("export"), Some("config")) | (Some("get"), Some("prv.key"))
+    )
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2143,12 +2142,6 @@ enum CliOrigin {
     Serial,
     Tcp,
     Remote,
-}
-
-impl CliOrigin {
-    fn is_local(self) -> bool {
-        matches!(self, Self::Serial | Self::Tcp)
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2159,7 +2152,7 @@ enum CliPrivilege {
 }
 
 impl CliPrivilege {
-    fn is_passworded(self) -> bool {
+    fn is_privileged(self) -> bool {
         matches!(self, Self::Local | Self::PasswordedRemote)
     }
 
@@ -2177,6 +2170,69 @@ mod tests {
     use super::{
         Bandwidth, CodingRate, RadioConfig, SpreadingFactor, split_cli_correlation_prefix,
     };
+
+    #[test]
+    fn privileged_commands_are_available_on_all_authenticated_transports() {
+        use super::{CliPrivilege, CliRequest};
+        let authenticated = [
+            CliRequest::serial(),
+            CliRequest::tcp(),
+            CliRequest::remote(CliPrivilege::PasswordedRemote, 0),
+        ];
+        let guest = CliRequest::remote(CliPrivilege::AnonymousRemote, 0);
+        for command in [
+            "get wifi.telnet",
+            "set wifi.telnet true",
+            "unset wifi.telnet",
+            "get wifi.pass",
+            "set wifi.ssid Network",
+            "unset wifi.pass",
+            "mqtt status",
+            "mqtt restart",
+            "get mqtt.1.password",
+            "set mqtt.1.host broker.example.org",
+            "unset mqtt.1",
+            "get password",
+            "set freq 869.618",
+            "unset freq",
+            "reapply profile",
+            "erase config",
+            "reboot",
+        ] {
+            for request in authenticated {
+                assert!(request.allows_command(command), "{command}");
+            }
+            assert!(!guest.allows_command(command), "{command}");
+        }
+        for command in ["status", "neighbours", "neighbors", "get status"] {
+            assert!(guest.allows_command(command));
+        }
+    }
+
+    #[test]
+    fn config_exports_and_private_key_require_local_access() {
+        use super::{CliPrivilege, CliRequest};
+        for command in [
+            "export config",
+            "export config all",
+            "export config delta",
+            "get prv.key",
+            "get  prv.key",
+            "export  config all",
+        ] {
+            assert!(CliRequest::serial().allows_command(command), "{command}");
+            assert!(CliRequest::tcp().allows_command(command), "{command}");
+            for privilege in [
+                CliPrivilege::PasswordedRemote,
+                CliPrivilege::AnonymousRemote,
+            ] {
+                assert!(
+                    !CliRequest::remote(privilege, 0).allows_command(command),
+                    "{command}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn anonymous_basic_response_reports_disabled_repeater() {
