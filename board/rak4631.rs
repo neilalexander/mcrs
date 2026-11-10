@@ -43,6 +43,8 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
 
     let mut config = embassy_nrf::config::Config::default();
     config.hfclk_source = embassy_nrf::config::HfclkSource::ExternalXtal;
+    // RAK4631 has the external components for the nRF's VDD DC/DC converter.
+    config.dcdc.reg1 = true;
     let p = embassy_nrf::init(config);
 
     // Upstream RAK4631Board::begin enables the SX1262 supply before use.

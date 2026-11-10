@@ -38,7 +38,10 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         embedded_alloc::init!(HEAP, HEAP_SIZE);
     }
 
-    let p = embassy_nrf::init(Default::default());
+    let mut config = embassy_nrf::config::Config::default();
+    // XIAO nRF52840 has the external components for the VDD DC/DC converter.
+    config.dcdc.reg1 = true;
+    let p = embassy_nrf::init(config);
 
     let nss = Output::new(p.P0_04, Level::High, OutputDrive::Standard);
     let reset = Output::new(p.P0_28, Level::High, OutputDrive::Standard);
