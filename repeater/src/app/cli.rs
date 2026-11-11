@@ -28,7 +28,7 @@ const REQ_TYPE_GET_OWNER_INFO: u8 = 0x07;
 const LPP_CHANNEL_SELF: u8 = 1;
 const LPP_TYPE_VOLTAGE: u8 = 116;
 const REPEATER_STATS_LEN: usize = 56;
-const FIRMWARE_VERSION: &str = concat!("mcrs_", env!("MESHCORE_FIRMWARE_VERSION"));
+const FIRMWARE_VERSION: &str = concat!("MCRS ", env!("MESHCORE_FIRMWARE_VERSION"));
 
 pub struct Cli {
     line: [u8; LINE_BUFFER_LEN],
