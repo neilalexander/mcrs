@@ -317,7 +317,11 @@ async fn handle_anonymous_request<P: Platform, S: Storage>(
             return None;
         }
     }
-    let request = CliRequest::remote(cli_privilege_for_remote(privilege), timestamp);
+    let request = CliRequest::remote_from(
+        cli_privilege_for_remote(privilege),
+        timestamp,
+        payload.sender_pubkey,
+    );
 
     let response = handle_command(command, context, request).await?;
     let reply = encode_remote_cli_reply(
@@ -378,9 +382,10 @@ async fn handle_authenticated_text_message<P: Platform, S: Storage>(
         return None;
     }
 
-    let request = CliRequest::remote(
+    let request = CliRequest::remote_from(
         cli_privilege_for_remote(Some(decrypted.privilege)),
         plaintext.timestamp,
+        decrypted.sender_pubkey,
     );
     let mut response = handle_command(command, context, request).await?;
     if let Some(prefix) = correlation_prefix {
@@ -759,10 +764,13 @@ async fn handle_command<P: Platform, S: Storage>(
     if let Some(password) = command.strip_prefix("password ").map(str::trim) {
         let output = if request.privilege.is_privileged() {
             match context
-                .update_config(|config| {
-                    config.set_remote_cli_password(password);
-                    Ok(())
-                })
+                .update_config_preserving_remote_session(
+                    |config| {
+                        config.set_remote_cli_password(password);
+                        Ok(())
+                    },
+                    request.remote_sender,
+                )
                 .await
             {
                 Ok(()) => {
@@ -1285,10 +1293,13 @@ async fn handle_set_command<P: Platform, S: Storage>(
 
     if let Some(password) = config.strip_prefix("password ").map(str::trim) {
         return match context
-            .update_config(|config| {
-                config.set_remote_cli_password(password);
-                Ok(())
-            })
+            .update_config_preserving_remote_session(
+                |config| {
+                    config.set_remote_cli_password(password);
+                    Ok(())
+                },
+                request.remote_sender,
+            )
             .await
         {
             Ok(()) => String::from("OK"),
@@ -2102,6 +2113,7 @@ struct CliRequest {
     origin: CliOrigin,
     privilege: CliPrivilege,
     sender_timestamp: u32,
+    remote_sender: Option<[u8; mcrs_protocol::PUB_KEY_SIZE]>,
 }
 
 impl CliRequest {
@@ -2110,14 +2122,30 @@ impl CliRequest {
             origin: CliOrigin::Serial,
             privilege: CliPrivilege::Local,
             sender_timestamp: 0,
+            remote_sender: None,
         }
     }
 
+    #[cfg(test)]
     const fn remote(privilege: CliPrivilege, sender_timestamp: u32) -> Self {
         Self {
             origin: CliOrigin::Remote,
             privilege,
             sender_timestamp,
+            remote_sender: None,
+        }
+    }
+
+    const fn remote_from(
+        privilege: CliPrivilege,
+        sender_timestamp: u32,
+        remote_sender: [u8; mcrs_protocol::PUB_KEY_SIZE],
+    ) -> Self {
+        Self {
+            origin: CliOrigin::Remote,
+            privilege,
+            sender_timestamp,
+            remote_sender: Some(remote_sender),
         }
     }
 
@@ -2126,6 +2154,7 @@ impl CliRequest {
             origin: CliOrigin::Tcp,
             privilege: CliPrivilege::Local,
             sender_timestamp: 0,
+            remote_sender: None,
         }
     }
 

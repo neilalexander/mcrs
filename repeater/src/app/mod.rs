@@ -221,12 +221,29 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
     where
         F: FnOnce(&mut config::AppConfig) -> Result<(), config::ConfigError>,
     {
+        self.update_config_preserving_remote_session(update, None)
+            .await
+    }
+
+    pub(crate) async fn update_config_preserving_remote_session<F>(
+        &self,
+        update: F,
+        preserved_public_key: Option<[u8; mcrs_protocol::PUB_KEY_SIZE]>,
+    ) -> Result<(), ConfigUpdateError>
+    where
+        F: FnOnce(&mut config::AppConfig) -> Result<(), config::ConfigError>,
+    {
         let mut config = self.config.lock().await;
         let previous_acl = config.acl().clone();
+        let previous_password = String::from(config.remote_cli_password());
         update(&mut config)?;
         let mut logins = self.remote_logins.lock().await;
-        for key in previous_acl.changed_keys(config.acl()) {
-            logins.remove(key);
+        if config.remote_cli_password() != previous_password {
+            logins.clear_except(preserved_public_key.as_ref());
+        } else {
+            for key in previous_acl.changed_keys(config.acl()) {
+                logins.remove(key);
+            }
         }
         drop(logins);
         let mut storage = self.storage.lock().await;

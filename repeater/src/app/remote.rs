@@ -47,6 +47,21 @@ impl RemoteLoginTable {
         remove_login(&mut self.guest_entries, public_key);
     }
 
+    pub fn clear_except(&mut self, preserved_public_key: Option<&[u8; PUB_KEY_SIZE]>) {
+        for entry in self
+            .admin_entries
+            .iter_mut()
+            .chain(self.guest_entries.iter_mut())
+        {
+            if entry
+                .as_ref()
+                .is_some_and(|login| preserved_public_key != Some(&login.public_key))
+            {
+                *entry = None;
+            }
+        }
+    }
+
     pub fn authenticate(
         &mut self,
         public_key: &[u8; PUB_KEY_SIZE],
