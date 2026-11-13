@@ -773,7 +773,7 @@ dependencies = [
 
 [[package]]
 name = "mcrs-repeater"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "aes 0.9.3",
  "base64",

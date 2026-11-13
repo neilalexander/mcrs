@@ -976,7 +976,7 @@ dependencies = [
 
 [[package]]
 name = "mcrs-nrf"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "cortex-m",
  "cortex-m-rt",
@@ -1009,7 +1009,7 @@ dependencies = [
 
 [[package]]
 name = "mcrs-repeater"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "aes",
  "curve25519-dalek",
