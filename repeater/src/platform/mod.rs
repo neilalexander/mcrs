@@ -89,7 +89,7 @@ pub trait Storage {
     fn write_atomic(&mut self, key: &str, data: &[u8]) -> Result<(), storage::Error>;
 }
 
-/// A packet that [`Radio::wait_for_read`] copied into the caller's buffer.
+/// A packet that [`Radio::read_received`] copied into the caller's buffer.
 pub struct ReceivedPacket {
     pub len: usize,
     /// Signal strength in dBm.
@@ -108,10 +108,14 @@ pub trait Radio {
     /// runs without the radio if it fails.
     fn start(&mut self, config: RadioConfig) -> impl Future<Output = Result<(), ()>>;
 
-    fn wait_for_read(
+    fn start_receive(&mut self) -> impl Future<Output = Result<(), ()>>;
+
+    fn wait_for_irq(&mut self) -> impl Future<Output = Result<(), ()>>;
+
+    fn read_received(
         &mut self,
         buffer: &mut [u8],
-    ) -> impl Future<Output = Result<ReceivedPacket, ()>>;
+    ) -> impl Future<Output = Result<Option<ReceivedPacket>, ()>>;
 
     /// Runs channel activity detection.
     fn channel_is_busy(&mut self) -> impl Future<Output = Result<bool, ()>>;

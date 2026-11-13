@@ -945,7 +945,7 @@ struct RxEvent {
 }
 
 enum RadioWait {
-    Packet(Result<crate::platform::ReceivedPacket, ()>),
+    Irq(Result<(), ()>),
     OutboundChanged,
     OutboundDue,
 }
@@ -971,11 +971,10 @@ where
         // change before the next reboot.
         transmit_eligible_outbound(radio, context, radio_config, delay, &mut airtime_budget).await;
 
-        match wait_for_read_or_eligible_outbound(
+        let received = match wait_for_irq_or_eligible_outbound(
             radio,
             context,
             radio_config,
-            &mut receive_buffer,
             delay,
             &mut airtime_budget,
         )
@@ -983,7 +982,12 @@ where
         {
             RadioWait::OutboundDue => continue,
             RadioWait::OutboundChanged => continue,
-            RadioWait::Packet(Ok(packet)) => {
+            RadioWait::Irq(Ok(())) => radio.read_received(&mut receive_buffer).await,
+            RadioWait::Irq(Err(())) => Err(()),
+        };
+        match received {
+            Ok(None) => continue,
+            Ok(Some(packet)) => {
                 context.record_packet_received(packet.rssi, packet.snr_quarters);
                 if packet.len > receive_buffer.len() {
                     context.record_packet_error();
@@ -1019,7 +1023,7 @@ where
                     error!("Radio RX: inbound queue full");
                 }
             }
-            RadioWait::Packet(Err(())) => {
+            Err(()) => {
                 context.record_packet_error();
                 error!("Radio RX: packet error");
                 delay.delay_ms(1000).await;
@@ -1208,11 +1212,10 @@ async fn transmit_eligible_outbound<P: Platform, S: Storage, R, D>(
     }
 }
 
-async fn wait_for_read_or_eligible_outbound<P: Platform, S: Storage, R, D>(
+async fn wait_for_irq_or_eligible_outbound<P: Platform, S: Storage, R, D>(
     radio: &mut R,
     context: &AppContext<P, S>,
     radio_config: config::RadioConfig,
-    receive_buffer: &mut [u8],
     delay: &mut D,
     airtime_budget: &mut AirtimeBudget,
 ) -> RadioWait
@@ -1238,7 +1241,10 @@ where
         return RadioWait::OutboundDue;
     }
 
-    let mut receive = pin!(radio.wait_for_read(receive_buffer));
+    if radio.start_receive().await.is_err() {
+        return RadioWait::Irq(Err(()));
+    }
+    let mut receive = pin!(radio.wait_for_irq());
     let mut outbound_changed = pin!(context.outbound.wait_changed());
 
     let Some(eligible_at_ms) = next.map(|queued| queued.eligible_at_ms.max(budget_ready_ms)) else {
@@ -1248,7 +1254,7 @@ where
             }
 
             match receive.as_mut().poll(cx) {
-                Poll::Ready(result) => Poll::Ready(RadioWait::Packet(result)),
+                Poll::Ready(result) => Poll::Ready(RadioWait::Irq(result)),
                 Poll::Pending => Poll::Pending,
             }
         })
@@ -1267,7 +1273,7 @@ where
             return Poll::Ready(RadioWait::OutboundDue);
         }
         match receive.as_mut().poll(cx) {
-            Poll::Ready(result) => Poll::Ready(RadioWait::Packet(result)),
+            Poll::Ready(result) => Poll::Ready(RadioWait::Irq(result)),
             Poll::Pending => Poll::Pending,
         }
     })

@@ -13,6 +13,7 @@ use lora_phy::{
     mod_params::{
         Bandwidth, CodingRate, ModulationParams, PacketParams, RadioError, SpreadingFactor,
     },
+    mod_traits::IrqState,
     sx126x::{self, Config, Sx126x},
 };
 use mcrs_repeater::{
@@ -95,6 +96,7 @@ where
     rx_packet_params: PacketParams,
     tx_packet_params: PacketParams,
     transmit_power_dbm: i32,
+    receiving: bool,
 }
 
 impl<SPI, CTRL, WAIT, DLY> Sx1262<SPI, CTRL, WAIT, DLY>
@@ -160,8 +162,25 @@ where
         }
     }
 
-    async fn wait_for_read(&mut self, buffer: &mut [u8]) -> Result<ReceivedPacket, ()> {
-        self.started()?.wait_for_read(buffer).await
+    async fn start_receive(&mut self) -> Result<(), ()> {
+        self.started()?.start_receive().await
+    }
+
+    async fn wait_for_irq(&mut self) -> Result<(), ()> {
+        let started = self.started()?;
+        started.lora.wait_for_irq().await.map_err(|error| {
+            started.receiving = false;
+            error!("sx1262 IRQ wait: {}", Debug2Format(&error));
+        })
+    }
+
+    async fn read_received(&mut self, buffer: &mut [u8]) -> Result<Option<ReceivedPacket>, ()> {
+        let started = self.started()?;
+        let result = started.read_received(buffer).await;
+        if result.is_err() {
+            started.receiving = false;
+        }
+        result
     }
 
     async fn channel_is_busy(&mut self) -> Result<bool, ()> {
@@ -174,6 +193,7 @@ where
 
     async fn shutdown(&mut self) -> Result<(), ()> {
         let started = self.started()?;
+        started.receiving = false;
         // Cancelling continuous receive leaves the chip in RX. SetSleep is
         // only valid from standby; lora-phy's sleep() does not enter it for us.
         started.lora.enter_standby().await.map_err(|error| {
@@ -247,10 +267,14 @@ where
             rx_packet_params,
             tx_packet_params,
             transmit_power_dbm: config.transmit_power_dbm,
+            receiving: false,
         })
     }
 
-    async fn wait_for_read(&mut self, buffer: &mut [u8]) -> Result<ReceivedPacket, ()> {
+    async fn start_receive(&mut self) -> Result<(), ()> {
+        if self.receiving {
+            return Ok(());
+        }
         self.lora
             .prepare_for_rx(
                 RxMode::Continuous,
@@ -262,31 +286,47 @@ where
                 error!("prepare: {}", Debug2Format(&error));
             })?;
 
-        let (len, status) = loop {
-            match self.lora.rx(&self.rx_packet_params, buffer).await {
-                Ok(packet) => break packet,
-                Err(error @ (RadioError::CrcError | RadioError::HeaderError)) => {
-                    // Returning Err(()) triggers the app's one-second radio-failure
-                    // backoff. Discard corrupt packets and immediately retry instead.
-                    //
-                    // todo: remove debug2format, likely caused by different defmt versions
-                    error!("sx1262 receive error: {:?}", Debug2Format(&error));
-                }
-                Err(error) => {
-                    error!("sx1262 receive error: {:?}", Debug2Format(&error));
-                    return Err(());
-                }
+        self.lora.start_rx().await.map_err(|error| {
+            error!("sx1262 start receive: {}", Debug2Format(&error));
+        })?;
+        self.receiving = true;
+        Ok(())
+    }
+
+    async fn read_received(&mut self, buffer: &mut [u8]) -> Result<Option<ReceivedPacket>, ()> {
+        let irq = self.lora.get_irq_state().await;
+        self.lora.clear_irq_status().await.map_err(|error| {
+            error!("sx1262 clear IRQ: {}", Debug2Format(&error));
+        })?;
+        match irq {
+            Ok(Some(IrqState::Done)) => {}
+            Ok(_) => return Ok(None),
+            Err(error @ (RadioError::CrcError | RadioError::HeaderError)) => {
+                error!("sx1262 receive error: {:?}", Debug2Format(&error));
+                return Ok(None);
             }
-        };
+            Err(error) => {
+                error!("sx1262 receive error: {:?}", Debug2Format(&error));
+                return Err(());
+            }
+        }
+        let (len, status) = self
+            .lora
+            .get_rx_result(&self.rx_packet_params, buffer)
+            .await
+            .map_err(|error| {
+                error!("sx1262 receive result: {}", Debug2Format(&error));
+            })?;
         let status = PacketMetrics::from(status);
-        Ok(ReceivedPacket {
+        Ok(Some(ReceivedPacket {
             len: len as usize,
             rssi: status.rssi_dbm,
             snr_quarters: status.snr_quarters,
-        })
+        }))
     }
 
     async fn channel_is_busy(&mut self) -> Result<bool, ()> {
+        self.receiving = false;
         self.lora
             .prepare_for_cad(&self.modulation_params)
             .await
@@ -303,6 +343,7 @@ where
     }
 
     async fn transmit(&mut self, payload: &[u8]) -> Result<(), ()> {
+        self.receiving = false;
         self.lora
             .prepare_for_tx(
                 &self.modulation_params,

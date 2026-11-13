@@ -698,9 +698,17 @@ where
         self.receiver.start(config).await
     }
 
-    async fn wait_for_read(&mut self, buffer: &mut [u8]) -> Result<ReceivedPacket, ()> {
+    async fn start_receive(&mut self) -> Result<(), ()> {
         self.frontend.set_rx_mode();
-        self.receiver.wait_for_read(buffer).await
+        self.receiver.start_receive().await
+    }
+
+    async fn wait_for_irq(&mut self) -> Result<(), ()> {
+        self.receiver.wait_for_irq().await
+    }
+
+    async fn read_received(&mut self, buffer: &mut [u8]) -> Result<Option<ReceivedPacket>, ()> {
+        self.receiver.read_received(buffer).await
     }
 
     async fn channel_is_busy(&mut self) -> Result<bool, ()> {
