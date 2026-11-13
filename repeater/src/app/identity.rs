@@ -28,7 +28,7 @@ impl PrivateKey {
                 return None;
             }
             let mut bytes = [0; N];
-            for (byte, pair) in bytes.iter_mut().zip(input.as_bytes().chunks_exact(2)) {
+            for (byte, pair) in bytes.iter_mut().zip(input.as_bytes().as_chunks::<2>().0) {
                 let high = (pair[0] as char).to_digit(16)?;
                 let low = (pair[1] as char).to_digit(16)?;
                 *byte = (high * 16 + low) as u8;

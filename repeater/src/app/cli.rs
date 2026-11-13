@@ -316,13 +316,12 @@ async fn handle_anonymous_request<P: Platform, S: Storage>(
     let privilege = context
         .remote_privilege_for(&payload.sender_pubkey, now_ms)
         .await;
-    if let Some(privilege) = privilege {
-        if !context
+    if let Some(privilege) = privilege
+        && !context
             .accept_newer_remote_timestamp(&payload.sender_pubkey, privilege, timestamp, now_ms)
             .await
-        {
-            return None;
-        }
+    {
+        return None;
     }
     let request = CliRequest::remote_from(
         cli_privilege_for_remote(privilege),

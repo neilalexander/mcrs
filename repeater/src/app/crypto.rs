@@ -2,7 +2,7 @@ use super::identity::Identity;
 use crate::{Platform, app::AppContext, platform::Storage};
 use aes::{
     Aes128,
-    cipher::{Block, BlockCipherDecrypt, BlockCipherEncrypt, KeyInit},
+    cipher::{BlockCipherDecrypt, BlockCipherEncrypt, KeyInit},
 };
 use alloc::vec::Vec;
 use hmac::{Hmac, Mac};
@@ -49,7 +49,7 @@ pub fn decrypt_anonymous_request(
     let cipher = Aes128::new_from_slice(&shared_secret[..16]).ok()?;
 
     for block in plaintext.as_chunks_mut::<16>().0 {
-        cipher.decrypt_block(<&mut Block<Aes128>>::try_from(block).ok()?);
+        cipher.decrypt_block(block.into());
     }
 
     // Keep binary fields intact: a reply path can end in zero bytes.
@@ -288,7 +288,7 @@ fn encrypt_payload(shared_secret: &[u8; 32], plaintext: &[u8]) -> Option<([u8; 2
 
     let cipher = Aes128::new_from_slice(&shared_secret[..16]).ok()?;
     for block in ciphertext.as_chunks_mut::<16>().0 {
-        cipher.encrypt_block(<&mut Block<Aes128>>::try_from(block).ok()?);
+        cipher.encrypt_block(block.into());
     }
 
     Some((mac_for_ciphertext(shared_secret, &ciphertext)?, ciphertext))
@@ -299,7 +299,7 @@ fn decrypt_payload(shared_secret: &[u8; 32], ciphertext: &[u8]) -> Option<Vec<u8
     let cipher = Aes128::new_from_slice(&shared_secret[..16]).ok()?;
 
     for block in plaintext.as_chunks_mut::<16>().0 {
-        cipher.decrypt_block(<&mut Block<Aes128>>::try_from(block).ok()?);
+        cipher.decrypt_block(block.into());
     }
 
     while plaintext.last().copied() == Some(0) {
