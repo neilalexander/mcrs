@@ -269,7 +269,7 @@ async fn handle_anonymous_request<P: Platform, S: Storage>(
         })
         .await;
     if let Some(privilege) = privilege {
-        context
+        if !context
             .authenticate_remote_login(
                 &payload.sender_pubkey,
                 &decrypted.shared_secret,
@@ -278,7 +278,10 @@ async fn handle_anonymous_request<P: Platform, S: Storage>(
                 now_ms,
                 &reply_path,
             )
-            .await;
+            .await
+        {
+            return None;
+        }
         let mut sender = String::new();
         append_hex(&mut sender, &payload.sender_pubkey);
         info!(
@@ -306,6 +309,14 @@ async fn handle_anonymous_request<P: Platform, S: Storage>(
     let privilege = context
         .remote_privilege_for(&payload.sender_pubkey, now_ms)
         .await;
+    if let Some(privilege) = privilege {
+        if !context
+            .accept_newer_remote_timestamp(&payload.sender_pubkey, privilege, timestamp, now_ms)
+            .await
+        {
+            return None;
+        }
+    }
     let request = CliRequest::remote(cli_privilege_for_remote(privilege), timestamp);
 
     let response = handle_command(command, context, request).await?;

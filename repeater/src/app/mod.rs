@@ -293,7 +293,7 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
         last_timestamp: u32,
         now_ms: u64,
         reply_path: &mcrs_protocol::Path,
-    ) {
+    ) -> bool {
         self.remote_logins.lock().await.authenticate(
             public_key,
             shared_secret,
@@ -301,7 +301,7 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
             last_timestamp,
             now_ms,
             reply_path,
-        );
+        )
     }
 
     pub async fn remote_privilege_for(

@@ -55,8 +55,21 @@ impl RemoteLoginTable {
         last_timestamp: u32,
         now_ms: u64,
         reply_path: &Path,
-    ) {
+    ) -> bool {
         self.prune(now_ms);
+
+        // Validate before removing the old session, including when changing
+        // privilege, so replayed logins cannot reset its replay protection.
+        let previous_timestamp = self
+            .admin_entries
+            .iter()
+            .chain(self.guest_entries.iter())
+            .flatten()
+            .find(|login| &login.public_key == public_key)
+            .map_or(0, |login| login.last_timestamp);
+        if last_timestamp <= previous_timestamp {
+            return false;
+        }
 
         // A public key represents one logical session. Remove any prior entry
         // from both privilege tables so reauthentication upgrades or
@@ -73,6 +86,7 @@ impl RemoteLoginTable {
             last_timestamp,
             reply_path: reply_path.clone(),
         });
+        true
     }
 
     pub fn privilege_for(
@@ -82,13 +96,12 @@ impl RemoteLoginTable {
     ) -> Option<RemotePrivilege> {
         self.prune(now_ms);
 
-        if let Some(login) = find_login_mut(&mut self.admin_entries, public_key) {
-            login.last_seen_ms = now_ms;
+        // Only accepting a fresh timestamp should refresh session activity.
+        if find_login_mut(&mut self.admin_entries, public_key).is_some() {
             return Some(RemotePrivilege::Admin);
         }
 
-        if let Some(login) = find_login_mut(&mut self.guest_entries, public_key) {
-            login.last_seen_ms = now_ms;
+        if find_login_mut(&mut self.guest_entries, public_key).is_some() {
             return Some(RemotePrivilege::Guest);
         }
 
@@ -310,6 +323,66 @@ mod tests {
                     .all(Option::is_none)
             );
             assert!(!table.accept_newer_timestamp(&[1; 32], privilege, 11, 101));
+        }
+    }
+
+    #[test]
+    fn replayed_login_cannot_reset_or_change_an_existing_session() {
+        for privilege in [RemotePrivilege::Admin, RemotePrivilege::Guest] {
+            let mut table = RemoteLoginTable::new();
+            let key = [7; PUB_KEY_SIZE];
+            assert!(table.authenticate(&key, &[9; 32], privilege, 10, 100, &Path::empty()));
+            assert!(table.accept_newer_timestamp(&key, privilege, 20, 200));
+
+            for timestamp in [0, 10, 19, 20] {
+                for attempted_privilege in [RemotePrivilege::Admin, RemotePrivilege::Guest] {
+                    assert!(!table.authenticate(
+                        &key,
+                        &[8; 32],
+                        attempted_privilege,
+                        timestamp,
+                        300,
+                        &Path::empty(),
+                    ));
+                    let session = table.sessions_matching_source_hash(7, 301)[0]
+                        .clone()
+                        .unwrap();
+                    assert_eq!(session.privilege, privilege);
+                    assert_eq!(session.shared_secret, [9; 32]);
+                    assert!(!table.accept_newer_timestamp(&key, privilege, 20, 301));
+                }
+            }
+            assert!(table.accept_newer_timestamp(&key, privilege, 21, 302));
+            // Rejected login attempts must not extend the session lifetime.
+            assert!(
+                table
+                    .sessions_matching_source_hash(7, 303 + REMOTE_LOGIN_TTL_MS)
+                    .iter()
+                    .all(Option::is_none)
+            );
+        }
+    }
+
+    #[test]
+    fn commands_require_strictly_increasing_timestamps() {
+        for privilege in [RemotePrivilege::Admin, RemotePrivilege::Guest] {
+            let mut table = RemoteLoginTable::new();
+            let key = [7; PUB_KEY_SIZE];
+            assert!(!table.authenticate(&key, &[9; 32], privilege, 0, 100, &Path::empty()));
+            assert!(table.authenticate(&key, &[9; 32], privilege, 10, 100, &Path::empty()));
+            for timestamp in [0, 9, 10] {
+                assert!(!table.accept_newer_timestamp(&key, privilege, timestamp, 200));
+            }
+            assert!(table.accept_newer_timestamp(&key, privilege, 11, 200));
+            assert!(!table.accept_newer_timestamp(&key, privilege, 11, 201));
+            assert!(!table.accept_newer_timestamp(&key, privilege, 10, 202));
+            assert!(table.accept_newer_timestamp(&key, privilege, 12, 203));
+            assert_eq!(
+                table.privilege_for(&key, REMOTE_LOGIN_TTL_MS + 200),
+                Some(privilege)
+            );
+            assert!(!table.accept_newer_timestamp(&key, privilege, 12, REMOTE_LOGIN_TTL_MS + 200));
+            assert_eq!(table.privilege_for(&key, REMOTE_LOGIN_TTL_MS + 204), None);
         }
     }
 
