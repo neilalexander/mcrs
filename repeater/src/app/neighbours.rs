@@ -159,7 +159,7 @@ impl NeighbourTable {
                 output,
                 " rssi={} snr={} packets={}",
                 neighbour.last_rssi,
-                crate::radio_metrics::SnrDb(neighbour.last_snr_quarters),
+                super::radio_metrics::SnrDb(neighbour.last_snr_quarters),
                 neighbour.packet_count
             );
         }
@@ -274,7 +274,7 @@ fn log_discovered(neighbour: Neighbour) {
     info!(
         "Neighbour discovered: RSSI={} SNR={}",
         neighbour.last_rssi,
-        crate::radio_metrics::SnrDb(neighbour.last_snr_quarters)
+        super::radio_metrics::SnrDb(neighbour.last_snr_quarters)
     );
     info!("Neighbour hash: {:02x}", neighbour.hash());
     info!("Neighbour pubkey: {:02x} ...", &neighbour.public_key[..8]);

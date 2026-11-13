@@ -12,6 +12,7 @@ pub mod mqtt;
 mod neighbours;
 pub mod periodic;
 mod protocol_log;
+pub mod radio_metrics;
 pub mod regions;
 mod remote;
 pub mod telnet;
@@ -970,7 +971,7 @@ where
         .with_config(|config| config.duty_cycle_percent())
         .await;
     let mut airtime_budget = AirtimeBudget::new(context.platform.now_millis(), duty_cycle_percent);
-    let mut noise_floor = crate::radio_metrics::NoiseFloor::new(context.platform.now_millis());
+    let mut noise_floor = radio_metrics::NoiseFloor::new(context.platform.now_millis());
 
     loop {
         // Use the settings passed to Radio::start, even if saved settings
@@ -1020,7 +1021,7 @@ where
                     "Radio RX: packet {} bytes, RSSI {}, SNR {}",
                     packet.len,
                     packet.rssi,
-                    crate::radio_metrics::SnrDb(packet.snr_quarters)
+                    radio_metrics::SnrDb(packet.snr_quarters)
                 );
 
                 #[cfg(feature = "mqtt")]

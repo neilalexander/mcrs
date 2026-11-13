@@ -319,7 +319,7 @@ pub fn packet_json(event: &PacketEvent, public_key: &[u8; 32], origin: &str) -> 
         hex(public_key),
         hex(&event.payload),
         event.rssi,
-        crate::radio_metrics::SnrDb(event.snr_quarters)
+        super::radio_metrics::SnrDb(event.snr_quarters)
     )
 }
 
