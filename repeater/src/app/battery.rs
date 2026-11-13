@@ -9,8 +9,8 @@ use embedded_hal_async::delay::DelayNs;
 const SAMPLE_INTERVAL_MS: u32 = 60_000;
 const LOW_BATTERY_SAMPLES: u8 = 3;
 // TODO: These percentages may not apply to all platforms/batteries.
-const PERCENT_MIN_MV: u16 = 3300;
-const PERCENT_MAX_MV: u16 = 4100;
+const PERCENT_MIN_MV: u16 = 3000;
+const PERCENT_MAX_MV: u16 = 4200;
 
 pub(crate) async fn run<P, S, B>(
     battery: &mut B,
@@ -103,9 +103,10 @@ mod tests {
     #[test]
     fn level_is_linear_between_empty_and_full() {
         assert_eq!(level_percent(0), 0);
-        assert_eq!(level_percent(3300), 0);
-        assert_eq!(level_percent(3700), 50);
-        assert_eq!(level_percent(4100), 100);
+        assert_eq!(level_percent(3000), 0);
+        assert_eq!(level_percent(3600), 50);
+        assert_eq!(level_percent(3700), 58);
+        assert_eq!(level_percent(4200), 100);
         assert_eq!(level_percent(u16::MAX), 100);
     }
 }
