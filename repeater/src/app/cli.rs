@@ -2093,7 +2093,8 @@ fn truncate_to_remote_reply_len(output: &mut String) {
         return;
     }
 
-    output.truncate(REMOTE_CLI_REPLY_MAX_LEN);
+    let end = output.floor_char_boundary(REMOTE_CLI_REPLY_MAX_LEN);
+    output.truncate(end);
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2181,6 +2182,36 @@ mod tests {
     use super::{
         Bandwidth, CodingRate, RadioConfig, SpreadingFactor, split_cli_correlation_prefix,
     };
+
+    #[test]
+    fn remote_reply_truncation_preserves_utf8() {
+        use super::{REMOTE_CLI_REPLY_MAX_LEN, truncate_to_remote_reply_len};
+
+        for character in ['é', '€', '🦀'] {
+            for retained_bytes in 1..character.len_utf8() {
+                let prefix = "a".repeat(REMOTE_CLI_REPLY_MAX_LEN - retained_bytes);
+                let mut reply = alloc::format!("{prefix}{character}tail");
+                truncate_to_remote_reply_len(&mut reply);
+                assert_eq!(reply, prefix);
+            }
+        }
+
+        for len in [
+            0,
+            REMOTE_CLI_REPLY_MAX_LEN - 1,
+            REMOTE_CLI_REPLY_MAX_LEN,
+            200,
+        ] {
+            let mut reply = "a".repeat(len);
+            truncate_to_remote_reply_len(&mut reply);
+            assert_eq!(reply, "a".repeat(len.min(REMOTE_CLI_REPLY_MAX_LEN)));
+        }
+
+        let mut reply = alloc::format!("{}éextra", "a".repeat(REMOTE_CLI_REPLY_MAX_LEN - 2));
+        truncate_to_remote_reply_len(&mut reply);
+        assert_eq!(reply.len(), REMOTE_CLI_REPLY_MAX_LEN);
+        assert!(reply.ends_with('é'));
+    }
 
     #[test]
     fn privileged_commands_are_available_on_all_authenticated_transports() {
