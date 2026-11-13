@@ -52,10 +52,8 @@ pub fn decrypt_anonymous_request(
         cipher.decrypt_block(<&mut Block<Aes128>>::try_from(block).ok()?);
     }
 
-    while plaintext.last().copied() == Some(0) {
-        plaintext.pop();
-    }
-
+    // Keep binary fields intact: a reply path can end in zero bytes.
+    // The caller handles padding after identifying the request type.
     Some(AnonymousPlaintext {
         sender_pubkey: payload.sender_pubkey,
         shared_secret,

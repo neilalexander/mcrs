@@ -248,6 +248,13 @@ async fn handle_anonymous_request<P: Platform, S: Storage>(
     let body = plaintext_body(&decrypted.plaintext)?;
 
     if let Some(response) = handle_anonymous_subrequest(body, timestamp, context).await {
+        let reply_path = if packet.route_type.is_direct() {
+            let (&path_length, path_bytes) = body.get(1..)?.split_first()?;
+            let (path, _) = mcrs_protocol::Path::decode_wire(path_length, path_bytes).ok()?;
+            path
+        } else {
+            reply_path
+        };
         return super::crypto::encode_response_plaintext(
             &decrypted.shared_secret,
             &decrypted.sender_pubkey,
@@ -260,7 +267,7 @@ async fn handle_anonymous_request<P: Platform, S: Storage>(
     let Ok(body) = core::str::from_utf8(body) else {
         return None;
     };
-    let body = body.trim();
+    let body = body.trim_end_matches('\0').trim();
     let now_ms = context.platform.now_millis();
 
     let privilege = context
