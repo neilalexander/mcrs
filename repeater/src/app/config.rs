@@ -611,8 +611,10 @@ impl AppConfig {
     }
 
     pub fn set_transmit_power_dbm(&mut self, transmit_power_dbm: i32) -> Result<(), ConfigError> {
-        self.radio.transmit_power_dbm = transmit_power_dbm;
-        self.radio.validate()
+        self.set_radio(RadioConfig {
+            transmit_power_dbm,
+            ..self.radio
+        })
     }
 
     pub fn set_duty_cycle_percent(&mut self, percent: u8) -> Result<(), ConfigError> {
