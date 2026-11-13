@@ -147,6 +147,7 @@ pub struct AppContext<P, S> {
     battery_level_percent: AtomicU8,
     battery_millivolts: AtomicU16,
     last_rssi: AtomicI16,
+    noise_floor_dbm: Cell<Option<i16>>,
     last_snr_quarters: AtomicI16,
 }
 
@@ -192,6 +193,7 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
             battery_level_percent: AtomicU8::new(BATTERY_LEVEL_UNKNOWN),
             battery_millivolts: AtomicU16::new(BATTERY_MILLIVOLTS_UNKNOWN),
             last_rssi: AtomicI16::new(0),
+            noise_floor_dbm: Cell::new(None),
             last_snr_quarters: AtomicI16::new(0),
         }
     }
@@ -386,6 +388,7 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
                 self.battery_millivolts.load(Ordering::Relaxed),
             ),
             last_rssi: self.last_rssi.load(Ordering::Relaxed),
+            noise_floor_dbm: self.noise_floor_dbm.get(),
             last_snr_quarters: self.last_snr_quarters.load(Ordering::Relaxed),
         }
     }
@@ -736,6 +739,7 @@ pub struct Status {
     pub battery_level_percent: Option<u8>,
     pub battery_millivolts: Option<u16>,
     pub last_rssi: i16,
+    pub noise_floor_dbm: Option<i16>,
     pub last_snr_quarters: i16,
 }
 
@@ -948,6 +952,7 @@ enum RadioWait {
     Irq(Result<(), ()>),
     OutboundChanged,
     OutboundDue,
+    NoiseFloorDue,
 }
 
 pub(crate) async fn radio_loop<P: Platform, S: Storage, R, D>(
@@ -965,6 +970,7 @@ where
         .with_config(|config| config.duty_cycle_percent())
         .await;
     let mut airtime_budget = AirtimeBudget::new(context.platform.now_millis(), duty_cycle_percent);
+    let mut noise_floor = crate::radio_metrics::NoiseFloor::new(context.platform.now_millis());
 
     loop {
         // Use the settings passed to Radio::start, even if saved settings
@@ -977,11 +983,21 @@ where
             radio_config,
             delay,
             &mut airtime_budget,
+            noise_floor.next_sample_at_ms(),
         )
         .await
         {
             RadioWait::OutboundDue => continue,
             RadioWait::OutboundChanged => continue,
+            RadioWait::NoiseFloorDue => {
+                // Allow RX to settle if a transmission just restarted it.
+                delay.delay_ms(10).await;
+                let sample = radio.sample_noise_floor().await;
+                context
+                    .noise_floor_dbm
+                    .set(noise_floor.complete(context.platform.now_millis(), sample));
+                continue;
+            }
             RadioWait::Irq(Ok(())) => radio.read_received(&mut receive_buffer).await,
             RadioWait::Irq(Err(())) => Err(()),
         };
@@ -1218,6 +1234,7 @@ async fn wait_for_irq_or_eligible_outbound<P: Platform, S: Storage, R, D>(
     radio_config: config::RadioConfig,
     delay: &mut D,
     airtime_budget: &mut AirtimeBudget,
+    noise_floor_at_ms: u64,
 ) -> RadioWait
 where
     R: crate::platform::Radio,
@@ -1247,21 +1264,12 @@ where
     let mut receive = pin!(radio.wait_for_irq());
     let mut outbound_changed = pin!(context.outbound.wait_changed());
 
-    let Some(eligible_at_ms) = next.map(|queued| queued.eligible_at_ms.max(budget_ready_ms)) else {
-        return poll_fn(|cx| {
-            if outbound_changed.as_mut().poll(cx).is_ready() {
-                return Poll::Ready(RadioWait::OutboundChanged);
-            }
-
-            match receive.as_mut().poll(cx) {
-                Poll::Ready(result) => Poll::Ready(RadioWait::Irq(result)),
-                Poll::Pending => Poll::Pending,
-            }
-        })
-        .await;
-    };
+    let eligible_at_ms = next
+        .map(|queued| queued.eligible_at_ms.max(budget_ready_ms))
+        .unwrap_or(u64::MAX);
 
     let wait_ms = eligible_at_ms
+        .min(noise_floor_at_ms)
         .saturating_sub(context.platform.now_millis())
         .min(u32::MAX as u64) as u32;
     let mut timer = pin!(delay.delay_ms(wait_ms));
@@ -1269,13 +1277,17 @@ where
         if outbound_changed.as_mut().poll(cx).is_ready() {
             return Poll::Ready(RadioWait::OutboundChanged);
         }
+        if let Poll::Ready(result) = receive.as_mut().poll(cx) {
+            return Poll::Ready(RadioWait::Irq(result));
+        }
         if timer.as_mut().poll(cx).is_ready() {
-            return Poll::Ready(RadioWait::OutboundDue);
+            return Poll::Ready(if noise_floor_at_ms < eligible_at_ms {
+                RadioWait::NoiseFloorDue
+            } else {
+                RadioWait::OutboundDue
+            });
         }
-        match receive.as_mut().poll(cx) {
-            Poll::Ready(result) => Poll::Ready(RadioWait::Irq(result)),
-            Poll::Pending => Poll::Pending,
-        }
+        Poll::Pending
     })
     .await
 }

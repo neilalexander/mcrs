@@ -96,6 +96,7 @@ where
     rx_packet_params: PacketParams,
     tx_packet_params: PacketParams,
     transmit_power_dbm: i32,
+    listening: bool,
     receiving: bool,
 }
 
@@ -169,7 +170,7 @@ where
     async fn wait_for_irq(&mut self) -> Result<(), ()> {
         let started = self.started()?;
         started.lora.wait_for_irq().await.map_err(|error| {
-            started.receiving = false;
+            started.listening = false;
             error!("sx1262 IRQ wait: {}", Debug2Format(&error));
         })
     }
@@ -178,7 +179,7 @@ where
         let started = self.started()?;
         let result = started.read_received(buffer).await;
         if result.is_err() {
-            started.receiving = false;
+            started.listening = false;
         }
         result
     }
@@ -187,13 +188,23 @@ where
         self.started()?.channel_is_busy().await
     }
 
+    async fn sample_noise_floor(&mut self) -> Option<i16> {
+        self.started()
+            .ok()?
+            .sample_noise_floor()
+            .await
+            .map_err(|error| error!("sx1262 noise floor: {}", Debug2Format(&error)))
+            .ok()
+            .flatten()
+    }
+
     async fn transmit(&mut self, payload: &[u8]) -> Result<(), ()> {
         self.started()?.transmit(payload).await
     }
 
     async fn shutdown(&mut self) -> Result<(), ()> {
         let started = self.started()?;
-        started.receiving = false;
+        started.listening = false;
         // Cancelling continuous receive leaves the chip in RX. SetSleep is
         // only valid from standby; lora-phy's sleep() does not enter it for us.
         started.lora.enter_standby().await.map_err(|error| {
@@ -267,12 +278,13 @@ where
             rx_packet_params,
             tx_packet_params,
             transmit_power_dbm: config.transmit_power_dbm,
+            listening: false,
             receiving: false,
         })
     }
 
     async fn start_receive(&mut self) -> Result<(), ()> {
-        if self.receiving {
+        if self.listening {
             return Ok(());
         }
         self.lora
@@ -289,7 +301,8 @@ where
         self.lora.start_rx().await.map_err(|error| {
             error!("sx1262 start receive: {}", Debug2Format(&error));
         })?;
-        self.receiving = true;
+        self.listening = true;
+        self.receiving = false;
         Ok(())
     }
 
@@ -299,9 +312,15 @@ where
             error!("sx1262 clear IRQ: {}", Debug2Format(&error));
         })?;
         match irq {
-            Ok(Some(IrqState::Done)) => {}
+            Ok(Some(IrqState::Done)) => self.receiving = false,
+            Ok(Some(IrqState::PreambleReceived)) => {
+                // Remember the preamble after clearing its IRQ.
+                self.receiving = true;
+                return Ok(None);
+            }
             Ok(_) => return Ok(None),
             Err(error @ (RadioError::CrcError | RadioError::HeaderError)) => {
+                self.receiving = false;
                 error!("sx1262 receive error: {:?}", Debug2Format(&error));
                 return Ok(None);
             }
@@ -325,8 +344,20 @@ where
         }))
     }
 
+    async fn sample_noise_floor(&mut self) -> Result<Option<i16>, RadioError> {
+        if !self.listening || self.receiving {
+            return Ok(None);
+        }
+        // Reject packets arriving during the read; leave IRQs intact.
+        if self.lora.get_irq_state().await?.is_some() {
+            return Ok(None);
+        }
+        let rssi = self.lora.get_rssi().await?;
+        Ok(self.lora.get_irq_state().await?.is_none().then_some(rssi))
+    }
+
     async fn channel_is_busy(&mut self) -> Result<bool, ()> {
-        self.receiving = false;
+        self.listening = false;
         self.lora
             .prepare_for_cad(&self.modulation_params)
             .await
@@ -343,7 +374,7 @@ where
     }
 
     async fn transmit(&mut self, payload: &[u8]) -> Result<(), ()> {
-        self.receiving = false;
+        self.listening = false;
         self.lora
             .prepare_for_tx(
                 &self.modulation_params,

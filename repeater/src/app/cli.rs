@@ -663,7 +663,7 @@ fn encode_status_binary_response(status: super::Status, out: &mut Vec<u8>) {
 
     write_u16(stats, &mut offset, status.battery_millivolts.unwrap_or(0));
     write_u16(stats, &mut offset, status.outbound_queue_len);
-    write_i16(stats, &mut offset, 0);
+    write_i16(stats, &mut offset, status.noise_floor_dbm.unwrap_or(0));
     write_i16(
         stats,
         &mut offset,
@@ -2034,6 +2034,14 @@ fn status_text<P: Platform, S: Storage>(context: &AppContext<P, S>) -> String {
     );
     let _ = writeln!(output, "Packet errors: {}", status.packet_errors);
     let _ = writeln!(output, "Outbound queue: {}", status.outbound_queue_len);
+    match status.noise_floor_dbm {
+        Some(dbm) => {
+            let _ = writeln!(output, "Noise floor: {} dBm", dbm);
+        }
+        None => {
+            let _ = writeln!(output, "Noise floor: unknown");
+        }
+    }
     if let Some(millivolts) = status.battery_millivolts {
         let _ = writeln!(output, "Battery: {}mV", millivolts);
         return output;
@@ -2359,6 +2367,7 @@ mod tests {
             battery_level_percent: None,
             battery_millivolts: None,
             last_rssi: 0,
+            noise_floor_dbm: Some(-117),
             last_snr_quarters: 0,
         };
         let mut response = alloc::vec![0xaa, 0xbb];
@@ -2366,6 +2375,7 @@ mod tests {
         assert_eq!(response.len(), 2 + 56);
         assert_eq!(&response[..2], &[0xaa, 0xbb]);
         let stats = &response[2..];
+        assert_eq!(&stats[4..6], &(-117i16).to_le_bytes());
         assert_eq!(
             &stats[24..40],
             &[
@@ -2376,6 +2386,15 @@ mod tests {
             ]
         );
         assert_eq!(&stats[44..48], &[0x45, 0x23, 0x9a, 0x78]);
+        let mut unknown = alloc::vec::Vec::new();
+        super::encode_status_binary_response(
+            super::super::Status {
+                noise_floor_dbm: None,
+                ..status
+            },
+            &mut unknown,
+        );
+        assert_eq!(&unknown[4..6], &[0, 0]);
     }
 
     #[test]

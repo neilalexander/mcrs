@@ -716,6 +716,10 @@ where
         self.receiver.channel_is_busy().await
     }
 
+    async fn sample_noise_floor(&mut self) -> Option<i16> {
+        self.receiver.sample_noise_floor().await
+    }
+
     async fn transmit(&mut self, payload: &[u8]) -> Result<(), ()> {
         self.frontend.set_tx_mode();
         let result = self.receiver.transmit(payload).await;

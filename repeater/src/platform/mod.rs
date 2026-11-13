@@ -120,6 +120,11 @@ pub trait Radio {
     /// Runs channel activity detection.
     fn channel_is_busy(&mut self) -> impl Future<Output = Result<bool, ()>>;
 
+    /// Instantaneous idle-channel RSSI in dBm while receiving. Returns `None`
+    /// if a packet is in progress or the measurement fails. Must leave
+    /// reception and pending packet IRQs intact.
+    fn sample_noise_floor(&mut self) -> impl Future<Output = Option<i16>>;
+
     fn transmit(&mut self, payload: &[u8]) -> impl Future<Output = Result<(), ()>>;
 
     fn shutdown(&mut self) -> impl Future<Output = Result<(), ()>>;
