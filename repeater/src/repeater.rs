@@ -122,7 +122,7 @@ where
     }
     let mut delay = context.platform.delay();
     join(
-        app::radio_loop(radio, context, &mut delay),
+        app::radio_loop(radio, context, config, &mut delay),
         periodic::startup_advert(context),
     )
     .await;

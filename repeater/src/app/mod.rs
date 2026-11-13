@@ -936,6 +936,7 @@ enum RadioWait {
 pub(crate) async fn radio_loop<P: Platform, S: Storage, R, D>(
     radio: &mut R,
     context: &AppContext<P, S>,
+    radio_config: config::RadioConfig,
     delay: &mut D,
 ) -> !
 where
@@ -949,11 +950,14 @@ where
     let mut airtime_budget = AirtimeBudget::new(context.platform.now_millis(), duty_cycle_percent);
 
     loop {
-        transmit_eligible_outbound(radio, context, delay, &mut airtime_budget).await;
+        // Use the settings passed to Radio::start, even if saved settings
+        // change before the next reboot.
+        transmit_eligible_outbound(radio, context, radio_config, delay, &mut airtime_budget).await;
 
         match wait_for_read_or_eligible_outbound(
             radio,
             context,
+            radio_config,
             &mut receive_buffer,
             delay,
             &mut airtime_budget,
@@ -1068,20 +1072,15 @@ async fn handle_rx_event<P: Platform, S: Storage>(context: &AppContext<P, S>, ev
 async fn transmit_eligible_outbound<P: Platform, S: Storage, R, D>(
     radio: &mut R,
     context: &AppContext<P, S>,
+    radio_config: config::RadioConfig,
     delay: &mut D,
     airtime_budget: &mut AirtimeBudget,
 ) where
     R: crate::platform::Radio,
     D: DelayNs,
 {
-    let (radio_config, duty_cycle_percent, repeat_enabled) = context
-        .with_config(|config| {
-            (
-                config.radio(),
-                config.duty_cycle_percent(),
-                config.repeat_enabled(),
-            )
-        })
+    let (duty_cycle_percent, repeat_enabled) = context
+        .with_config(|config| (config.duty_cycle_percent(), config.repeat_enabled()))
         .await;
     let now_ms = context.platform.now_millis();
     let Some(next) = context.outbound.next() else {
@@ -1195,6 +1194,7 @@ async fn transmit_eligible_outbound<P: Platform, S: Storage, R, D>(
 async fn wait_for_read_or_eligible_outbound<P: Platform, S: Storage, R, D>(
     radio: &mut R,
     context: &AppContext<P, S>,
+    radio_config: config::RadioConfig,
     receive_buffer: &mut [u8],
     delay: &mut D,
     airtime_budget: &mut AirtimeBudget,
@@ -1203,8 +1203,8 @@ where
     R: crate::platform::Radio,
     D: DelayNs,
 {
-    let (radio_config, duty_cycle_percent) = context
-        .with_config(|config| (config.radio(), config.duty_cycle_percent()))
+    let duty_cycle_percent = context
+        .with_config(|config| config.duty_cycle_percent())
         .await;
     let now_ms = context.platform.now_millis();
     let next = context.outbound.next_after_reset();
