@@ -68,7 +68,13 @@ jobs:
 
       - name: Determine image version
         id: version
-        run: echo "version=$(make --no-print-directory -s print-version)" >> "$GITHUB_OUTPUT"
+        env:
+          PROFILE: ${{ inputs.PROFILE || '' }}
+        run: |
+          echo "version=$(make --no-print-directory -s print-version)" >> "$GITHUB_OUTPUT"
+          profile="${PROFILE##*/}" # Remove the directory path.
+          profile="${profile%.*}" # Remove the file extension.
+          echo "profile_suffix=${profile:+-}${profile// /_}" >> "$GITHUB_OUTPUT"
 
       - name: Install Rust for Xtensa
         uses: esp-rs/xtensa-toolchain@v1.7.0
@@ -100,7 +106,7 @@ jobs:
       - name: Upload images
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.board.id }}${{ matrix.variant.artifact_suffix }}-firmware-${{ steps.version.outputs.version }}
+          name: ${{ matrix.board.id }}${{ steps.version.outputs.profile_suffix }}${{ matrix.variant.artifact_suffix }}-firmware-${{ steps.version.outputs.version }}
           path: dist/*.bin
           if-no-files-found: error
 
@@ -134,7 +140,13 @@ jobs:
       # The version the firmware reports (see repeater/build.rs).
       - name: Determine image version
         id: version
-        run: echo "version=$(make --no-print-directory -s print-version)" >> "$GITHUB_OUTPUT"
+        env:
+          PROFILE: ${{ inputs.PROFILE || '' }}
+        run: |
+          echo "version=$(make --no-print-directory -s print-version)" >> "$GITHUB_OUTPUT"
+          profile="${PROFILE##*/}" # Remove the directory path.
+          profile="${profile%.*}" # Remove the file extension.
+          echo "profile_suffix=${profile:+-}${profile// /_}" >> "$GITHUB_OUTPUT"
 
       - name: Install nRF build tools
         run: |
@@ -166,26 +178,26 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           mkdir -p dist
-          cp "platform/nrf52840/target/thumbv7em-none-eabi/release/${{ matrix.board.binary }}" "dist/${{ matrix.board.binary }}-$VERSION.elf"
+          cp "platform/nrf52840/target/thumbv7em-none-eabi/release/${{ matrix.board.binary }}" "dist/${{ matrix.board.binary }}${{ steps.version.outputs.profile_suffix }}-$VERSION.elf"
 
       - name: Create UF2
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           arm-none-eabi-objcopy -O binary "platform/nrf52840/target/thumbv7em-none-eabi/release/${{ matrix.board.binary }}" "dist/${{ matrix.board.binary }}.bin"
-          python3 tools/nrf-uf2.py --base ${{ matrix.board.uf2_base }} "dist/${{ matrix.board.binary }}.bin" "dist/${{ matrix.board.binary }}-$VERSION.uf2"
+          python3 tools/nrf-uf2.py --base ${{ matrix.board.uf2_base }} "dist/${{ matrix.board.binary }}.bin" "dist/${{ matrix.board.binary }}${{ steps.version.outputs.profile_suffix }}-$VERSION.uf2"
 
       - name: Create OTA DFU ZIP
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           # Adafruit bootloaders use legacy DFU packages for mobile OTA updates.
-          adafruit-nrfutil dfu genpkg --dev-type 0x0052 --application "dist/${{ matrix.board.binary }}.bin" "dist/${{ matrix.board.binary }}-$VERSION-dfu-ota.zip"
+          adafruit-nrfutil dfu genpkg --dev-type 0x0052 --application "dist/${{ matrix.board.binary }}.bin" "dist/${{ matrix.board.binary }}${{ steps.version.outputs.profile_suffix }}-$VERSION-dfu-ota.zip"
 
       - name: Upload image
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.board.id }}-firmware-${{ steps.version.outputs.version }}
+          name: ${{ matrix.board.id }}${{ steps.version.outputs.profile_suffix }}-firmware-${{ steps.version.outputs.version }}
           path: |
             dist/*.elf
             dist/*.uf2
