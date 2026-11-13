@@ -51,6 +51,9 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     config.hfclk_source = embassy_nrf::config::HfclkSource::ExternalXtal;
     let p = embassy_nrf::init(config);
 
+    // Setting HICHG low sets the charging current to 100 mA.
+    let _charge_current = Output::new(p.P0_13, Level::Low, OutputDrive::Standard);
+
     let driver = embassy_nrf::usb::Driver::new(
         p.USBD,
         Irqs,
