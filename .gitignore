@@ -1,5 +1,6 @@
 **/target
 *.html
+!/tools/migrate-repeater.html
 .DS_Store
 /dist
 /fuzz/artifacts

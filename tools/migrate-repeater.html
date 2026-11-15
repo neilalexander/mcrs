@@ -1,0 +1,1306 @@
+<!DOCTYPE html>
+<html lang="en">
+ <head>
+  <meta charset="utf-8"/>
+  <meta content="width=device-width,initial-scale=1" name="viewport"/>
+  <title>
+   MeshCore → MCRS migration
+  </title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font: 15px system-ui;
+      background: #101820;
+      color: #e2ebf2
+    }
+
+    body {
+      max-width: 1080px;
+      margin: 32px auto;
+      padding: 0 20px
+    }
+
+    h1 {
+      font-size: 28px
+    }
+
+    section {
+      background: #192630;
+      border: 1px solid #354754;
+      border-radius: 10px;
+      padding: 20px;
+      margin: 18px 0
+    }
+
+    button,
+    input {
+      font: inherit;
+      padding: 9px;
+      border: 1px solid #59717f;
+      border-radius: 5px;
+      background: #243b49;
+      color: inherit;
+      margin: 4px
+    }
+
+    button {
+      cursor: pointer
+    }
+
+    button:disabled {
+      opacity: .4;
+      cursor: default
+    }
+
+    label {
+      display: inline-block
+    }
+
+    input[type=checkbox] {
+      margin-right: 8px
+    }
+
+    pre,
+    textarea {
+      box-sizing: border-box;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      background: #0c141a;
+      color: #bcdfd0;
+      border: 1px solid #354754;
+      padding: 12px;
+      width: 100%;
+      max-height: 470px;
+      overflow: auto;
+      font: 13px ui-monospace, monospace
+    }
+
+    small {
+      color: #adc0cc
+    }
+
+    .warn {
+      color: #ffd28c
+    }
+
+    #status {
+      font-weight: bold
+    }
+
+    a {
+      color: #8fcee8
+    }
+
+    .config-table-wrap {
+      overflow: auto;
+      border: 1px solid #354754;
+      border-radius: 8px;
+      margin: 16px 0
+    }
+
+    .config-table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      table-layout: fixed;
+      font-size: 14px
+    }
+
+    .config-table caption {
+      text-align: left;
+      padding: 14px 16px;
+      background: #20333f;
+      font-weight: 600;
+      color: #e2ebf2
+    }
+
+    .config-table thead {
+      background: #12212b;
+      color: #adc0cc;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .06em
+    }
+
+    .config-table th,
+    .config-table td {
+      padding: 12px 16px;
+      border-bottom: 1px solid #30434f;
+      vertical-align: top
+    }
+
+    .config-table thead th:first-child {
+      width: 25%
+    }
+
+    .config-table thead th:nth-child(2) {
+      width: 43%
+    }
+
+    .config-table tbody th {
+      font-weight: 500;
+      color: #b9d3e3;
+      overflow-wrap: anywhere
+    }
+
+    .config-table td.config-value {
+      font: 13px ui-monospace, monospace;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
+      line-height: 1.6
+    }
+
+    .config-table tbody tr:nth-child(even) {
+      background: #17232d
+    }
+
+    .config-table tbody tr:hover {
+      background: #223542
+    }
+
+    .config-table tbody tr:last-child>* {
+      border-bottom: 0
+    }
+
+    .config-badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      background: #284252;
+      color: #b9d9ee
+    }
+
+    .config-badge.migrated {
+      background: #1d493e;
+      color: #a5e4cc
+    }
+
+    .config-badge.source {
+      background: #3d365c;
+      color: #d5c5fb
+    }
+
+    .config-value.masked {
+      color: #8fa4b1;
+      font-style: italic
+    }
+
+    .config-notes {
+      color: #adc0cc;
+      line-height: 1.65;
+      padding-left: 22px
+    }
+
+    .config-notes li {
+      margin: 6px 0
+    }
+
+    @media(max-width:600px) {
+      .config-table {
+        min-width: 720px
+      }
+
+      .config-table th,
+      .config-table td {
+        padding: 10px
+      }
+
+      .config-table-wrap {
+        margin-inline: -8px
+      }
+    }
+
+    .steps {
+      display: flex;
+      gap: 12px;
+      margin: 24px 0
+    }
+
+    .steps a {
+      flex: 1;
+      padding: 14px 18px;
+      border: 1px solid #354754;
+      border-radius: 8px;
+      background: #192630;
+      text-decoration: none;
+      color: #e2ebf2
+    }
+
+    .steps a:hover {
+      background: #243b49
+    }
+
+    .steps b {
+      display: inline-grid;
+      place-items: center;
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: #315565;
+      margin-right: 8px
+    }
+
+    section {
+      scroll-margin-top: 20px
+    }
+
+    .config-table .config-group th {
+      background: #223744;
+      color: #b9dfef;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .07em;
+      padding-block: 10px
+    }
+
+    .config-table tbody th small {
+      display: block;
+      font: 12px ui-monospace, monospace;
+      color: #9cb9ca;
+      margin-top: 7px;
+      white-space: pre-wrap;
+      line-height: 1.5
+    }
+
+    .config-badge.pending {
+      background: #303b46;
+      color: #aab8c3
+    }
+
+    .config-badge.archived {
+      background: #544229;
+      color: #f2d49c
+    }
+
+    .config-table td.cli-mapping {
+      white-space: normal
+    }
+
+    .cli-mapping>div {
+      display: inline;
+      white-space: pre-wrap
+    }
+
+    .cli-arrow {
+      display: inline;
+      color: #79c9b4;
+      font: 18px system-ui;
+      margin: 0 8px
+    }
+  </style>
+ </head>
+ <body>
+  <h1>
+   MeshCore → MCRS repeater migration
+  </h1>
+  <p>
+   Read the original repeater, keep a backup, flash or connect the replacement, then apply and verify its settings. All processing stays in this page; no libraries, servers or network requests.
+  </p>
+  <p class="warn">
+   Backups contain the full private key and other secrets. Keep the original repeater offline after cloning its identity. Writes are immediate and are not atomic; a failure can leave a partially migrated target.
+  </p>
+  <nav aria-label="Migration steps" class="steps">
+   <a href="#read">
+    <b>
+     1
+    </b>
+    Read
+   </a>
+   <a href="#review">
+    <b>
+     2
+    </b>
+    Review
+   </a>
+   <a href="#apply-step">
+    <b>
+     3
+    </b>
+    Apply
+   </a>
+  </nav>
+  <section id="read">
+   <h2>
+    1 · Read
+   </h2>
+   <p>
+    Connect the original MeshCore repeater or load a saved backup. Close other serial terminals. Use desktop Chrome or Edge. Your backup stays in this browser.
+   </p>
+   <label>
+    Baud
+    <input id="baud" max="2000000" min="1200" type="number" value="115200"/>
+   </label>
+   <button id="source">
+    Connect &amp; read config
+   </button>
+   <p id="status" role="status">
+    No device connected.
+   </p>
+   <label>
+    Load backup
+    <input accept="application/json,.json" id="file" type="file"/>
+   </label>
+   <p>
+    <small>
+     Backups and the supplied admin password are saved automatically in this browser’s localStorage (plaintext) and restored when you return.
+    </small>
+    <button id="forget">
+     Forget stored backup
+    </button>
+   </p>
+  </section>
+  <section id="review">
+   <h2>
+    2 · Review
+   </h2>
+   <p>
+    Review what was read from MeshCore alongside the old read command and the new MCRS write command. Values remain in their original units; conversions appear in the planned commands. Target-only readings are labelled explicitly.
+   </p>
+   <button id="download">
+    Download secret JSON backup
+   </button>
+   <label>
+    <input id="secrets" type="checkbox"/>
+    Show secrets in the table, plan and activity log
+   </label>
+   <p id="effective-status">
+    Read MeshCore or load a backup to populate the migration values.
+   </p>
+   <div class="config-table-wrap" id="effective-table">
+    <table class="config-table">
+     <caption>
+      Read configuration and CLI mapping
+     </caption>
+     <thead>
+      <tr>
+       <th scope="col">
+        Configuration item
+       </th>
+       <th scope="col">
+        Old → new CLI
+       </th>
+       <th scope="col">
+        Value read
+       </th>
+      </tr>
+     </thead>
+     <tbody id="effective">
+     </tbody>
+    </table>
+   </div>
+   <details hidden="" id="effective-review">
+    <summary>
+     Conversions and manual review
+    </summary>
+    <ul class="config-notes" id="effective-notes">
+    </ul>
+   </details>
+   <details>
+    <summary>
+     Serial command plan
+    </summary>
+    <pre id="plan">Read MeshCore or load a backup to see the migration commands.</pre>
+   </details>
+  </section>
+  <section id="apply-step">
+   <h2>
+    3 · Apply
+   </h2>
+   <p>
+    Next, install MCRS on your repeater. Download your configuration backup first, then get the firmware for your board from the
+    <a href="https://github.com/neilalexander/mcrs/releases" rel="noopener noreferrer" target="_blank">
+     MCRS GitHub releases page
+    </a>
+    and follow the
+    <a href="https://github.com/neilalexander/mcrs/blob/main/INSTALL.md" rel="noopener noreferrer" target="_blank">
+     installation instructions
+    </a>
+    .
+   </p>
+   <p>
+    After installing MCRS, return here and connect the repeater to apply your saved configuration. Connecting reads its current settings and fills in retained values in Review.
+   </p>
+   <button id="target">
+    Connect MCRS target
+   </button>
+   <p>
+    <label>
+     Target admin password
+     <input autocomplete="off" id="password" placeholder="Enter existing or new password" type="password"/>
+    </label>
+    <br/>
+    <small>
+     MeshCore cannot export its admin password. Enter the password you want MCRS to use.
+    </small>
+   </p>
+   <p class="warn" id="effective-password">
+    Supply an admin password before applying.
+   </p>
+   <button id="apply">
+    Apply &amp; verify stored settings
+   </button>
+   <button id="reboot">
+    Reboot target
+   </button>
+   <button id="verify">
+    Verify identity after reboot
+   </button>
+   <p>
+    <small>
+     Settings are saved individually to MCRS’s configuration. Target-only settings and unrelated ACL/region entries are retained. Complete flat region tables and admin ACLs are migrated; other roles and region hierarchies need manual review. Identity and radio settings take effect after reboot. Reconnect and verify the active public key afterwards.
+    </small>
+   </p>
+  </section>
+  <section>
+   <h2>
+    Activity
+   </h2>
+   <p>
+    Every command, reply, conversion, skip and verification is recorded. Secret commands and replies are masked unless enabled above.
+   </p>
+   <button id="clear">
+    Clear log
+   </button>
+   <pre aria-live="polite" id="log"></pre>
+  </section>
+  <script>
+    'use strict';
+    const $ = id => document.getElementById(id),
+      STORE = 'mcrs-migration-v1';
+    const core = ['prv.key', 'public.key', 'name', 'radio', 'tx', 'lat', 'lon', 'repeat',
+      'advert.interval', 'flood.advert.interval', 'af'
+    ];
+    const shared = ['owner.info', 'flood.max.unscoped', 'flood.max.advert', 'path.hash.mode',
+      'multi.acks', 'loop.detect'
+    ];
+    const extra = ['dutycycle', 'rxdelay', 'txdelay', 'direct.txdelay', 'agc.reset.interval',
+      'int.thresh', 'cad', 'radio.rxgain', 'allow.read.only', 'guest.password', 'flood.max',
+      'bridge.type', 'bridge.enabled', 'bridge.delay', 'bridge.source', 'bridge.baud',
+      'bridge.channel', 'bridge.secret', 'adc.multiplier', 'extra.sf', 'wifi.ssid', 'wifi.pass'
+    ];
+    let backup = null,
+      link = null,
+      busy = false,
+      role = null,
+      applied = false,
+      events = [],
+      targetConfig = null;
+    const secretKey = k => /prv\.key|password|wifi\.pass|bridge\.secret|export config all/.test(k);
+
+    function log(text, secret = false) {
+      events.push({
+        text,
+        secret
+      });
+      renderLog();
+    }
+
+    function renderLog() {
+      $('log').textContent = events.map(e => e.secret && !$('secrets').checked ?
+        '[secret command/reply hidden]' : e.text).join('\n');
+      $('log').scrollTop = $('log').scrollHeight;
+    }
+
+    function state() {
+      for (const id of ['source', 'target', 'download', 'apply', 'reboot', 'verify', 'file', 'password',
+          'baud', 'forget'
+        ]) $(id).disabled = busy;
+      $('apply').disabled = busy || !backup || role !== 'target' || !link;
+      $('download').disabled = busy || !backup;
+      $('reboot').disabled = busy || !applied || role !== 'target';
+      $('verify').disabled = busy || !backup || role !== 'target';
+    }
+    async function run(fn) {
+      if (busy) return;
+      busy = true;
+      state();
+      try {
+        await fn();
+      } catch (e) {
+        log('ERROR: ' + e.message);
+        $('status').textContent = 'Stopped: ' + e.message;
+      } finally {
+        busy = false;
+        state();
+      }
+    }
+    const pause = ms => new Promise(r => setTimeout(r, ms));
+    // Both CLIs echo input. A second, read-only public-key command is a fence:
+    // its echoed line plus its complete response proves the preceding command finished.
+    class SerialCLI {
+      constructor(port) {
+        this.port = port;
+        this.buffer = '';
+        this.dead = null;
+        this.reader = null;
+        this.writer = null;
+      }
+      async open(baud) {
+        await this.port.open({
+          baudRate: baud
+        });
+        this.writer = this.port.writable.getWriter();
+        this.reader = this.port.readable.getReader();
+        this.task = this.read();
+        await pause(1600);
+      }
+      async read() {
+        const decoder = new TextDecoder();
+        try {
+          while (true) {
+            const {
+              value,
+              done
+            } = await this.reader.read();
+            if (done) break;
+            this.buffer += decoder.decode(value, {
+              stream: true
+            });
+            if (this.buffer.length > 1000000) throw Error('Serial buffer exceeded 1 MB');
+          }
+        } catch (e) {
+          this.dead = e;
+        } finally {
+          this.dead ??= Error('Serial disconnected');
+        }
+      }
+      async close() {
+        try {
+          await this.reader?.cancel();
+          await this.task;
+        } finally {
+          this.reader?.releaseLock();
+          this.writer?.releaseLock();
+          await this.port.close();
+        }
+      }
+      async command(cmd) {
+        if (/[\r\n\x00-\x1f\x7f]/.test(cmd)) throw Error('Control character in command');
+        if (new TextEncoder().encode(cmd).length > 159) throw Error(
+          'Command exceeds serial line limit');
+        if (this.dead) throw this.dead;
+        this.buffer = '';
+        log('TX ' + cmd, secretKey(cmd));
+        await this.writer.write(new TextEncoder().encode(cmd + '\r'));
+        // Sending the fence separately avoids filling the source's UART receive buffer.
+        await pause(100);
+        await this.writer.write(new TextEncoder().encode('get public.key\r'));
+        const deadline = Date.now() + 10000,
+          need = cmd === 'get public.key' ? 2 : 1;
+        while (Date.now() < deadline) {
+          if (this.dead) throw this.dead;
+          const lines = this.buffer.replace(/\r/g, '').split('\n');
+          let seen = 0;
+          for (let i = 0; i < lines.length - 1; i++)
+            if (lines[i].trim() === 'get public.key' && ++seen === need) {
+              const tail = lines.slice(i + 1, -1);
+              if (tail.some(l => /^(?:\s*->\s*)?> [a-f\d]{64}\s*$/i.test(l))) {
+                const output = lines.slice(0, i).filter(l => l.trim() !== cmd).map(l => l.replace(
+                  /^\s*-> ?/, '')).join('\n').trimEnd();
+                log('RX ' + (output || '(empty)'), secretKey(cmd));
+                log('FENCE get public.key → completed');
+                return output;
+              }
+            }
+          await pause(25);
+        }
+        // Do not allow a late response to be mistaken for the next transaction.
+        this.dead = Error('Serial response timeout; disconnect and reconnect before retrying');
+        throw this.dead;
+      }
+      async get(key) {
+        const reply = await this.command('get ' + key);
+        const matches = [...reply.matchAll(/^> ?(.*)$/gm)];
+        if (matches.length !== 1) return null;
+        return matches[0][1].trim();
+      }
+    }
+    async function disconnect() {
+      targetConfig = null;
+      renderEffective();
+      if (link) {
+        const old = link;
+        link = null;
+        role = null;
+        await old.close();
+        log('Serial port closed.');
+      }
+      $('status').textContent = 'Disconnected.';
+    }
+    async function connect(kind) {
+      if (!navigator.serial || !isSecureContext) throw Error(
+        'WebSerial requires desktop Chrome/Edge and HTTPS or localhost');
+      await disconnect();
+      const port = await navigator.serial.requestPort();
+      const next = new SerialCLI(port);
+      link = next;
+      try {
+        await next.open(Number($('baud').value));
+        const version = await next.command('ver');
+        if (kind === 'target' && !/\bMCRS\b/.test(version)) throw Error(
+          'Selected firmware is not MCRS: ' + version);
+        if (kind === 'source' && /\bMCRS\b/.test(version)) throw Error('Source is already MCRS');
+        role = kind;
+        if (kind === 'target') {
+          const config = await next.command('export config all');
+          if (!/^version=1$/m.test(config)) throw Error('Target config export unavailable');
+          targetConfig = config;
+        }
+        renderEffective();
+        log('Connected ' + kind + ': ' + version);
+        $('status').textContent = kind + ' connected: ' + version;
+        return version;
+      } catch (e) {
+        await disconnect();
+        throw e;
+      }
+    }
+
+    function validate(b) {
+      if (!b || b.format !== 'meshcore-to-mcrs' || b.version !== 1 || !b.values || typeof b.values !==
+        'object' || !b.raw || typeof b.raw !== 'object') throw Error('Unrecognised backup format');
+      for (const [k, v] of Object.entries(b.values))
+        if (typeof v !== 'string' || /[\r\n\x00-\x1f\x7f]/.test(v) || v.length > 1024) throw Error(
+          'Invalid backup value: ' + k);
+      for (const key of core)
+        if (typeof b.values[key] !== 'string') throw Error('Missing core setting: ' + key);
+      if (!/^[a-f\d]{128}$/i.test(b.values['prv.key'])) throw Error(
+        'MeshCore private key must contain 128 hex characters (expanded key)');
+      if (!/^[a-f\d]{64}$/i.test(b.values['public.key'])) throw Error('Invalid source public key');
+      return b;
+    }
+
+    function save(announce = true) {
+      if (!backup) return;
+      try {
+        const stored = {
+          ...backup,
+          adminPassword: $('password').value
+        };
+        localStorage.setItem(STORE, JSON.stringify(stored));
+        if (announce) log('Saved plaintext secret backup and admin password in localStorage.');
+      } catch (e) {
+        log('ERROR: Could not save backup in localStorage: ' + e.message);
+      }
+    }
+
+    function plan(b, password) {
+      validate(b);
+      const writes = [],
+        notes = [];
+      const add = (key, value, note = '') => {
+        writes.push({
+          cmd: 'set ' + key + (value ? ' ' + value : ''),
+          key,
+          value
+        });
+        if (note) notes.push(note);
+      };
+      for (const key of ['prv.key', 'name', 'radio', 'tx', 'lat', 'lon', 'repeat', ...shared])
+        if (b.values[key] !== undefined) add(key, b.values[key]);
+      for (const key of ['advert.interval', 'flood.advert.interval']) {
+        let n = Number(b.values[key]);
+        if (!Number.isInteger(n) || n < 0) throw Error('Invalid ' + key);
+        if (key === 'advert.interval' && n > 0 && n < 60) {
+          notes.push('advert.interval: ' + n + ' minutes → 60 minutes (MCRS minimum).');
+          n = 60;
+        }
+        add(key, String(n));
+      }
+      if (b.values.af !== undefined) {
+        const af = Number(b.values.af);
+        if (!Number.isFinite(af) || af < 0 || af > 9) throw Error('Invalid airtime factor');
+        const dc = Math.floor(100 / (1 + af));
+        add('dutycycle', String(dc), 'af ' + af + ' → dutycycle ' + dc +
+          '% (rounded down to MCRS integer percent).');
+      }
+      if (password) {
+        if (password.trim() !== password || /[\x00-\x1f\x7f]/.test(password) || new TextEncoder()
+          .encode(password).length > 64) throw Error(
+          'Password must be 1–64 bytes with no control or surrounding whitespace');
+        add('password', password);
+      } else notes.push(
+        'Admin password required before applying; original MeshCore admin password is not readable.');
+      for (const key of extra)
+        if (b.values[key] !== undefined) notes.push(key + ': archived only' + (key === 'af' ?
+          ' (converted above)' : key === 'dutycycle' ? ' (derived from af above)' :
+          ' — no automatic MCRS mapping') + '.');
+      notes.push(
+        'ACL admins (permission 03) and complete flat region tables are migrated. Other ACL roles, hierarchical/truncated region tables and home-region metadata are archived for manual review.'
+        );
+      const acl = b.raw.acl;
+      if (typeof acl === 'string')
+        for (const line of acl.split('\n')) {
+          const m = line.trim().match(/^([a-f\d]{2}) ([a-f\d]{64})$/i);
+          if (m) {
+            if (parseInt(m[1], 16) === 3) writes.push({
+              cmd: 'set acl ' + m[2] + ' admin',
+              acl: m[2],
+              value: 'admin',
+              key: 'acl ' + m[2]
+            });
+            else notes.push('ACL ' + m[2] + ': permission ' + m[1] + ' skipped (no exact MCRS role).');
+          }
+        }
+      const tree = b.raw.region;
+      if (typeof tree === 'string') {
+        const rows = tree.split('\n').filter(l => l.trim());
+        const parsed = rows.map(l => l.match(/^( *)([a-zA-Z0-9_.*#-]+)(\^)?(?: (F))?$/));
+        if (tree.length < 150 && rows.length && parsed.every(Boolean) && parsed[0][2] === '*' && parsed
+          .every(m => m[1].length <= 1)) {
+          for (const m of parsed) {
+            const name = m[2];
+            if (name !== '*') writes.push({
+              cmd: 'region put ' + name,
+              key: 'region ' + name,
+              region: name,
+              create: true
+            });
+            writes.push({
+              cmd: 'region ' + (m[4] ? 'allowf' : 'denyf') + ' ' + name,
+              key: 'region ' + name,
+              region: name,
+              value: !!m[4]
+            });
+          }
+          const def = String(b.raw['region default'] || '').match(
+            /default scope is (<?[a-zA-Z0-9_.*#-]+>?)/i);
+          if (def) writes.push({
+            cmd: 'region default ' + def[1],
+            key: 'region default',
+            defaultRegion: true,
+            value: def[1]
+          });
+        } else notes.push(
+          'Region table not automatically migrated: hierarchical, possibly truncated, or unrecognised.'
+          );
+      }
+      for (const key of ['acl', 'region', 'region default', 'region home'])
+        if (b.raw[key]) notes.push(key + ' (source):\n' + b.raw[key]);
+      for (const w of writes)
+        if (new TextEncoder().encode(w.cmd).length > 159) throw Error('Command too long for MCRS: ' + w
+          .key);
+      notes.push('Unavailable source fields: ' + (b.unavailable || []).join(', '));
+      return {
+        writes,
+        notes
+      };
+    }
+    // Use app.conf keys so target-only options remain visible without assuming image defaults.
+    function effectiveConfig(b, password, existing) {
+      const values = new Map(),
+        migrated = new Set();
+      if (existing)
+        for (const line of existing.split(/\r?\n/)) {
+          const i = line.indexOf('=');
+          if (i > 0 && !line.startsWith('#')) values.set(line.slice(0, i), line.slice(i + 1));
+        }
+      const escape = value => String(value).replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/\r/g,
+        '\\r');
+      const set = (key, value) => {
+        values.set(key, escape(value));
+        migrated.add(key);
+      };
+      const keys = {
+        'prv.key': 'identity.expanded',
+        name: 'node.name',
+        lat: 'identity.lat',
+        lon: 'identity.lon',
+        password: 'remote.password',
+        tx: 'radio.tx_power_dbm',
+        dutycycle: 'radio.duty_cycle_percent'
+      };
+      const p = plan(b, password);
+      for (const w of p.writes) {
+        if (w.acl) {
+          set('acl.' + w.acl.toLowerCase(), w.value);
+          continue;
+        }
+        if (w.defaultRegion) {
+          if (w.value === '<null>') values.delete('region.default');
+          else set('region.default', w.value.replace(/^#/, ''));
+          continue;
+        }
+        if (w.region) {
+          if (!w.create) set('region.' + w.region.replace(/^#/, ''), w.value);
+          continue;
+        }
+        if (w.key === 'radio') {
+          const [mhz, khz, sf, cr] = w.value.split(',');
+          set('radio.frequency_hz', Math.round(Number(mhz) * 1000000));
+          set('radio.bandwidth_hz', Math.round(Number(khz) * 1000));
+          set('radio.spreading_factor', sf);
+          set('radio.coding_rate', cr);
+          continue;
+        }
+        if (w.key === 'prv.key') values.delete('identity.seed');
+        set(keys[w.key] || w.key, w.key === 'owner.info' ? w.value.replace(/\|/g, '\n') : w.value);
+      }
+      return {
+        values,
+        migrated,
+        notes: p.notes
+      };
+    }
+    const configGroups = [
+      ['Identity & location', [
+        ['public.key', 'Public identity'],
+        ['identity.expanded', 'Private key (expanded)'],
+        ['node.name', 'Repeater name'],
+        ['owner.info', 'Owner information'],
+        ['identity.lat', 'Latitude (degrees)'],
+        ['identity.lon', 'Longitude (degrees)']
+      ]],
+      ['Radio', [
+        ['radio.frequency_hz', 'Frequency (MHz)'],
+        ['radio.bandwidth_hz', 'Bandwidth (kHz)'],
+        ['radio.spreading_factor', 'Spreading factor'],
+        ['radio.coding_rate', 'Coding rate denominator'],
+        ['radio.tx_power_dbm', 'Transmit power (dBm)'],
+        ['radio.duty_cycle_percent', 'Duty cycle (%)']
+      ]],
+      ['Repeating & advertisements', [
+        ['repeat', 'Repeating enabled'],
+        ['tier', 'Repeater tier'],
+        ['advert.interval', 'Local advert interval (minutes)'],
+        ['flood.advert.interval', 'Flood advert interval (hours)'],
+        ['flood.max.unscoped', 'Maximum unscoped flood hops'],
+        ['flood.max.advert', 'Maximum advert flood hops'],
+        ['path.hash.mode', 'Path hash mode'],
+        ['multi.acks', 'Multiple acknowledgements'],
+        ['loop.detect', 'Loop detection']
+      ]],
+      ['Access & regions', [
+        ['remote.password', 'Admin password'],
+        ['acl', 'Access rules'],
+        ['region.*', 'Unscoped flooding allowed'],
+        ['region.default', 'Default region'],
+        ['region.capture', 'Region capture'],
+        ['regions', 'Named regions']
+      ]],
+      ['Network', [
+        ['wifi.ssid', 'Wi-Fi network'],
+        ['wifi.pass', 'Wi-Fi password'],
+        ['wifi.telnet', 'Telnet enabled'],
+        ['ntp', 'NTP server']
+      ]],
+    ];
+
+    function officialSetting(key) {
+      const mappings = {
+        'public.key': 'public.key',
+        'identity.expanded': 'prv.key (128 hex characters)',
+        'identity.seed': '— (MCRS seed format)',
+        'node.name': 'name',
+        'identity.lat': 'lat',
+        'identity.lon': 'lon',
+        'radio.frequency_hz': 'radio · frequency (MHz → Hz)',
+        'radio.bandwidth_hz': 'radio · bandwidth (kHz → Hz)',
+        'radio.spreading_factor': 'radio · spreading factor',
+        'radio.coding_rate': 'radio · coding rate',
+        'radio.tx_power_dbm': 'tx',
+        'radio.duty_cycle_percent': 'af → dutycycle (rounded down)',
+        'remote.password': 'Not exportable; enter in Apply',
+        acl: 'get acl · admin role only',
+        regions: 'region · flat tables only',
+        'region.*': 'region · wildcard flood flag',
+        'region.default': 'region default'
+      };
+      if (Object.hasOwn(mappings, key)) return mappings[key];
+      if (['owner.info', 'repeat', 'advert.interval', 'flood.advert.interval', 'flood.max.unscoped',
+          'flood.max.advert', 'path.hash.mode', 'multi.acks', 'loop.detect'
+        ].includes(key)) return key;
+      if (key.startsWith('acl.')) return 'get acl · permission 03 → admin';
+      if (key.startsWith('region.') && key !== 'region.capture') return 'region · flood flag';
+      return '— (target setting; retained)';
+    }
+
+    function settingCommand(key, writes, loaded) {
+      if (key === 'public.key') return 'Derived from private key; no separate command';
+      if (key === 'acl' || key === 'regions') return 'See individual entries below';
+      const aliases = {
+        'identity.expanded': 'prv.key',
+        'node.name': 'name',
+        'identity.lat': 'lat',
+        'identity.lon': 'lon',
+        'remote.password': 'password',
+        'radio.tx_power_dbm': 'tx',
+        'radio.duty_cycle_percent': 'dutycycle'
+      };
+      const cli = aliases[key] || (key.startsWith('radio.') ? 'radio' : key);
+      const matching = writes.filter(w => key.startsWith('acl.') ? w.acl?.toLowerCase() === key.slice(4)
+        .toLowerCase() : key === 'region.default' ? w.defaultRegion : key.startsWith('region.') ? w
+        .region?.replace(/^#/, '') === key.slice(7) : w.key === cli);
+      if (matching.length) return matching.map(w => secretKey(w.key) && !$('secrets').checked ? 'set ' +
+        w.key + ' <hidden>' : w.cmd).join('\n');
+      if (loaded) return key === 'remote.password' ? 'Enter password in Apply to plan command' :
+        'No command — retained';
+      if (key === 'remote.password') return 'set password <password from Apply>';
+      if (key === 'region.default') return 'region default <region>';
+      if (key === 'region.*') return 'region allowf * / region denyf *';
+      if (key.startsWith('region.') || key.startsWith('acl.') || key === 'identity.seed' || ['tier',
+          'ntp'
+        ].includes(key) || key.startsWith('wifi.') || key.startsWith('mqtt.'))
+      return 'No command — retained';
+      return cli === 'radio' ? 'set radio <MHz>,<kHz>,<SF>,<CR>' : 'set ' + cli + ' <value>';
+    }
+
+    function readValue(key, result) {
+      const aliases = {
+        'identity.expanded': 'prv.key',
+        'node.name': 'name',
+        'identity.lat': 'lat',
+        'identity.lon': 'lon',
+        'radio.tx_power_dbm': 'tx'
+      };
+      const source = backup?.values || {},
+        sourceKey = aliases[key] || key;
+      if (Object.hasOwn(source, sourceKey)) return source[sourceKey];
+      if (['radio.frequency_hz', 'radio.bandwidth_hz', 'radio.spreading_factor', 'radio.coding_rate']
+        .includes(key) && source.radio) return source.radio.split(',')[['radio.frequency_hz',
+        'radio.bandwidth_hz', 'radio.spreading_factor', 'radio.coding_rate'
+      ].indexOf(key)];
+      if (key === 'radio.duty_cycle_percent') {
+        if (source.dutycycle !== undefined) return source.dutycycle;
+        if (source.af !== undefined) return 'Airtime factor: ' + source.af;
+      }
+      if (key === 'remote.password') return 'Not exportable — enter in Apply';
+      if (key === 'acl' && backup?.raw.acl) return backup.raw.acl;
+      if (key === 'regions' && backup?.raw.region) return backup.raw.region;
+      if (key === 'region.default' && backup?.raw['region default']) return backup.raw[
+      'region default'];
+      if (key.startsWith('acl.') && backup?.raw.acl) {
+        const line = backup.raw.acl.split('\n').find(l => l.trim().toLowerCase().endsWith(key.slice(4)
+          .toLowerCase()));
+        if (line) return line.trim();
+      }
+      if (key.startsWith('region.') && backup?.raw.region) {
+        const name = key.slice(7);
+        const line = backup.raw.region.split('\n').find(l => l.trim().split(/[ ^]/)[0].replace(/^#/,
+          '') === name);
+        if (line) return line.trim();
+      }
+      if (targetConfig && result.values.has(key) && !result.migrated.has(key)) return result.values.get(
+        key) + ' (target)';
+      return backup ? 'Not available in source' : 'Not read yet';
+    }
+
+    function oldCommand(key) {
+      const mapping = {
+        'identity.expanded': 'prv.key',
+        'public.key': 'public.key',
+        'node.name': 'name',
+        'identity.lat': 'lat',
+        'identity.lon': 'lon',
+        'radio.tx_power_dbm': 'tx',
+        'radio.duty_cycle_percent': 'af',
+        acl: 'acl'
+      };
+      if (key === 'remote.password') return 'Not exportable';
+      if (key === 'regions' || key === 'region.*') return 'region';
+      if (key === 'region.default') return 'region default';
+      if (key.startsWith('acl.')) return 'get acl';
+      if (key.startsWith('region.') && key !== 'region.capture') return 'region get ' + key.slice(7);
+      if (Object.hasOwn(mapping, key)) return 'get ' + mapping[key];
+      if (key.startsWith('radio.')) return 'get radio';
+      if (officialSetting(key).startsWith('—')) return 'No migrated source setting';
+      return 'get ' + key;
+    }
+
+    function renderEffective() {
+      $('effective').replaceChildren();
+      $('effective-notes').replaceChildren();
+      $('effective-table').hidden = false;
+      $('effective-review').hidden = true;
+      $('effective-password').hidden = !!$('password').value;
+      let result = {
+        values: new Map(),
+        migrated: new Set(),
+        notes: []
+      };
+      if (targetConfig)
+        for (const line of targetConfig.split(/\r?\n/)) {
+          const i = line.indexOf('=');
+          if (i > 0 && !line.startsWith('#')) result.values.set(line.slice(0, i), line.slice(i + 1));
+        }
+      let error = null,
+        writes = [];
+      if (backup) try {
+        writes = plan(backup, $('password').value).writes;
+        result = effectiveConfig(backup, $('password').value, targetConfig);
+        result.values.set('public.key', backup.values['public.key']);
+      } catch (e) {
+        error = e;
+      }
+      $('effective-status').textContent = error ? 'Preview unavailable: ' + error.message : !backup ?
+        'Read MeshCore or load a backup to populate migration values. Target-only values appear when MCRS is connected.' :
+        targetConfig ? 'Source readings loaded. Retained target readings are labelled “(target)”.' :
+        'Source readings loaded. Connect MCRS in Apply to also read target-only settings.';
+      if (targetConfig) {
+        const entries = [...result.values.keys()];
+        result.values.set('acl', entries.filter(k => k.startsWith('acl.')).length + ' access rule(s)');
+        result.values.set('regions', entries.filter(k => k.startsWith('region.') && !['region.*',
+          'region.default', 'region.capture'
+        ].includes(k)).length + ' named region(s)');
+        if (!result.values.has('region.default')) result.values.set('region.default', '<null>');
+      }
+      const secret = k => /^(identity\.(seed|expanded)|remote\.password|wifi\.pass)$/.test(k) ||
+        /^mqtt\.\d+\.password$/.test(k);
+      const rendered = new Set();
+
+      function row(key, title) {
+        rendered.add(key);
+        const value = readValue(key, result);
+        const row = document.createElement('tr'),
+          label = document.createElement('th'),
+          cli = document.createElement('td'),
+          old = document.createElement('div'),
+          next = document.createElement('div'),
+          cell = document.createElement('td');
+        label.scope = 'row';
+        label.textContent = title;
+        cli.className = 'config-value';
+        if (officialSetting(key).startsWith('—')) {
+          const pill = document.createElement('span');
+          pill.className = 'config-badge pending';
+          pill.textContent = 'Not migrated';
+          cli.append(pill);
+        } else {
+          if (oldCommand(key) === 'Not exportable') {
+            old.className = 'config-badge archived';
+            old.textContent = 'Not exportable';
+          } else old.textContent = oldCommand(key);
+          next.textContent = error ? 'Command preview unavailable' : settingCommand(key, writes, !!
+            backup);
+          const arrow = document.createElement('span');
+          arrow.className = 'cli-arrow';
+          arrow.textContent = '→';
+          arrow.setAttribute('aria-label', 'maps to');
+          cli.className += ' cli-mapping';
+          cli.append(old, arrow, next);
+        }
+        const known = backup && ['Not available in source', 'Not exportable — enter in Apply'].every(
+          v => value !== v) || targetConfig && result.values.has(key);
+        const masked = known && secret(key) && !$('secrets').checked;
+        cell.className = 'config-value' + (masked ? ' masked' : '');
+        cell.textContent = masked ? 'Hidden' : value === '' ? '(empty)' : value;
+        row.append(label, cli, cell);
+        $('effective').append(row);
+      }
+      for (const [group, fields] of configGroups) {
+        const tr = document.createElement('tr'),
+          th = document.createElement('th');
+        tr.className = 'config-group';
+        th.colSpan = 3;
+        th.scope = 'rowgroup';
+        th.textContent = group;
+        tr.append(th);
+        $('effective').append(tr);
+        for (const [key, title] of fields) row(key, title);
+        // Show every individual ACL and region entry, including retained target entries.
+        if (group === 'Access & regions')
+          for (const key of [...result.values.keys()].sort())
+            if (!rendered.has(key) && (key.startsWith('acl.') || key.startsWith('region.'))) row(key,
+              key.startsWith('acl.') ? 'Access rule' : 'Region');
+      }
+      for (const key of [...result.values.keys()].sort())
+        if (key !== 'version' && !key.startsWith('mqtt.') && !rendered.has(key)) row(key, key);
+      for (const note of result.notes.filter(n => !n.includes(' (source):\n'))) {
+        const li = document.createElement('li');
+        li.textContent = note;
+        $('effective-notes').append(li);
+      }
+      $('effective-review').hidden = !result.notes.length;
+    }
+
+    function renderPlan() {
+      try {
+        if (!backup) {
+          renderEffective();
+          state();
+          return;
+        }
+        const p = plan(backup, $('password').value);
+        $('plan').textContent = p.writes.map(w => secretKey(w.key) && !$('secrets').checked ? 'set ' + w
+          .key + ' <hidden>' : w.cmd).join('\n') + '\n\n' + p.notes.join('\n');
+      } catch (e) {
+        $('plan').textContent = 'Cannot migrate: ' + e.message;
+      }
+      renderEffective();
+      state();
+    }
+    async function extract() {
+      const version = await connect('source');
+      applied = false;
+      const b = {
+        format: 'meshcore-to-mcrs',
+        version: 1,
+        created: new Date().toISOString(),
+        firmware: version,
+        values: {},
+        raw: {},
+        unavailable: []
+      };
+      for (const key of [...core, ...shared, ...extra]) {
+        const value = await link.get(key);
+        if (value === null) {
+          b.unavailable.push(key);
+          log('UNAVAILABLE ' + key + '; not migrated.');
+        } else b.values[key] = value;
+      }
+      for (const command of ['get acl', 'region', 'region default', 'region home']) b.raw[command ===
+        'get acl' ? 'acl' : command] = await link.command(command);
+      backup = validate(b);
+      save();
+      renderPlan();
+      log('Extraction complete. Source was read only. Download the secret backup before flashing.');
+      $('status').textContent = 'Source extracted; download a backup.';
+    }
+
+    function equal(key, a, b) {
+      if (['prv.key', 'public.key'].includes(key)) return a.toLowerCase() === b.toLowerCase();
+      if (key === 'radio') {
+        const x = a.split(',').map(Number),
+          y = b.split(',').map(Number);
+        return x.length === 4 && y.length === 4 && x.every((n, i) => Number.isFinite(n) && Math.abs(n -
+          y[i]) < (i === 0 ? .0011 : i === 1 ? .1 : .001));
+      }
+      if (['tx', 'lat', 'lon', 'advert.interval', 'flood.advert.interval', 'dutycycle', 'multi.acks',
+          'path.hash.mode', 'flood.max.unscoped', 'flood.max.advert'
+        ].includes(key)) return Number.isFinite(Number(a)) && Math.abs(Number(a) - Number(b)) <
+      .0000011;
+      return a === b;
+    }
+    async function apply() {
+      applied = false;
+      if (role !== 'target') throw Error('Connect MCRS first');
+      if (!$('password').value) throw Error('Supply an admin password before applying');
+      const p = plan(backup, $('password').value);
+      log('Preflight: exporting target config including secrets for an in-memory recovery snapshot.');
+      const before = await link.command('export config all');
+      if (!/version=1/.test(before)) throw Error('Target config export unavailable');
+      targetConfig = before;
+      renderEffective();
+      log('TARGET CONFIG BEFORE WRITES:\n' + before, true);
+      // Download a recovery copy before the first mutation; it is never overwritten by source data.
+      download('mcrs-before-migration.conf', before);
+      log('Requested download of original target app.conf. Keep it for manual recovery.');
+      for (const w of p.writes) {
+        const result = await link.command(w.cmd);
+        if (!/^(?:OK\b|Default scope is now )/im.test(result) ||
+          /^(?:Error|ERR|CLI: denied|Unknown config)\b/im.test(result)) throw Error(
+          'Write failed for ' + w.key + '; earlier writes remain saved');
+        if (w.key === 'prv.key') {
+          const pub = result.match(/New pubkey: ([a-f\d]{64})/i);
+          if (!pub || pub[1].toLowerCase() !== backup.values['public.key'].toLowerCase()) throw Error(
+            'Imported private key derives a different public identity; stop and inspect backup');
+        }
+        if (w.create) {
+          log('CREATED ' + w.region);
+          continue;
+        }
+        let read, match;
+        if (w.acl) {
+          read = await link.command('export config all');
+          match = read.split(/\r?\n/).some(l => l.toLowerCase() === 'acl.' + w.acl.toLowerCase() +
+            '=admin');
+        } else if (w.region) {
+          read = await link.command('region get ' + w.region);
+          const m = read.trim().match(/^(\S+)(?: (F))?$/);
+          match = !!m && !!m[2] === w.value;
+        } else if (w.defaultRegion) {
+          read = await link.command('region default');
+          match = read.trim().toLowerCase() === ('Default scope is ' + w.value).toLowerCase();
+        } else {
+          read = await link.get(w.key);
+          match = read !== null && equal(w.key, read, w.value);
+        }
+        if (!match) throw Error('Readback mismatch for ' + w.key + '; earlier writes remain saved');
+        log('VERIFIED stored ' + w.key + (secretKey(w.key) ? ' (secret)' : w.acl ? ' = admin' :
+          ' = ' + read));
+      }
+      applied = true;
+      log(
+        'All planned settings saved and read back. Identity is staged; reboot, reconnect and verify the active public key.');
+      $('status').textContent = 'Stored settings verified. Reboot required.';
+    }
+
+    function download(name, text) {
+      const url = URL.createObjectURL(new Blob([text], {
+        type: 'text/plain'
+      }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+    $('source').onclick = () => run(extract);
+    $('target').onclick = () => run(() => connect('target'));
+    $('apply').onclick = () => run(apply);
+    $('verify').onclick = () => run(async () => {
+      const key = await link.get('public.key');
+      if (!key || !equal('public.key', key, backup.values['public.key'])) throw Error(
+        'Active identity does not match the source; reboot and reconnect after applying');
+      log('VERIFIED active public key matches source: ' + key);
+      $('status').textContent = 'Active source identity verified.';
+    });
+    $('reboot').onclick = () => run(async () => {
+      log('TX reboot (device may immediately disconnect)');
+      await link.writer.write(new TextEncoder().encode('reboot\r'));
+      await pause(300);
+      await disconnect();
+      log('Reboot requested. Reconnect MCRS, then verify identity.');
+    });
+    $('download').onclick = () => run(async () => {
+      const b = structuredClone(backup);
+      if ($('password').value) b.adminPassword = $('password').value;
+      download('meshcore-secret-backup.json', JSON.stringify(b, null, 2));
+      log('Requested secret JSON backup download.');
+    });
+    $('file').onchange = () => run(async () => {
+      const file = $('file').files[0];
+      if (!file) return;
+      if (file.size > 2000000) throw Error('Backup exceeds 2 MB');
+      const b = validate(JSON.parse(await file.text()));
+      backup = b;
+      applied = false;
+      if (typeof b.adminPassword === 'string') $('password').value = b.adminPassword;
+      save();
+      renderPlan();
+      log('Loaded secret backup ' + file.name);
+    });
+    $('secrets').onchange = () => {
+      renderLog();
+      renderPlan();
+    };
+    $('password').oninput = () => {
+      save(false);
+      renderPlan();
+    };
+    $('forget').onclick = () => run(async () => {
+      localStorage.removeItem(STORE);
+      log('Removed localStorage backup. Downloaded files and in-memory data remain.');
+    });
+    $('clear').onclick = () => {
+      events = [];
+      renderLog();
+    };
+    try {
+      const saved = localStorage.getItem(STORE);
+      if (saved) {
+        backup = validate(JSON.parse(saved));
+        if (typeof backup.adminPassword === 'string') $('password').value = backup.adminPassword;
+        renderPlan();
+        log('Restored plaintext secret backup from localStorage.');
+      }
+    } catch (e) {
+      log('Stored backup could not be restored: ' + e.message);
+    }
+    renderEffective();
+    state();
+  </script>
+ </body>
+</html>
