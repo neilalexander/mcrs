@@ -312,7 +312,7 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
         privilege: remote::RemotePrivilege,
         last_timestamp: u32,
         now_ms: u64,
-        reply_path: &mcrs_protocol::Path,
+        reply_route: &remote::ReplyRoute,
     ) -> bool {
         self.remote_logins.lock().await.authenticate(
             public_key,
@@ -320,8 +320,31 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
             privilege,
             last_timestamp,
             now_ms,
-            reply_path,
+            reply_route,
         )
+    }
+
+    pub async fn remote_reply_route_for(
+        &self,
+        public_key: &[u8; mcrs_protocol::PUB_KEY_SIZE],
+        now_ms: u64,
+    ) -> Option<remote::ReplyRoute> {
+        self.remote_logins
+            .lock()
+            .await
+            .reply_route_for(public_key, now_ms)
+    }
+
+    pub async fn learn_remote_reply_path(
+        &self,
+        public_key: &[u8; mcrs_protocol::PUB_KEY_SIZE],
+        path: &mcrs_protocol::Path,
+        now_ms: u64,
+    ) -> bool {
+        self.remote_logins
+            .lock()
+            .await
+            .learn_reply_path(public_key, path, now_ms)
     }
 
     pub async fn remote_privilege_for(

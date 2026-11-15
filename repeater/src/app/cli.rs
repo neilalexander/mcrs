@@ -3,6 +3,7 @@ use crate::{
         AppContext,
         config::{Bandwidth, CodingRate, RadioConfig, SpreadingFactor},
         crypto::{encode_cli_text_response, encode_login_response},
+        remote::ReplyRoute,
     },
     platform::{OtaStatus, Platform, Storage},
 };
@@ -192,34 +193,42 @@ pub async fn handle_remote_packet<P: Platform, S: Storage>(
     packet: &Packet,
     context: &AppContext<P, S>,
 ) -> Option<alloc::vec::Vec<u8>> {
-    if let Payload::AnonymousRequest(payload) = &packet.payload {
-        let reply_path = if packet.route_type.is_flood() {
-            packet.normal_path()?.reversed()
-        } else if packet.route_type.is_direct()
-            && packet_targets_this_node(packet, &context.node_hash().await)
-        {
-            mcrs_protocol::Path::empty()
-        } else {
-            return None;
-        };
-        return handle_anonymous_request(packet, payload, reply_path, context).await;
+    if !packet.route_type.is_flood()
+        && !(packet.route_type.is_direct()
+            && packet_targets_this_node(packet, &context.node_hash().await))
+    {
+        return None;
     }
 
     match &packet.payload {
-        Payload::Request(payload)
-            if packet.route_type.is_flood()
-                || (packet.route_type.is_direct()
-                    && packet_targets_this_node(packet, &context.node_hash().await)) =>
-        {
-            handle_authenticated_request(packet, payload, context).await
+        Payload::AnonymousRequest(payload) => {
+            let reply_route = if packet.route_type.is_flood() {
+                ReplyRoute::Direct(packet.normal_path()?.reversed())
+            } else {
+                context
+                    .remote_reply_route_for(&payload.sender_pubkey, context.platform.now_millis())
+                    .await
+                    .unwrap_or(ReplyRoute::Flood(packet.normal_path()?.hash_size()))
+            };
+            handle_anonymous_request(packet, payload, reply_route, context).await
         }
-        Payload::TextMessage(payload)
-            if packet.route_type.is_flood()
-                || (packet.route_type.is_direct()
-                    && packet_targets_this_node(packet, &context.node_hash().await)) =>
-        {
-            handle_authenticated_text_message(payload, context).await
+        Payload::Path(payload) => {
+            let now_ms = context.platform.now_millis();
+            let decrypted = decrypt_authenticated_payload(payload, context, now_ms).await?;
+            let plaintext = mcrs_protocol::PathPlaintext::decode(&decrypted.plaintext).ok()?;
+            if context
+                .learn_remote_reply_path(&decrypted.sender_pubkey, &plaintext.path, now_ms)
+                .await
+            {
+                debug!(
+                    "Remote return path learned: {} hops",
+                    plaintext.path.hop_count()
+                );
+            }
+            None
         }
+        Payload::Request(payload) => handle_authenticated_request(packet, payload, context).await,
+        Payload::TextMessage(payload) => handle_authenticated_text_message(payload, context).await,
         _ => None,
     }
 }
@@ -227,7 +236,7 @@ pub async fn handle_remote_packet<P: Platform, S: Storage>(
 async fn handle_anonymous_request<P: Platform, S: Storage>(
     packet: &Packet,
     payload: &mcrs_protocol::AnonymousRequestPayload,
-    reply_path: mcrs_protocol::Path,
+    reply_route: ReplyRoute,
     context: &AppContext<P, S>,
 ) -> Option<alloc::vec::Vec<u8>> {
     let (decrypted, responder_public_key) = context
@@ -248,19 +257,19 @@ async fn handle_anonymous_request<P: Platform, S: Storage>(
     let body = plaintext_body(&decrypted.plaintext)?;
 
     if let Some(response) = handle_anonymous_subrequest(body, timestamp, context).await {
-        let reply_path = if packet.route_type.is_direct() {
+        let reply_route = if packet.route_type.is_direct() {
             let (&path_length, path_bytes) = body.get(1..)?.split_first()?;
             let (path, _) = mcrs_protocol::Path::decode_wire(path_length, path_bytes).ok()?;
-            path
+            ReplyRoute::Direct(path)
         } else {
-            reply_path
+            reply_route
         };
         return super::crypto::encode_response_plaintext(
             &decrypted.shared_secret,
             &decrypted.sender_pubkey,
             &responder_public_key,
             &response,
-            reply_path,
+            reply_route,
         );
     }
 
@@ -283,7 +292,7 @@ async fn handle_anonymous_request<P: Platform, S: Storage>(
                 privilege,
                 timestamp,
                 now_ms,
-                &reply_path,
+                &reply_route,
             )
             .await
         {
@@ -303,7 +312,7 @@ async fn handle_anonymous_request<P: Platform, S: Storage>(
             &decrypted.sender_pubkey,
             &responder_public_key,
             acl_permissions_for(privilege),
-            reply_path,
+            reply_route,
         )
         .await;
     }
@@ -337,7 +346,7 @@ async fn handle_anonymous_request<P: Platform, S: Storage>(
         &responder_public_key,
         timestamp,
         response.text,
-        reply_path,
+        reply_route,
     )?;
     context.set_remote_reply_action(response.post_reply);
     Some(reply)
@@ -348,24 +357,9 @@ async fn handle_authenticated_text_message<P: Platform, S: Storage>(
     context: &AppContext<P, S>,
 ) -> Option<alloc::vec::Vec<u8>> {
     let now_ms = context.platform.now_millis();
-    let sessions = context
-        .remote_sessions_matching_source_hash(payload.source_hash, now_ms)
-        .await;
-    let (decrypted, responder_public_key) = context
-        .with_identity(|identity| {
-            let decrypted =
-                super::crypto::decrypt_authenticated_direct_payload(payload, identity, &sessions)?;
-            Some((decrypted, *identity.public_key()))
-        })
-        .await?;
-    if context
-        .with_config(|config| config.acl().role(&decrypted.sender_pubkey))
-        .await
-        == Some(super::acl::Role::Deny)
-    {
-        return None;
-    }
-    let plaintext = TextMessagePlaintext::decode(&decrypted.plaintext).ok()?;
+    let decrypted = decrypt_authenticated_payload(payload, context, now_ms).await?;
+    let responder_public_key = context.public_key().await;
+    let plaintext = TextMessagePlaintext::decode(decrypted.unpadded()).ok()?;
 
     if plaintext.text_type != TextType::CliData {
         return None;
@@ -404,7 +398,7 @@ async fn handle_authenticated_text_message<P: Platform, S: Storage>(
         &responder_public_key,
         plaintext.timestamp,
         response.text,
-        decrypted.reply_path,
+        decrypted.reply_route,
     )?;
     context.set_remote_reply_action(response.post_reply);
     Some(reply)
@@ -438,7 +432,7 @@ async fn handle_authenticated_request<P: Platform, S: Storage>(
     };
     let now_ms = context.platform.now_millis();
     let decrypted = decrypt_authenticated_payload(payload, context, now_ms).await?;
-    let plaintext = RequestPlaintext::decode(&decrypted.plaintext).ok()?;
+    let plaintext = RequestPlaintext::decode(decrypted.unpadded()).ok()?;
     let responder_public_key = context.public_key().await;
 
     if !context
@@ -476,7 +470,7 @@ async fn handle_authenticated_request<P: Platform, S: Storage>(
         &decrypted.sender_pubkey,
         &responder_public_key,
         &response_body,
-        decrypted.reply_path,
+        decrypted.reply_route,
     )
 }
 
@@ -1961,7 +1955,7 @@ fn encode_remote_cli_reply<P: Platform, S: Storage>(
     responder_public_key: &[u8; 32],
     request_timestamp: u32,
     mut output: String,
-    reply_path: mcrs_protocol::Path,
+    reply_route: ReplyRoute,
 ) -> Option<alloc::vec::Vec<u8>> {
     truncate_to_remote_reply_len(&mut output);
     encode_cli_text_response(
@@ -1971,7 +1965,7 @@ fn encode_remote_cli_reply<P: Platform, S: Storage>(
         responder_public_key,
         request_timestamp,
         output.as_bytes(),
-        reply_path,
+        reply_route,
     )
 }
 

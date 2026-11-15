@@ -1,4 +1,4 @@
-use super::identity::Identity;
+use super::{identity::Identity, remote::ReplyRoute};
 use crate::{Platform, app::AppContext, platform::Storage};
 use aes::{
     Aes128,
@@ -25,8 +25,20 @@ pub struct AuthenticatedPlaintext {
     pub sender_pubkey: [u8; 32],
     pub shared_secret: [u8; 32],
     pub privilege: super::remote::RemotePrivilege,
-    pub reply_path: Path,
+    pub reply_route: ReplyRoute,
     pub plaintext: Vec<u8>,
+}
+
+impl AuthenticatedPlaintext {
+    /// Text and legacy requests omit AES zero padding; PATH must retain binary zeroes.
+    pub fn unpadded(&self) -> &[u8] {
+        let len = self
+            .plaintext
+            .iter()
+            .rposition(|byte| *byte != 0)
+            .map_or(0, |i| i + 1);
+        &self.plaintext[..len]
+    }
 }
 
 pub fn decrypt_anonymous_request(
@@ -45,12 +57,7 @@ pub fn decrypt_anonymous_request(
         return None;
     }
 
-    let mut plaintext = payload.ciphertext.clone();
-    let cipher = Aes128::new_from_slice(&shared_secret[..16]).ok()?;
-
-    for block in plaintext.as_chunks_mut::<16>().0 {
-        cipher.decrypt_block(block.into());
-    }
+    let plaintext = decrypt_payload(&shared_secret, &payload.ciphertext)?;
 
     // Keep binary fields intact: a reply path can end in zero bytes.
     // The caller handles padding after identifying the request type.
@@ -66,13 +73,11 @@ pub fn decrypt_authenticated_direct_payload(
     identity: &Identity,
     sessions: &[Option<super::remote::RemoteSession>],
 ) -> Option<AuthenticatedPlaintext> {
-    if payload.destination_hash != identity.public_key()[0] {
+    if payload.destination_hash != identity.public_key()[0]
+        || !payload.has_complete_ciphertext_blocks()
+    {
         return None;
     }
-    if !payload.has_complete_ciphertext_blocks() {
-        return None;
-    }
-
     for session in sessions.iter().flatten() {
         if payload.source_hash != session.public_key[0] {
             continue;
@@ -86,7 +91,7 @@ pub fn decrypt_authenticated_direct_payload(
             sender_pubkey: session.public_key,
             shared_secret: session.shared_secret,
             privilege: session.privilege,
-            reply_path: session.reply_path.clone(),
+            reply_route: session.reply_route.clone(),
             plaintext,
         });
     }
@@ -101,7 +106,7 @@ pub async fn encode_login_response<P: Platform, S: Storage>(
     requester_public_key: &[u8; 32],
     responder_public_key: &[u8; 32],
     acl_permissions: u8,
-    reply_path: Path,
+    reply_route: ReplyRoute,
 ) -> Option<Vec<u8>> {
     let response = RepeaterLoginResponsePlaintext {
         server_timestamp: context.platform.now_seconds(),
@@ -144,7 +149,7 @@ pub async fn encode_login_response<P: Platform, S: Storage>(
         requester_public_key,
         responder_public_key,
         &response.encode(),
-        reply_path,
+        reply_route,
     )
 }
 
@@ -155,7 +160,7 @@ pub fn encode_cli_text_response<P: Platform, S: Storage>(
     responder_public_key: &[u8; 32],
     request_timestamp: u32,
     message: &[u8],
-    reply_path: Path,
+    reply_route: ReplyRoute,
 ) -> Option<Vec<u8>> {
     let mut timestamp: u32 = context.platform.now_seconds();
     if timestamp == request_timestamp {
@@ -177,7 +182,7 @@ pub fn encode_cli_text_response<P: Platform, S: Storage>(
         requester_public_key,
         responder_public_key,
         &plaintext,
-        reply_path,
+        reply_route,
     )
 }
 
@@ -186,7 +191,7 @@ pub fn encode_response_plaintext(
     requester_public_key: &[u8; 32],
     responder_public_key: &[u8; 32],
     plaintext: &[u8],
-    reply_path: Path,
+    reply_route: ReplyRoute,
 ) -> Option<Vec<u8>> {
     encode_direct_payload(
         PayloadKindForEncoding::Response,
@@ -194,7 +199,7 @@ pub fn encode_response_plaintext(
         requester_public_key,
         responder_public_key,
         plaintext,
-        reply_path,
+        reply_route,
     )
 }
 
@@ -239,7 +244,7 @@ fn encode_direct_payload(
     requester_public_key: &[u8; 32],
     responder_public_key: &[u8; 32],
     plaintext: &[u8],
-    reply_path: Path,
+    reply_route: ReplyRoute,
 ) -> Option<Vec<u8>> {
     let (mac, ciphertext) = encrypt_payload(shared_secret, plaintext)?;
     let payload = DirectEncryptedPayload {
@@ -249,10 +254,14 @@ fn encode_direct_payload(
         ciphertext,
     };
 
+    let (route_type, path) = match reply_route {
+        ReplyRoute::Direct(path) => (RouteType::Direct, path),
+        ReplyRoute::Flood(hash_size) => (RouteType::Flood, Path::new(hash_size, Vec::new()).ok()?),
+    };
     Packet {
-        route_type: RouteType::Direct,
+        route_type,
         transport_codes: None,
-        path: RoutePath::Normal(reply_path),
+        path: RoutePath::Normal(path),
         payload: match kind {
             PayloadKindForEncoding::Response => Payload::Response(payload),
             PayloadKindForEncoding::TextMessage => Payload::TextMessage(payload),
@@ -302,10 +311,6 @@ fn decrypt_payload(shared_secret: &[u8; 32], ciphertext: &[u8]) -> Option<Vec<u8
         cipher.decrypt_block(block.into());
     }
 
-    while plaintext.last().copied() == Some(0) {
-        plaintext.pop();
-    }
-
     Some(plaintext)
 }
 
@@ -331,6 +336,239 @@ mod tests {
     use alloc::vec;
 
     use super::{super::identity::PrivateKey, *};
+
+    struct TestPlatform;
+    struct TestDelay;
+
+    impl embedded_hal_async::delay::DelayNs for TestDelay {
+        async fn delay_ns(&mut self, _: u32) {}
+    }
+
+    impl Platform for TestPlatform {
+        type Delay = TestDelay;
+        fn model(&self) -> &'static str {
+            "test"
+        }
+        fn memory_profile(&self) -> crate::memory::MemoryProfile {
+            crate::memory::MemoryProfile::new(4096, 1, 1, 1, 1)
+        }
+        fn identity_seed(&self) -> [u8; 32] {
+            [1; 32]
+        }
+        fn delay(&self) -> TestDelay {
+            TestDelay
+        }
+        fn now_millis(&self) -> u64 {
+            100
+        }
+        fn now_seconds(&self) -> u32 {
+            100
+        }
+        fn set_wall_clock_if_forward(&self, _: u32) -> bool {
+            false
+        }
+        fn random_u32(&self) -> u32 {
+            1
+        }
+        fn reboot(&self) -> ! {
+            panic!("unexpected reboot")
+        }
+        fn start_ota(&self) {}
+        fn stop_ota(&self) {}
+        fn ota_status(&self) -> crate::platform::OtaStatus {
+            crate::platform::OtaStatus::Stopped
+        }
+    }
+
+    fn ready<T>(future: impl core::future::Future<Output = T>) -> T {
+        use core::task::{Context, Poll, Waker};
+        match core::pin::pin!(future)
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+        {
+            Poll::Ready(value) => value,
+            Poll::Pending => panic!("uncontended test context should not suspend"),
+        }
+    }
+
+    fn login_request(
+        server: &Identity,
+        sender: &Identity,
+        route_type: RouteType,
+        path: Path,
+        timestamp: u32,
+    ) -> Packet {
+        let secret = sender
+            .shared_secret_with_ed25519_public(server.public_key())
+            .unwrap();
+        let mut plaintext = timestamp.to_le_bytes().to_vec();
+        plaintext.extend_from_slice(b"meshcore");
+        let (mac, ciphertext) = encrypt_payload(&secret, &plaintext).unwrap();
+        Packet {
+            route_type,
+            transport_codes: None,
+            path: RoutePath::Normal(path),
+            payload: Payload::AnonymousRequest(AnonymousRequestPayload {
+                destination_hash: server.public_key()[0],
+                sender_pubkey: *sender.public_key(),
+                mac,
+                ciphertext,
+            }),
+        }
+    }
+
+    #[test]
+    fn direct_login_without_a_return_route_floods_instead_of_replying_zero_hop() {
+        for hash_size in [
+            mcrs_protocol::HashSize::One,
+            mcrs_protocol::HashSize::Two,
+            mcrs_protocol::HashSize::Three,
+        ] {
+            let config = super::super::config::AppConfig::generated_defaults([1; 32]);
+            let sender = Identity::from_private_key(PrivateKey::Seed([2; 32]));
+            // All forward hops have already been consumed on arrival.
+            let request = login_request(
+                config.identity(),
+                &sender,
+                RouteType::Direct,
+                Path::new(hash_size, vec![]).unwrap(),
+                10,
+            );
+            let context = AppContext::new(TestPlatform, config, crate::platform::NoStorage);
+            let reply = ready(super::super::cli::handle_remote_packet(&request, &context)).unwrap();
+            let reply = Packet::decode(&reply).unwrap();
+            assert_eq!(reply.route_type, RouteType::Flood);
+            assert_eq!(reply.normal_path().unwrap().hash_size(), hash_size);
+            assert!(matches!(reply.payload, Payload::Response(_)));
+            assert_eq!(
+                ready(context.remote_reply_route_for(sender.public_key(), 100)),
+                Some(ReplyRoute::Flood(hash_size))
+            );
+        }
+    }
+
+    #[test]
+    fn flood_login_learns_authenticated_return_paths_and_preserves_them_on_direct_relogin() {
+        for hash_size in [
+            mcrs_protocol::HashSize::One,
+            mcrs_protocol::HashSize::Two,
+            mcrs_protocol::HashSize::Three,
+        ] {
+            let config = super::super::config::AppConfig::generated_defaults([1; 32]);
+            let sender = Identity::from_private_key(PrivateKey::Seed([2; 32]));
+            let server = Identity::from_private_key(PrivateKey::Seed([1; 32]));
+            let secret = sender
+                .shared_secret_with_ed25519_public(server.public_key())
+                .unwrap();
+            let forward = Path::new(hash_size, vec![0x11; hash_size.size() * 2]).unwrap();
+            let request = login_request(&server, &sender, RouteType::Flood, forward.clone(), 10);
+            let context = AppContext::new(TestPlatform, config, crate::platform::NoStorage);
+            let reply = ready(super::super::cli::handle_remote_packet(&request, &context)).unwrap();
+            let reply = Packet::decode(&reply).unwrap();
+            assert_eq!(reply.route_type, RouteType::Flood);
+            assert_eq!(reply.normal_path().unwrap().hash_size(), hash_size);
+            let Payload::Path(payload) = reply.payload else {
+                panic!("expected path return")
+            };
+            let plaintext = decrypt_payload(&secret, &payload.ciphertext).unwrap();
+            let wrapped = PathPlaintext::decode(&plaintext).unwrap();
+            assert_eq!(wrapped.path, forward);
+            assert_eq!(wrapped.extra_type, Some(PayloadKind::Response));
+
+            // The companion supplies its actual return route, which may differ from
+            // the reversed incoming path. Keep binary zero bytes and the legacy
+            // zero extra-type marker; trimming AES padding before parsing corrupts it.
+            let mut bytes = vec![0x77; hash_size.size() * 2];
+            *bytes.last_mut().unwrap() = 0;
+            let return_path = Path::new(hash_size, bytes).unwrap();
+            let mut plaintext = vec![return_path.encoded_length_byte().unwrap()];
+            plaintext.extend_from_slice(return_path.bytes());
+            plaintext.push(0);
+            let (mac, ciphertext) = encrypt_payload(&secret, &plaintext).unwrap();
+            let mut path_packet = Packet {
+                route_type: RouteType::Direct,
+                transport_codes: None,
+                path: RoutePath::Normal(Path::new(hash_size, vec![]).unwrap()),
+                payload: Payload::Path(DirectEncryptedPayload {
+                    destination_hash: server.public_key()[0],
+                    source_hash: sender.public_key()[0],
+                    mac,
+                    ciphertext,
+                }),
+            };
+            // Unauthenticated PATH packets must not change a session's route.
+            if let Payload::Path(payload) = &mut path_packet.payload {
+                payload.mac[0] ^= 1;
+            }
+            ready(super::super::cli::handle_remote_packet(
+                &path_packet,
+                &context,
+            ));
+            assert_eq!(
+                ready(context.remote_reply_route_for(sender.public_key(), 100)),
+                Some(ReplyRoute::Direct(forward.reversed()))
+            );
+            if let Payload::Path(payload) = &mut path_packet.payload {
+                payload.mac[0] ^= 1;
+            }
+            ready(super::super::cli::handle_remote_packet(
+                &path_packet,
+                &context,
+            ));
+            assert_eq!(
+                ready(context.remote_reply_route_for(sender.public_key(), 100)),
+                Some(ReplyRoute::Direct(return_path.clone()))
+            );
+
+            let request = login_request(
+                &server,
+                &sender,
+                RouteType::Direct,
+                Path::new(hash_size, vec![]).unwrap(),
+                11,
+            );
+            let reply = ready(super::super::cli::handle_remote_packet(&request, &context)).unwrap();
+            let reply = Packet::decode(&reply).unwrap();
+            assert_eq!(reply.route_type, RouteType::Direct);
+            assert_eq!(reply.normal_path(), Some(&return_path));
+            assert_eq!(
+                ready(context.remote_reply_route_for(sender.public_key(), 100)),
+                Some(ReplyRoute::Direct(return_path))
+            );
+            assert!(ready(super::super::cli::handle_remote_packet(&request, &context)).is_none());
+        }
+    }
+
+    #[test]
+    fn scoped_login_reply_keeps_region_and_path_hash_width() {
+        let mut config = super::super::config::AppConfig::generated_defaults([1; 32]);
+        config.put_region("home").unwrap();
+        config.set_default_region(Some("home")).unwrap();
+        let sender = Identity::from_private_key(PrivateKey::Seed([2; 32]));
+        let path = Path::new(
+            mcrs_protocol::HashSize::Three,
+            vec![0x11, 0x22, 0x33, 0x44, 0x55, 0x66],
+        )
+        .unwrap();
+        let mut request = login_request(
+            config.identity(),
+            &sender,
+            RouteType::Flood,
+            path.clone(),
+            10,
+        );
+        let region = config.regions().default_region().unwrap();
+        config.regions().apply_scope(&mut request, &region).unwrap();
+        let context = AppContext::new(TestPlatform, config, crate::platform::NoStorage);
+        let reply = ready(super::super::cli::handle_remote_packet(&request, &context)).unwrap();
+        let reply = Packet::decode(&reply).unwrap();
+        assert_eq!(reply.route_type, RouteType::TransportFlood);
+        assert_eq!(reply.normal_path().unwrap().hash_size(), path.hash_size());
+        let matched =
+            ready(context.with_config(|config| config.regions().match_flood_region(&reply)))
+                .unwrap();
+        assert_eq!(matched.name, region.name);
+    }
 
     #[test]
     fn encrypted_payload_matches_aes_and_hmac_vectors() {
@@ -360,7 +598,9 @@ mod tests {
                 .collect();
             assert_eq!(hex, expected_ciphertext);
             assert_eq!(mac, expected_mac);
-            assert_eq!(decrypt_payload(&shared_secret, &ciphertext).unwrap(), plain);
+            let decrypted = decrypt_payload(&shared_secret, &ciphertext).unwrap();
+            assert_eq!(&decrypted[..plain.len()], plain);
+            assert!(decrypted[plain.len()..].iter().all(|byte| *byte == 0));
         }
     }
 
@@ -416,7 +656,11 @@ mod tests {
             panic!("expected PATH payload");
         };
         let decrypted = decrypt_payload(&shared_secret, &payload.ciphertext).unwrap();
-        let wrapped = PathPlaintext::decode(&decrypted).unwrap();
+        let unpadded_len = decrypted
+            .iter()
+            .rposition(|byte| *byte != 0)
+            .map_or(0, |i| i + 1);
+        let wrapped = PathPlaintext::decode(&decrypted[..unpadded_len]).unwrap();
         assert_eq!(wrapped.path, discovered_path);
         assert_eq!(wrapped.extra_type, Some(PayloadKind::Response));
         assert_eq!(wrapped.extra_payload, b"reply");

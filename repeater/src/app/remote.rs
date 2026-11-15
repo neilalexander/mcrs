@@ -1,4 +1,11 @@
-use mcrs_protocol::{PUB_KEY_SIZE, Path};
+use mcrs_protocol::{HashSize, PUB_KEY_SIZE, Path};
+
+/// Unknown return routes must be flooded, not mistaken for a known zero-hop path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ReplyRoute {
+    Direct(Path),
+    Flood(HashSize),
+}
 
 pub(crate) const MAX_REMOTE_LOGINS: usize = 4;
 pub(crate) const MAX_REMOTE_SESSIONS: usize = MAX_REMOTE_LOGINS * 2;
@@ -12,7 +19,7 @@ struct RemoteLogin {
     shared_secret: [u8; 32],
     last_seen_ms: u64,
     last_timestamp: u32,
-    reply_path: Path,
+    reply_route: ReplyRoute,
 }
 
 #[derive(Clone)]
@@ -20,7 +27,7 @@ pub struct RemoteSession {
     pub public_key: [u8; PUB_KEY_SIZE],
     pub shared_secret: [u8; 32],
     pub privilege: RemotePrivilege,
-    pub reply_path: Path,
+    pub reply_route: ReplyRoute,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,7 +76,7 @@ impl RemoteLoginTable {
         privilege: RemotePrivilege,
         last_timestamp: u32,
         now_ms: u64,
-        reply_path: &Path,
+        reply_route: &ReplyRoute,
     ) -> bool {
         self.prune(now_ms);
 
@@ -99,9 +106,43 @@ impl RemoteLoginTable {
             shared_secret: *shared_secret,
             last_seen_ms: now_ms,
             last_timestamp,
-            reply_path: reply_path.clone(),
+            reply_route: reply_route.clone(),
         });
         true
+    }
+
+    pub fn reply_route_for(
+        &mut self,
+        public_key: &[u8; PUB_KEY_SIZE],
+        now_ms: u64,
+    ) -> Option<ReplyRoute> {
+        self.prune(now_ms);
+        self.login_mut(public_key)
+            .map(|login| login.reply_route.clone())
+    }
+
+    pub fn learn_reply_path(
+        &mut self,
+        public_key: &[u8; PUB_KEY_SIZE],
+        path: &Path,
+        now_ms: u64,
+    ) -> bool {
+        self.prune(now_ms);
+        let Some(login) = self.login_mut(public_key) else {
+            return false;
+        };
+        // An authenticated PATH counts as activity, but has no command timestamp.
+        login.reply_route = ReplyRoute::Direct(path.clone());
+        login.last_seen_ms = now_ms;
+        true
+    }
+
+    fn login_mut(&mut self, public_key: &[u8; PUB_KEY_SIZE]) -> Option<&mut RemoteLogin> {
+        self.admin_entries
+            .iter_mut()
+            .chain(self.guest_entries.iter_mut())
+            .flatten()
+            .find(|login| &login.public_key == public_key)
     }
 
     pub fn privilege_for(
@@ -232,7 +273,7 @@ fn append_matching_sessions(
             public_key: login.public_key,
             shared_secret: login.shared_secret,
             privilege,
-            reply_path: login.reply_path.clone(),
+            reply_route: login.reply_route.clone(),
         });
         *out_index += 1;
     }
@@ -300,6 +341,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn learned_path_refreshes_activity_without_resetting_replay_protection() {
+        let mut table = RemoteLoginTable::new();
+        let key = [7; PUB_KEY_SIZE];
+        let hash_size = HashSize::Three;
+        let unknown = ReplyRoute::Flood(hash_size);
+        assert!(!table.learn_reply_path(&key, &Path::empty(), 100));
+        assert!(table.authenticate(&key, &[9; 32], RemotePrivilege::Admin, 10, 100, &unknown));
+        assert_eq!(table.reply_route_for(&key, 200), Some(unknown));
+        let path = Path::new(hash_size, alloc::vec![]).unwrap();
+        assert!(table.learn_reply_path(&key, &path, 200));
+        assert_eq!(
+            table.reply_route_for(&key, 200),
+            Some(ReplyRoute::Direct(path.clone()))
+        );
+        assert!(!table.accept_newer_timestamp(&key, RemotePrivilege::Admin, 10, 200));
+        // The original login would have expired, but PATH reception extended it.
+        assert_eq!(
+            table.reply_route_for(&key, 101 + REMOTE_LOGIN_TTL_MS),
+            Some(ReplyRoute::Direct(path.clone()))
+        );
+        // An expired session cannot be revived by another PATH packet.
+        assert!(!table.learn_reply_path(&key, &path, 201 + REMOTE_LOGIN_TTL_MS));
+        assert_eq!(table.reply_route_for(&key, 201 + REMOTE_LOGIN_TTL_MS), None);
+    }
+
+    #[test]
     fn acl_login_overrides_password_and_guest_access() {
         use super::super::acl::Role;
         for body in ["", "login", "login wrong", "login secret", "secret"] {
@@ -328,7 +395,14 @@ mod tests {
     fn removing_key_revokes_sessions_and_timestamp_acceptance() {
         for privilege in [RemotePrivilege::Admin, RemotePrivilege::Guest] {
             let mut table = RemoteLoginTable::new();
-            table.authenticate(&[1; 32], &[2; 32], privilege, 10, 100, &Path::empty());
+            table.authenticate(
+                &[1; 32],
+                &[2; 32],
+                privilege,
+                10,
+                100,
+                &ReplyRoute::Direct(Path::empty()),
+            );
             table.remove(&[1; 32]);
             assert_eq!(table.privilege_for(&[1; 32], 101), None);
             assert!(
@@ -346,7 +420,14 @@ mod tests {
         for privilege in [RemotePrivilege::Admin, RemotePrivilege::Guest] {
             let mut table = RemoteLoginTable::new();
             let key = [7; PUB_KEY_SIZE];
-            assert!(table.authenticate(&key, &[9; 32], privilege, 10, 100, &Path::empty()));
+            assert!(table.authenticate(
+                &key,
+                &[9; 32],
+                privilege,
+                10,
+                100,
+                &ReplyRoute::Direct(Path::empty())
+            ));
             assert!(table.accept_newer_timestamp(&key, privilege, 20, 200));
 
             for timestamp in [0, 10, 19, 20] {
@@ -357,7 +438,7 @@ mod tests {
                         attempted_privilege,
                         timestamp,
                         300,
-                        &Path::empty(),
+                        &ReplyRoute::Direct(Path::empty()),
                     ));
                     let session = table.sessions_matching_source_hash(7, 301)[0]
                         .clone()
@@ -383,8 +464,22 @@ mod tests {
         for privilege in [RemotePrivilege::Admin, RemotePrivilege::Guest] {
             let mut table = RemoteLoginTable::new();
             let key = [7; PUB_KEY_SIZE];
-            assert!(!table.authenticate(&key, &[9; 32], privilege, 0, 100, &Path::empty()));
-            assert!(table.authenticate(&key, &[9; 32], privilege, 10, 100, &Path::empty()));
+            assert!(!table.authenticate(
+                &key,
+                &[9; 32],
+                privilege,
+                0,
+                100,
+                &ReplyRoute::Direct(Path::empty())
+            ));
+            assert!(table.authenticate(
+                &key,
+                &[9; 32],
+                privilege,
+                10,
+                100,
+                &ReplyRoute::Direct(Path::empty())
+            ));
             for timestamp in [0, 9, 10] {
                 assert!(!table.accept_newer_timestamp(&key, privilege, timestamp, 200));
             }
@@ -413,7 +508,7 @@ mod tests {
             RemotePrivilege::Guest,
             10,
             100,
-            &Path::empty(),
+            &ReplyRoute::Direct(Path::empty()),
         );
         table.authenticate(
             &public_key,
@@ -421,7 +516,7 @@ mod tests {
             RemotePrivilege::Admin,
             20,
             200,
-            &Path::empty(),
+            &ReplyRoute::Direct(Path::empty()),
         );
 
         assert_eq!(
@@ -440,7 +535,7 @@ mod tests {
             RemotePrivilege::Guest,
             30,
             300,
-            &Path::empty(),
+            &ReplyRoute::Direct(Path::empty()),
         );
         assert_eq!(
             table.privilege_for(&public_key, 301),
