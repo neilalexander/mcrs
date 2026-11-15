@@ -44,15 +44,18 @@ MCRS supports the following features:
 
 Note: The storage format is different to the official MeshCore firmware, so a repeater that is switched to this firmware will come up with a fresh configuration and will need to be reconfigured. The default admin password is `meshcore`.
 
-Note: MCRS currently defaults to the UK frequency 869.618MHz at 62.5KHz BW, SF8, CR6. Overriding this at build-time is still to be done.
+Note: MCRS currently defaults to the UK frequency 869.618MHz at 62.5KHz BW, SF8, CR8. Overriding this at build-time is still to be done.
 
 Codex helped to write some, but not all, of this code. Special thanks to the https://coreprotocol.org team as their documentation made this possible. Fuzzing code is provided for the packet decoder.
 
 ### Hardware
 
-* Heltec v3: Tested, working, with OLED and battery level reporting.
-* Heltec v4: Tested, working, with OLED and battery level reporting on v4.3. Other revisions untested.
+* Heltec v3: Tested, working.
+* Heltec v4: Tested on v4.3, working, but other board revisions untested.
 * Heltec WSL3: Untested.
+* Seeed Solar P1: Tested, working.
+* Seeed XIAO nRF52840: Tested, working.
+* RAK4631: Tested, working.
 
 ### Building
 
