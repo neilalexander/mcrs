@@ -32,6 +32,7 @@ const MODEL: &str = "SenseCAP Solar Node P1";
 static HEAP: Heap = Heap::empty();
 
 bind_interrupts!(struct Irqs {
+    TEMP => embassy_nrf::temp::InterruptHandler;
     SAADC => embassy_nrf::saadc::InterruptHandler;
     TWISPI1 => spim::InterruptHandler<peripherals::TWISPI1>;
 });
@@ -76,6 +77,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     let mut console = NoConsole;
     let mut display = NoDisplay;
     let mut button = NoButton;
+    let mut sensors = mcrs_nrf::sensors::NrfSensors(embassy_nrf::temp::Temp::new(p.TEMP, Irqs));
     let mut battery = NrfBattery::new(
         p.SAADC,
         Irqs,
@@ -92,6 +94,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         &mut display,
         &mut button,
         &mut battery,
+        &mut sensors,
     )
     .run(0) // Report voltage without automatic low-voltage shutdown.
     .await;

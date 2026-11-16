@@ -1971,6 +1971,7 @@ dependencies = [
  "esp-radio",
  "esp-rom-sys",
  "esp-rtos",
+ "esp32s3 0.35.2",
  "littlefs2-rust",
  "mcrs-repeater",
  "mcrs-ssd1306",

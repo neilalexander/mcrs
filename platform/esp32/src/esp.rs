@@ -695,6 +695,10 @@ impl RadioDelay {
 }
 
 impl DelayNs for RadioDelay {
+    async fn delay_ms(&mut self, ms: u32) {
+        Timer::after(EmbassyDuration::from_millis(u64::from(ms))).await;
+    }
+
     async fn delay_ns(&mut self, ns: u32) {
         Timer::after(EmbassyDuration::from_micros(ns.div_ceil(1000) as u64)).await;
     }

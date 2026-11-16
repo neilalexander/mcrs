@@ -2,7 +2,7 @@
 use crate::{
     app::{self, AppContext, battery, cli, config::AppConfig, periodic, ui},
     memory::MemoryProfile,
-    platform::{Battery, Platform, Radio, StatusDisplay, Storage},
+    platform::{Battery, Platform, Radio, StatusDisplay, Storage, sensors::Sensors},
 };
 use alloc::{boxed::Box, string::String};
 use defmt::{error, info};
@@ -14,7 +14,7 @@ use embedded_hal_async::digital::Wait;
 use embedded_io_async::{Read, Write};
 
 /// The repeater for one board, with the devices it drives.
-pub struct Repeater<'a, PLATFORM, STORAGE, RADIO, CONSOLE, DISPLAY, BUTTON, BATTERY>
+pub struct Repeater<'a, PLATFORM, STORAGE, RADIO, CONSOLE, DISPLAY, BUTTON, BATTERY, SENSORS>
 where
     PLATFORM: 'static,
     STORAGE: 'static,
@@ -25,10 +25,11 @@ where
     display: &'a mut DISPLAY,
     button: &'a mut BUTTON,
     battery: &'a mut BATTERY,
+    sensors: &'a mut SENSORS,
 }
 
-impl<'a, PLATFORM, STORAGE, RADIO, CONSOLE, DISPLAY, BUTTON, BATTERY>
-    Repeater<'a, PLATFORM, STORAGE, RADIO, CONSOLE, DISPLAY, BUTTON, BATTERY>
+impl<'a, PLATFORM, STORAGE, RADIO, CONSOLE, DISPLAY, BUTTON, BATTERY, SENSORS>
+    Repeater<'a, PLATFORM, STORAGE, RADIO, CONSOLE, DISPLAY, BUTTON, BATTERY, SENSORS>
 where
     PLATFORM: Platform + 'static,
     STORAGE: Storage + 'static,
@@ -37,6 +38,7 @@ where
     DISPLAY: StatusDisplay,
     BUTTON: Wait,
     BATTERY: Battery,
+    SENSORS: Sensors,
 {
     /// Loads the configuration from `storage`, or creates it on first boot.
     /// `console` serves the local CLI, and a press of `button` pulls its input
@@ -50,6 +52,7 @@ where
         display: &'a mut DISPLAY,
         button: &'a mut BUTTON,
         battery: &'a mut BATTERY,
+        sensors: &'a mut SENSORS,
     ) -> Self {
         log_memory_profile(platform.memory_profile());
 
@@ -68,6 +71,7 @@ where
             display,
             button,
             battery,
+            sensors,
         }
     }
 
@@ -89,6 +93,7 @@ where
             display,
             button,
             battery,
+            sensors,
         } = self;
 
         select3(
@@ -98,7 +103,7 @@ where
                 ui::run(display, button, context),
                 cli::serve_console(console, context),
                 app::handler_loop(context),
-                periodic::run(context),
+                periodic::run(context, sensors),
                 radio_task(radio, context),
             ),
         )

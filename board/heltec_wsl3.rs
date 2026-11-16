@@ -48,6 +48,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
             &mut devices.display,
             &mut devices.button,
             &mut devices.battery,
+            &mut devices.sensors,
         );
         let context = repeater.context();
         select(

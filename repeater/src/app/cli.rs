@@ -5,7 +5,10 @@ use crate::{
         crypto::{encode_cli_text_response, encode_login_response},
         remote::ReplyRoute,
     },
-    platform::{OtaStatus, Platform, Storage},
+    platform::{
+        OtaStatus, Platform, Storage,
+        sensors::{CHANNEL_SELF, SensorValue},
+    },
 };
 use alloc::{format, string::String, vec, vec::Vec};
 use core::fmt::Write;
@@ -26,8 +29,6 @@ const REQ_TYPE_GET_STATUS: u8 = 0x01;
 const REQ_TYPE_GET_TELEMETRY_DATA: u8 = 0x03;
 const REQ_TYPE_GET_NEIGHBOURS: u8 = 0x06;
 const REQ_TYPE_GET_OWNER_INFO: u8 = 0x07;
-const LPP_CHANNEL_SELF: u8 = 1;
-const LPP_TYPE_VOLTAGE: u8 = 116;
 const REPEATER_STATS_LEN: usize = 56;
 const FIRMWARE_VERSION: &str = concat!("MCRS ", env!("MESHCORE_FIRMWARE_VERSION"));
 
@@ -514,11 +515,10 @@ async fn handle_binary_request<P: Platform, S: Storage>(
             let mut response = Vec::new();
             response.extend_from_slice(&request.timestamp.to_le_bytes());
             if let Some(millivolts) = context.status().battery_millivolts {
-                response.push(LPP_CHANNEL_SELF);
-                response.push(LPP_TYPE_VOLTAGE);
                 let centivolts = millivolts.saturating_add(5) / 10;
-                response.extend_from_slice(&centivolts.to_be_bytes());
+                SensorValue::Voltage(centivolts).encode_lpp(CHANNEL_SELF, &mut response);
             }
+            context.sensor_readings.borrow().encode_lpp(&mut response);
             Some(response)
         }
         REQ_TYPE_GET_NEIGHBOURS => {
@@ -1135,6 +1135,11 @@ async fn handle_get_command<P: Platform, S: Storage>(
                 .with_config(|config| format!("> {}", config.flood_advert_interval_hours()))
                 .await
         }
+        "sensor.interval" => {
+            context
+                .with_config(|config| format!("> {}", config.sensor_interval_minutes()))
+                .await
+        }
         "path.hash.mode" => {
             context
                 .with_config(|config| format!("> {}", config.path_hash_mode()))
@@ -1489,6 +1494,24 @@ async fn handle_set_command<P: Platform, S: Storage>(
             .await
         {
             Ok(()) => format!("OK - flood.advert.interval now: {}", hours),
+            Err(error) => format!("Error: {}", error),
+        };
+    }
+
+    if let Some(minutes) = config.strip_prefix("sensor.interval ").map(str::trim) {
+        let Ok(minutes) = minutes.parse::<u32>() else {
+            return String::from(
+                "Error, invalid sensor interval (expected whole minutes, 0 disables)",
+            );
+        };
+        return match context
+            .update_config(|config| {
+                config.set_sensor_interval_minutes(minutes);
+                Ok(())
+            })
+            .await
+        {
+            Ok(()) => format!("OK - sensor.interval now: {}", minutes),
             Err(error) => format!("Error: {}", error),
         };
     }

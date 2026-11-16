@@ -54,6 +54,7 @@ pub struct AppConfig {
     flood_max_advert_hops: u8,
     advert_interval_minutes: u32,
     flood_advert_interval_hours: u32,
+    sensor_interval_minutes: u32,
     loop_detection: LoopDetection,
     multi_acks: bool,
     path_hash_mode: u8,
@@ -256,6 +257,7 @@ impl AppConfig {
             flood_max_advert_hops: stored.flood_max_advert_hops,
             advert_interval_minutes: stored.advert_interval_minutes,
             flood_advert_interval_hours: stored.flood_advert_interval_hours,
+            sensor_interval_minutes: stored.sensor_interval_minutes,
             loop_detection: stored.loop_detection,
             multi_acks: stored.multi_acks,
             path_hash_mode: stored.path_hash_mode,
@@ -476,6 +478,7 @@ impl AppConfig {
             "flood.max.unscoped" => self.flood_max_unscoped_hops = defaults.flood_max_unscoped_hops,
             "flood.max.advert" => self.flood_max_advert_hops = defaults.flood_max_advert_hops,
             "repeat" => self.repeat_enabled = defaults.repeat_enabled,
+            "sensor.interval" => self.sensor_interval_minutes = defaults.sensor_interval_minutes,
             "advert.interval" => self.advert_interval_minutes = defaults.advert_interval_minutes,
             "flood.advert.interval" => {
                 self.flood_advert_interval_hours = defaults.flood_advert_interval_hours
@@ -531,6 +534,14 @@ impl AppConfig {
 
     pub fn set_flood_advert_interval_hours(&mut self, hours: u32) {
         self.flood_advert_interval_hours = hours;
+    }
+
+    pub fn sensor_interval_minutes(&self) -> u32 {
+        self.sensor_interval_minutes
+    }
+
+    pub fn set_sensor_interval_minutes(&mut self, minutes: u32) {
+        self.sensor_interval_minutes = minutes;
     }
 
     pub fn path_hash_mode(&self) -> u8 {
@@ -809,6 +820,7 @@ struct StoredAppConfig {
     flood_max_advert_hops: u8,
     advert_interval_minutes: u32,
     flood_advert_interval_hours: u32,
+    sensor_interval_minutes: u32,
     loop_detection: LoopDetection,
     multi_acks: bool,
     path_hash_mode: u8,
@@ -857,6 +869,7 @@ impl StoredAppConfig {
             flood_max_advert_hops: 0,
             advert_interval_minutes: 0,
             flood_advert_interval_hours: 0,
+            sensor_interval_minutes: 1,
             loop_detection: LoopDetection::default(),
             multi_acks: false,
             path_hash_mode: 0,
@@ -897,6 +910,7 @@ impl StoredAppConfig {
             flood_max_advert_hops: config.flood_max_advert_hops,
             advert_interval_minutes: config.advert_interval_minutes,
             flood_advert_interval_hours: config.flood_advert_interval_hours,
+            sensor_interval_minutes: config.sensor_interval_minutes,
             loop_detection: config.loop_detection,
             multi_acks: config.multi_acks,
             path_hash_mode: config.path_hash_mode,
@@ -1075,6 +1089,9 @@ fn decode_config_layer(
             }
             "flood.advert.interval" => {
                 config.flood_advert_interval_hours = value.parse::<u32>().ok()?;
+            }
+            "sensor.interval" => {
+                config.sensor_interval_minutes = value.parse::<u32>().ok()?;
             }
             "path.hash.mode" => {
                 config.path_hash_mode = parse_path_hash_mode(&value)?;
@@ -1312,6 +1329,13 @@ fn encode_config_delta(config: &StoredAppConfig, defaults: &StoredAppConfig) -> 
             config.flood_advert_interval_hours
         );
     }
+    if config.sensor_interval_minutes != defaults.sensor_interval_minutes {
+        let _ = writeln!(
+            &mut out,
+            "sensor.interval={}",
+            config.sensor_interval_minutes
+        );
+    }
     if config.path_hash_mode != defaults.path_hash_mode {
         let _ = writeln!(&mut out, "path.hash.mode={}", config.path_hash_mode);
     }
@@ -1444,6 +1468,11 @@ fn encode_full_config_text_redacted(config: &StoredAppConfig, redact_secrets: bo
         &mut out,
         "flood.advert.interval={}",
         config.flood_advert_interval_hours
+    );
+    let _ = writeln!(
+        &mut out,
+        "sensor.interval={}",
+        config.sensor_interval_minutes
     );
     let _ = writeln!(&mut out, "path.hash.mode={}", config.path_hash_mode);
     let _ = writeln!(&mut out, "tier={}", config.tier);
@@ -2155,6 +2184,58 @@ mod tests {
         assert_eq!(
             app.flood_advert_interval_hours(),
             defaults().flood_advert_interval_hours
+        );
+    }
+
+    #[test]
+    fn sensor_interval_defaults_and_round_trip() {
+        let image = network_defaults("");
+        assert_eq!(image.sensor_interval_minutes, 10);
+        assert_eq!(
+            decode_config_text(b"version=1\n", &image)
+                .unwrap()
+                .sensor_interval_minutes,
+            10
+        );
+        for minutes in [0, 1, 60, u32::MAX] {
+            let text = alloc::format!("sensor.interval={minutes}\n");
+            let profile = network_defaults(&text);
+            assert_eq!(profile.sensor_interval_minutes, minutes);
+            let stored = decode_config_text(text.as_bytes(), &image).unwrap();
+            let saved = encode_config_text(&stored);
+            assert_eq!(
+                decode_config_text(&saved, &image)
+                    .unwrap()
+                    .sensor_interval_minutes,
+                minutes
+            );
+        }
+        let device = decode_config_text(b"sensor.interval=5\n", &image).unwrap();
+        let saved = encode_config_text(&device);
+        assert!(
+            core::str::from_utf8(&saved)
+                .unwrap()
+                .contains("sensor.interval=5\n")
+        );
+        let loaded = decode_config_text(&saved, &image).unwrap();
+        assert_eq!(loaded.sensor_interval_minutes, 5);
+        let full = encode_full_config_text_redacted(&loaded, false);
+        assert!(
+            core::str::from_utf8(&full)
+                .unwrap()
+                .contains("sensor.interval=5\n")
+        );
+        for value in ["-1", "1.5", "4294967296", "invalid"] {
+            let text = alloc::format!("sensor.interval={value}\n");
+            assert!(decode_config_text(text.as_bytes(), &image).is_none());
+        }
+        let mut app = AppConfig::from_stored(loaded, "test");
+        app.set_sensor_interval_minutes(0);
+        assert_eq!(app.sensor_interval_minutes(), 0);
+        app.unset("sensor.interval").unwrap();
+        assert_eq!(
+            app.sensor_interval_minutes(),
+            defaults().sensor_interval_minutes
         );
     }
 

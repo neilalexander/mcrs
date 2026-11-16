@@ -131,6 +131,7 @@ pub struct AppContext<P, S> {
 
     remote_reply_action: Cell<Option<cli::PostReplyAction>>,
     brownout_requested: Signal<CriticalSectionRawMutex, ()>,
+    periodic_changed: Signal<CriticalSectionRawMutex, ()>,
     seen_packets: RefCell<SeenPacketCache>,
     pending_forwards: RefCell<Vec<[u8; 8]>>,
     pending_discover: RefCell<Option<PendingDiscover>>,
@@ -147,6 +148,7 @@ pub struct AppContext<P, S> {
     packet_errors: AtomicU32,
     battery_level_percent: AtomicU8,
     battery_millivolts: AtomicU16,
+    sensor_readings: RefCell<crate::platform::sensors::SensorReadings>,
     last_rssi: AtomicI16,
     noise_floor_dbm: Cell<Option<i16>>,
     last_snr_quarters: AtomicI16,
@@ -172,6 +174,7 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
 
             remote_reply_action: Cell::new(None),
             brownout_requested: Signal::new(),
+            periodic_changed: Signal::new(),
             seen_packets: RefCell::new(SeenPacketCache::new_with_capacity(
                 SEEN_PACKET_TTL_MS,
                 memory.seen_packet_cache_len,
@@ -193,6 +196,7 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
             packet_errors: AtomicU32::new(0),
             battery_level_percent: AtomicU8::new(BATTERY_LEVEL_UNKNOWN),
             battery_millivolts: AtomicU16::new(BATTERY_MILLIVOLTS_UNKNOWN),
+            sensor_readings: RefCell::new(Default::default()),
             last_rssi: AtomicI16::new(0),
             noise_floor_dbm: Cell::new(None),
             last_snr_quarters: AtomicI16::new(0),
@@ -239,7 +243,11 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
         let mut config = self.config.lock().await;
         let previous_acl = config.acl().clone();
         let previous_password = String::from(config.remote_cli_password());
+        let previous_intervals = periodic::intervals(&config);
         update(&mut config)?;
+        if periodic::intervals(&config) != previous_intervals {
+            self.periodic_changed.signal(());
+        }
         let mut logins = self.remote_logins.lock().await;
         if config.remote_cli_password() != previous_password {
             logins.clear_except(preserved_public_key.as_ref());

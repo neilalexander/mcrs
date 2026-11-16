@@ -33,6 +33,7 @@ const MODEL: &str = "XIAO nRF52840";
 static HEAP: Heap = Heap::empty();
 
 bind_interrupts!(struct Irqs {
+    TEMP => embassy_nrf::temp::InterruptHandler;
     USBD => embassy_nrf::usb::InterruptHandler<peripherals::USBD>;
     CLOCK_POWER => embassy_nrf::usb::vbus_detect::InterruptHandler;
     SAADC => embassy_nrf::saadc::InterruptHandler;
@@ -101,6 +102,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
 
     let mut display = NoDisplay;
     let mut button = NoButton;
+    let mut sensors = mcrs_nrf::sensors::NrfSensors(embassy_nrf::temp::Temp::new(p.TEMP, Irqs));
     let mut battery = NrfBattery::new(
         p.SAADC,
         Irqs,
@@ -117,6 +119,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         &mut display,
         &mut button,
         &mut battery,
+        &mut sensors,
     );
     // Keep USB responsive during mesh processing, including without a host.
     embassy_futures::select::select(usb.run(), repeater.run(0)).await;

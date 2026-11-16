@@ -33,6 +33,7 @@ const MODEL: &str = "RAK4631";
 static HEAP: Heap = Heap::empty();
 
 bind_interrupts!(struct Irqs {
+    TEMP => embassy_nrf::temp::InterruptHandler;
     SAADC => embassy_nrf::saadc::InterruptHandler;
     USBD => embassy_nrf::usb::InterruptHandler<peripherals::USBD>;
     CLOCK_POWER => embassy_nrf::usb::vbus_detect::InterruptHandler;
@@ -102,6 +103,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
 
     let mut display = NoDisplay;
     let mut button = NoButton;
+    let mut sensors = mcrs_nrf::sensors::NrfSensors(embassy_nrf::temp::Temp::new(p.TEMP, Irqs));
     let mut battery = NrfBattery::new(p.SAADC, Irqs, p.P0_05, None, BatteryConfig::rak4631());
 
     let repeater = Repeater::new(
@@ -112,6 +114,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         &mut display,
         &mut button,
         &mut battery,
+        &mut sensors,
     );
     // USB enumeration and mesh processing both run without a host connected.
     // Report battery voltage without automatic low-voltage shutdown.

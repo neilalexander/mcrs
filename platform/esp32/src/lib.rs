@@ -8,6 +8,7 @@ extern crate alloc;
 pub use mcrs_repeater::Repeater;
 
 pub mod heltec;
+pub mod sensors;
 
 mod esp;
 mod littlefs;
@@ -94,6 +95,7 @@ pub struct CommonPeripherals {
     battery_sense: GPIO1<'static>,
     battery_ctrl: GPIO37<'static>,
     wifi: WIFI<'static>,
+    temperature: esp_hal::peripherals::SENS<'static>,
 }
 
 /// The peripherals left for the board's console and radio frontend.
@@ -138,6 +140,7 @@ pub fn init() -> (CommonPeripherals, BoardPeripherals) {
         battery_sense: peripherals.GPIO1,
         battery_ctrl: peripherals.GPIO37,
         wifi: peripherals.WIFI,
+        temperature: peripherals.SENS,
     };
     let board = BoardPeripherals {
         UART0: peripherals.UART0,
@@ -158,6 +161,7 @@ pub struct Devices<F> {
     pub display: OledDisplay,
     pub button: Input<'static>,
     pub battery: BatteryMonitor<'static>,
+    pub sensors: sensors::EspSensors,
     /// Reserved for the Wi-Fi tasks.
     pub wifi: WifiResources,
 }
@@ -212,6 +216,7 @@ impl<F: RadioFrontend> Devices<F> {
             mut battery_sense,
             mut battery_ctrl,
             wifi,
+            temperature,
         } = peripherals;
 
         let output_config = OutputConfig::default();
@@ -299,6 +304,7 @@ impl<F: RadioFrontend> Devices<F> {
             button: Input::new(button, InputConfig::default().with_pull(Pull::Up)),
             battery: BatteryMonitor::new(adc, battery_sense, battery_ctrl),
             wifi: WifiResources { wifi },
+            sensors: sensors::EspSensors::new(temperature),
         };
         (platform, storage, devices)
     }
