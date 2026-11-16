@@ -2493,14 +2493,22 @@ mod tests {
             receive_frequency_hz: 869_618_000,
             spreading_factor: SpreadingFactor::Sf8,
             bandwidth: Bandwidth::Khz62_5,
-            coding_rate: CodingRate::Cr4_6,
+            coding_rate: CodingRate::Cr4_8,
             transmit_power_dbm: 14,
             rx_boost: true,
         };
         let image = network_defaults("");
         assert_eq!(image.radio, radio);
-        // A 12.25-symbol preamble and 26 payload symbols of 4.096 ms each.
-        assert_eq!(radio.packet_airtime_ms(10), 157);
+        // A 12.25-symbol preamble and 32 payload symbols of 4.096 ms each.
+        assert_eq!(radio.packet_airtime_ms(10), 182);
+        assert_eq!(
+            RadioConfig {
+                coding_rate: CodingRate::Cr4_6,
+                ..radio
+            }
+            .packet_airtime_ms(10),
+            157
+        );
 
         // Earlier firmware saved the bandwidth as typed, such as 7.8 kHz.
         let device = decode_config_text(b"radio.bandwidth_hz=7800\n", &image).unwrap();
