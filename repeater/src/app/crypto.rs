@@ -407,13 +407,112 @@ mod tests {
     }
 
     #[test]
-    fn direct_login_without_a_return_route_floods_instead_of_replying_zero_hop() {
+    fn known_zero_hop_return_route_is_retained_when_floods_are_denied() {
+        for scoped in [false, true] {
+            for hash_size in [
+                mcrs_protocol::HashSize::One,
+                mcrs_protocol::HashSize::Two,
+                mcrs_protocol::HashSize::Three,
+            ] {
+                let mut config = super::super::config::AppConfig::generated_defaults([1; 32]);
+                config.set_region_flood_allowed("*", false).unwrap();
+                config.put_region("home").unwrap();
+                config.set_default_region(Some("home")).unwrap();
+                config.set_region_flood_allowed("home", false).unwrap();
+                let server = Identity::from_private_key(PrivateKey::Seed([1; 32]));
+                let sender = Identity::from_private_key(PrivateKey::Seed([2; 32]));
+                let secret = sender
+                    .shared_secret_with_ed25519_public(server.public_key())
+                    .unwrap();
+                let path = Path::new(hash_size, vec![]).unwrap();
+                let mut request =
+                    login_request(&server, &sender, RouteType::Direct, path.clone(), 10);
+                if scoped {
+                    let region = config.regions().default_region().unwrap();
+                    config.regions().apply_scope(&mut request, &region).unwrap();
+                    request.route_type = RouteType::TransportDirect;
+                }
+                let context = AppContext::new(TestPlatform, config, crate::platform::NoStorage);
+                // A known zero-hop path remains direct regardless of flood policy.
+                assert!(ready(context.authenticate_remote_login(
+                    sender.public_key(),
+                    &secret,
+                    super::super::remote::RemotePrivilege::Admin,
+                    9,
+                    100,
+                    &ReplyRoute::Direct(path.clone()),
+                )));
+                for timestamp in [10u32, 12] {
+                    if timestamp == 12 {
+                        assert!(ready(context.authenticate_remote_login(
+                            sender.public_key(),
+                            &secret,
+                            super::super::remote::RemotePrivilege::Admin,
+                            11,
+                            100,
+                            &ReplyRoute::Direct(path.clone()),
+                        )));
+                        request = login_request(
+                            &server,
+                            &sender,
+                            RouteType::Direct,
+                            path.clone(),
+                            timestamp,
+                        );
+                    }
+                    let reply =
+                        ready(super::super::cli::handle_remote_packet(&request, &context)).unwrap();
+                    let reply = Packet::decode(&reply).unwrap();
+                    assert_eq!(reply.route_type, RouteType::Direct);
+                    assert_eq!(reply.normal_path(), Some(&path));
+                    let Payload::Response(payload) = reply.payload else {
+                        panic!("expected login response")
+                    };
+                    assert_eq!(decrypt_payload(&secret, &payload.ciphertext).unwrap()[4], 0);
+                    assert_eq!(
+                        ready(context.remote_reply_route_for(sender.public_key(), 100)),
+                        Some(ReplyRoute::Direct(path.clone()))
+                    );
+                }
+                let plaintext = TextMessagePlaintext {
+                    timestamp: 13,
+                    text_type: TextType::CliData,
+                    attempt: 0,
+                    message: b"get name".to_vec(),
+                }
+                .encode()
+                .unwrap();
+                let (mac, ciphertext) = encrypt_payload(&secret, &plaintext).unwrap();
+                let request = Packet {
+                    route_type: RouteType::Direct,
+                    transport_codes: None,
+                    path: RoutePath::Normal(path.clone()),
+                    payload: Payload::TextMessage(DirectEncryptedPayload {
+                        destination_hash: server.public_key()[0],
+                        source_hash: sender.public_key()[0],
+                        mac,
+                        ciphertext,
+                    }),
+                };
+                let reply =
+                    ready(super::super::cli::handle_remote_packet(&request, &context)).unwrap();
+                let reply = Packet::decode(&reply).unwrap();
+                assert_eq!(reply.route_type, RouteType::Direct);
+                assert_eq!(reply.normal_path(), Some(&path));
+                assert!(matches!(reply.payload, Payload::TextMessage(_)));
+            }
+        }
+    }
+
+    #[test]
+    fn direct_login_without_a_return_route_floods_on_default_region() {
         for hash_size in [
             mcrs_protocol::HashSize::One,
             mcrs_protocol::HashSize::Two,
             mcrs_protocol::HashSize::Three,
         ] {
             let mut config = super::super::config::AppConfig::generated_defaults([1; 32]);
+            config.set_region_flood_allowed("*", false).unwrap();
             config.put_region("home").unwrap();
             config.set_default_region(Some("home")).unwrap();
             let sender = Identity::from_private_key(PrivateKey::Seed([2; 32]));
@@ -428,7 +527,47 @@ mod tests {
             let context = AppContext::new(TestPlatform, config, crate::platform::NoStorage);
             let reply = ready(super::super::cli::handle_remote_packet(&request, &context)).unwrap();
             let reply = Packet::decode(&reply).unwrap();
+            assert_eq!(reply.route_type, RouteType::TransportFlood);
+            assert_eq!(
+                ready(context.with_config(|config| config.regions().match_flood_region(&reply)))
+                    .unwrap()
+                    .name,
+                "home"
+            );
+            assert_eq!(reply.normal_path().unwrap().hash_size(), hash_size);
+            assert!(matches!(reply.payload, Payload::Response(_)));
+            assert_eq!(
+                ready(context.remote_reply_route_for(sender.public_key(), 100)),
+                Some(ReplyRoute::Flood(hash_size))
+            );
+        }
+    }
+
+    #[test]
+    fn direct_login_without_a_return_route_floods_unscoped_when_no_default_exists() {
+        for hash_size in [
+            mcrs_protocol::HashSize::One,
+            mcrs_protocol::HashSize::Two,
+            mcrs_protocol::HashSize::Three,
+        ] {
+            let mut config = super::super::config::AppConfig::generated_defaults([1; 32]);
+            config.set_region_flood_allowed("*", false).unwrap();
+            config.put_region("home").unwrap();
+            // A named region exists, but none is selected as the default.
+            let sender = Identity::from_private_key(PrivateKey::Seed([2; 32]));
+            // All forward hops have already been consumed on arrival.
+            let request = login_request(
+                config.identity(),
+                &sender,
+                RouteType::Direct,
+                Path::new(hash_size, vec![]).unwrap(),
+                10,
+            );
+            let context = AppContext::new(TestPlatform, config, crate::platform::NoStorage);
+            let reply = ready(super::super::cli::handle_remote_packet(&request, &context)).unwrap();
+            let reply = Packet::decode(&reply).unwrap();
             assert_eq!(reply.route_type, RouteType::Flood);
+            assert!(reply.transport_codes.is_none());
             assert_eq!(reply.normal_path().unwrap().hash_size(), hash_size);
             assert!(matches!(reply.payload, Payload::Response(_)));
             assert_eq!(
@@ -511,6 +650,16 @@ mod tests {
                 Some(ReplyRoute::Direct(return_path.clone()))
             );
 
+            // A learned/configured return route must still win when floods
+            // become unavailable, rather than being replaced by zero-hop.
+            ready(async {
+                context
+                    .config
+                    .lock()
+                    .await
+                    .set_region_flood_allowed("*", false)
+                    .unwrap();
+            });
             let request = login_request(
                 &server,
                 &sender,

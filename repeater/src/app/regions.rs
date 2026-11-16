@@ -343,7 +343,7 @@ impl RegionMap {
         out.push('\n');
     }
 
-    fn wildcard(&self) -> RegionEntry {
+    pub(crate) fn wildcard(&self) -> RegionEntry {
         RegionEntry {
             id: 0,
             flags: self.wildcard_flags,

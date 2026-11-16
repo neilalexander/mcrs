@@ -202,7 +202,22 @@ pub async fn handle_remote_packet<P: Platform, S: Storage>(
     }
 
     let reply_region = context
-        .with_config(|config| config.regions().match_reply_region(packet))
+        .with_config(|config| {
+            let regions = config.regions();
+            // Direct requests have no accumulated reverse path. If the reply
+            // must flood, use the default scope for an unscoped request. With
+            // no default, originate an unscoped reply even if unscoped forwarding
+            // is denied, matching the official firmware's reply fallback.
+            if packet.route_type.is_direct() && !packet.route_type.has_transport_codes() {
+                Some(
+                    regions
+                        .default_region()
+                        .unwrap_or_else(|| regions.wildcard()),
+                )
+            } else {
+                regions.match_reply_region(packet)
+            }
+        })
         .await;
     if packet.route_type.is_flood() && reply_region.is_none() {
         return None;
