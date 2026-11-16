@@ -90,9 +90,8 @@ jobs:
           path: |
             ~/.cargo
             platform/esp32/target
-          key: ${{ matrix.board.id }}-${{ runner.os }}-${{ hashFiles('platform/esp32/Cargo.lock') }}
-          restore-keys: |
-            ${{ matrix.board.id }}-${{ runner.os }}-
+          key: cargo-${{ runner.os }}-${{ github.job }}-${{ matrix.board.id }}-${{ matrix.variant.id }}-${{ hashFiles('platform/esp32/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-${{ github.job }}-${{ matrix.board.id }}-${{ matrix.variant.id }}-
 
       - name: Install espflash
         run: cargo install espflash --version 4.4.0 --locked
@@ -163,9 +162,8 @@ jobs:
           path: |
             ~/.cargo
             platform/nrf52840/target
-          key: ${{ matrix.board.id }}-${{ runner.os }}-${{ hashFiles('platform/nrf52840/Cargo.lock') }}
-          restore-keys: |
-            ${{ matrix.board.id }}-${{ runner.os }}-
+          key: cargo-${{ runner.os }}-${{ github.job }}-${{ matrix.board.id }}-${{ hashFiles('platform/nrf52840/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-${{ github.job }}-${{ matrix.board.id }}-
 
       - name: Build firmware
         working-directory: platform/nrf52840

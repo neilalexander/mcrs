@@ -35,9 +35,8 @@ jobs:
           path: |
             ~/.cargo
             target
-          key: unit-tests-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            unit-tests-${{ runner.os }}-
+          key: cargo-${{ runner.os }}-${{ github.job }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-${{ github.job }}-
 
       - name: Run unit tests
         run: cargo test --locked
@@ -60,9 +59,8 @@ jobs:
           path: |
             ~/.cargo
             target
-          key: mqtt-tests-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            mqtt-tests-${{ runner.os }}-
+          key: cargo-${{ runner.os }}-${{ github.job }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-${{ github.job }}-
 
       - name: Run unit tests
         run: cargo test --locked --features mqtt
