@@ -150,11 +150,21 @@ impl RegionMap {
     }
 
     pub fn match_flood_region(&self, packet: &Packet) -> Option<RegionEntry> {
-        match packet.route_type {
-            RouteType::TransportFlood => self.match_transport_region(packet, REGION_DENY_FLOOD),
-            RouteType::Flood if self.wildcard().allows_flood() => Some(self.wildcard()),
-            RouteType::Flood => None,
-            _ => None,
+        packet
+            .route_type
+            .is_flood()
+            .then(|| self.match_reply_region(packet))
+            .flatten()
+    }
+
+    /// Resolve the request's region for a flood reply, including direct requests
+    /// that need a flooded response because their return route is unknown.
+    pub fn match_reply_region(&self, packet: &Packet) -> Option<RegionEntry> {
+        if packet.route_type.has_transport_codes() {
+            self.match_transport_region(packet, REGION_DENY_FLOOD)
+        } else {
+            let wildcard = self.wildcard();
+            wildcard.allows_flood().then_some(wildcard)
         }
     }
 

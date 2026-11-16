@@ -201,7 +201,13 @@ pub async fn handle_remote_packet<P: Platform, S: Storage>(
         return None;
     }
 
-    match &packet.payload {
+    let reply_region = context
+        .with_config(|config| config.regions().match_reply_region(packet))
+        .await;
+    if packet.route_type.is_flood() && reply_region.is_none() {
+        return None;
+    }
+    let response = match &packet.payload {
         Payload::AnonymousRequest(payload) => {
             let reply_route = if packet.route_type.is_flood() {
                 ReplyRoute::Direct(packet.normal_path()?.reversed())
@@ -231,7 +237,17 @@ pub async fn handle_remote_packet<P: Platform, S: Storage>(
         Payload::Request(payload) => handle_authenticated_request(packet, payload, context).await,
         Payload::TextMessage(payload) => handle_authenticated_text_message(payload, context).await,
         _ => None,
+    }?;
+    let mut reply = Packet::decode(&response).ok()?;
+    if !reply.route_type.is_flood() {
+        return Some(response);
     }
+    let region = reply_region?;
+    context
+        .with_config(|config| config.regions().apply_scope(&mut reply, &region))
+        .await
+        .ok()?;
+    reply.encode().ok()
 }
 
 async fn handle_anonymous_request<P: Platform, S: Storage>(
@@ -423,14 +439,6 @@ async fn handle_authenticated_request<P: Platform, S: Storage>(
     payload: &mcrs_protocol::DirectEncryptedPayload,
     context: &AppContext<P, S>,
 ) -> Option<Vec<u8>> {
-    let flood_region = if packet.route_type.is_flood() {
-        let region = context
-            .with_config(|config| config.regions().match_flood_region(packet))
-            .await?;
-        Some(region)
-    } else {
-        None
-    };
     let now_ms = context.platform.now_millis();
     let decrypted = decrypt_authenticated_payload(payload, context, now_ms).await?;
     let plaintext = RequestPlaintext::decode(decrypted.unpadded()).ok()?;
@@ -450,19 +458,15 @@ async fn handle_authenticated_request<P: Platform, S: Storage>(
 
     let response_body =
         handle_binary_request(&plaintext, context, now_ms, decrypted.privilege).await?;
-    if let Some(region) = flood_region {
+    if packet.route_type.is_flood() {
         let discovered_path = packet.normal_path()?.clone();
-        let mut response = super::crypto::encode_path_response_packet(
+        let response = super::crypto::encode_path_response_packet(
             &decrypted.shared_secret,
             &decrypted.sender_pubkey,
             &responder_public_key,
             &response_body,
             discovered_path,
         )?;
-        context
-            .with_config(|config| config.regions().apply_scope(&mut response, &region))
-            .await
-            .ok()?;
         return response.encode().ok();
     }
 

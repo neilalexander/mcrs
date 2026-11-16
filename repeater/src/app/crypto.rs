@@ -123,24 +123,13 @@ pub async fn encode_login_response<P: Platform, S: Storage>(
     };
 
     if request.route_type.is_flood() {
-        let mut packet = encode_path_response_packet(
+        let packet = encode_path_response_packet(
             shared_secret,
             requester_public_key,
             responder_public_key,
             &response.encode(),
             request.normal_path()?.clone(),
         )?;
-        context
-            .with_config(|config| {
-                let regions = config.regions();
-                if let Some(region) = regions.match_flood_region(request) {
-                    regions.apply_scope(&mut packet, &region)
-                } else {
-                    regions.apply_default_scope(&mut packet).map(|_| ())
-                }
-            })
-            .await
-            .ok()?;
         return packet.encode().ok();
     }
 
@@ -424,7 +413,9 @@ mod tests {
             mcrs_protocol::HashSize::Two,
             mcrs_protocol::HashSize::Three,
         ] {
-            let config = super::super::config::AppConfig::generated_defaults([1; 32]);
+            let mut config = super::super::config::AppConfig::generated_defaults([1; 32]);
+            config.put_region("home").unwrap();
+            config.set_default_region(Some("home")).unwrap();
             let sender = Identity::from_private_key(PrivateKey::Seed([2; 32]));
             // All forward hops have already been consumed on arrival.
             let request = login_request(
@@ -540,16 +531,94 @@ mod tests {
     }
 
     #[test]
-    fn scoped_login_reply_keeps_region_and_path_hash_width() {
+    fn flooded_management_replies_keep_incoming_region_instead_of_default() {
+        for route in [RouteType::Flood, RouteType::Direct] {
+            let mut config = super::super::config::AppConfig::generated_defaults([1; 32]);
+            config.put_region("home").unwrap();
+            config.set_default_region(Some("home")).unwrap();
+            config.put_region("incoming").unwrap();
+            config.set_region_flood_allowed("incoming", true).unwrap();
+            let region = config.regions().find_by_name_prefix("incoming").unwrap();
+            let sender = Identity::from_private_key(PrivateKey::Seed([2; 32]));
+            let server = Identity::from_private_key(PrivateKey::Seed([1; 32]));
+            let secret = sender
+                .shared_secret_with_ed25519_public(server.public_key())
+                .unwrap();
+            let path = Path::new(mcrs_protocol::HashSize::Three, vec![]).unwrap();
+            let mut login = login_request(&server, &sender, RouteType::Direct, path.clone(), 10);
+            config.regions().apply_scope(&mut login, &region).unwrap();
+            login.route_type = RouteType::TransportDirect;
+            let context = AppContext::new(TestPlatform, config, crate::platform::NoStorage);
+            let check = |request: &Packet| {
+                let reply =
+                    ready(super::super::cli::handle_remote_packet(request, &context)).unwrap();
+                let reply = Packet::decode(&reply).unwrap();
+                assert_eq!(reply.route_type, RouteType::TransportFlood);
+                assert_eq!(reply.normal_path().unwrap().hash_size(), path.hash_size());
+                let matched = ready(
+                    context.with_config(|config| config.regions().match_flood_region(&reply)),
+                )
+                .unwrap();
+                assert_eq!(matched.name, region.name);
+            };
+            check(&login);
+            for (timestamp, is_text) in [(11, false), (12, true)] {
+                let plaintext = if is_text {
+                    TextMessagePlaintext {
+                        timestamp,
+                        text_type: TextType::CliData,
+                        attempt: 0,
+                        message: b"get name".to_vec(),
+                    }
+                    .encode()
+                    .unwrap()
+                } else {
+                    mcrs_protocol::RequestPlaintext {
+                        timestamp,
+                        request_data: vec![0x03],
+                    }
+                    .encode()
+                };
+                let (mac, ciphertext) = encrypt_payload(&secret, &plaintext).unwrap();
+                let payload = DirectEncryptedPayload {
+                    destination_hash: server.public_key()[0],
+                    source_hash: sender.public_key()[0],
+                    mac,
+                    ciphertext,
+                };
+                let mut request = Packet {
+                    route_type: route,
+                    transport_codes: None,
+                    path: RoutePath::Normal(path.clone()),
+                    payload: if is_text {
+                        Payload::TextMessage(payload)
+                    } else {
+                        Payload::Request(payload)
+                    },
+                };
+                ready(
+                    context
+                        .with_config(|config| config.regions().apply_scope(&mut request, &region)),
+                )
+                .unwrap();
+                if route.is_direct() {
+                    request.route_type = RouteType::TransportDirect;
+                }
+                check(&request);
+            }
+        }
+    }
+
+    #[test]
+    fn flood_login_path_return_uses_incoming_region() {
         let mut config = super::super::config::AppConfig::generated_defaults([1; 32]);
         config.put_region("home").unwrap();
         config.set_default_region(Some("home")).unwrap();
+        config.put_region("incoming").unwrap();
+        config.set_region_flood_allowed("incoming", true).unwrap();
+        let region = config.regions().find_by_name_prefix("incoming").unwrap();
         let sender = Identity::from_private_key(PrivateKey::Seed([2; 32]));
-        let path = Path::new(
-            mcrs_protocol::HashSize::Three,
-            vec![0x11, 0x22, 0x33, 0x44, 0x55, 0x66],
-        )
-        .unwrap();
+        let path = Path::new(mcrs_protocol::HashSize::Three, vec![0x11, 0x22, 0x33]).unwrap();
         let mut request = login_request(
             config.identity(),
             &sender,
@@ -557,17 +626,54 @@ mod tests {
             path.clone(),
             10,
         );
-        let region = config.regions().default_region().unwrap();
         config.regions().apply_scope(&mut request, &region).unwrap();
         let context = AppContext::new(TestPlatform, config, crate::platform::NoStorage);
         let reply = ready(super::super::cli::handle_remote_packet(&request, &context)).unwrap();
         let reply = Packet::decode(&reply).unwrap();
-        assert_eq!(reply.route_type, RouteType::TransportFlood);
+        assert!(matches!(reply.payload, Payload::Path(_)));
         assert_eq!(reply.normal_path().unwrap().hash_size(), path.hash_size());
-        let matched =
+        assert_eq!(
             ready(context.with_config(|config| config.regions().match_flood_region(&reply)))
+                .unwrap()
+                .name,
+            region.name
+        );
+    }
+
+    #[test]
+    fn login_in_unknown_or_denied_region_does_not_fall_back_to_default() {
+        for known in [false, true] {
+            let mut config = super::super::config::AppConfig::generated_defaults([1; 32]);
+            config.put_region("home").unwrap();
+            config.set_default_region(Some("home")).unwrap();
+            let mut sender_config = super::super::config::AppConfig::generated_defaults([2; 32]);
+            sender_config.put_region("incoming").unwrap();
+            let region = sender_config
+                .regions()
+                .find_by_name_prefix("incoming")
                 .unwrap();
-        assert_eq!(matched.name, region.name);
+            if known {
+                config.put_region("incoming").unwrap();
+                config.set_region_flood_allowed("incoming", false).unwrap();
+            }
+            let mut request = login_request(
+                config.identity(),
+                sender_config.identity(),
+                RouteType::Flood,
+                Path::empty(),
+                10,
+            );
+            sender_config
+                .regions()
+                .apply_scope(&mut request, &region)
+                .unwrap();
+            let context = AppContext::new(TestPlatform, config, crate::platform::NoStorage);
+            assert!(ready(super::super::cli::handle_remote_packet(&request, &context)).is_none());
+            assert!(
+                ready(context.remote_privilege_for(sender_config.identity().public_key(), 100))
+                    .is_none()
+            );
+        }
     }
 
     #[test]

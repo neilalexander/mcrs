@@ -9,7 +9,7 @@ pub enum ReplyRoute {
 
 pub(crate) const MAX_REMOTE_LOGINS: usize = 4;
 pub(crate) const MAX_REMOTE_SESSIONS: usize = MAX_REMOTE_LOGINS * 2;
-const REMOTE_LOGIN_TTL_MS: u64 = 10 * 60 * 1000;
+const REMOTE_LOGIN_TTL_MS: u64 = 30 * 60 * 1000;
 
 type RemoteLoginEntries = [Option<RemoteLogin>; MAX_REMOTE_LOGINS];
 
@@ -339,6 +339,35 @@ pub fn login_privilege(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sessions_expire_after_thirty_minutes_of_inactivity() {
+        let mut table = RemoteLoginTable::new();
+        let key = [7; PUB_KEY_SIZE];
+        let minute = 60_000;
+        assert!(table.authenticate(
+            &key,
+            &[9; 32],
+            RemotePrivilege::Admin,
+            10,
+            0,
+            &ReplyRoute::Flood(HashSize::One)
+        ));
+        assert_eq!(
+            table.privilege_for(&key, 11 * minute),
+            Some(RemotePrivilege::Admin)
+        );
+        assert!(table.accept_newer_timestamp(&key, RemotePrivilege::Admin, 11, 29 * minute));
+        assert_eq!(
+            table.privilege_for(&key, 31 * minute),
+            Some(RemotePrivilege::Admin)
+        );
+        assert_eq!(
+            table.privilege_for(&key, 59 * minute),
+            Some(RemotePrivilege::Admin)
+        );
+        assert_eq!(table.privilege_for(&key, 59 * minute + 1), None);
+    }
 
     #[test]
     fn learned_path_refreshes_activity_without_resetting_replay_protection() {
