@@ -35,7 +35,6 @@ const MAX_PAYLOAD_LEN: u8 = 255;
 pub struct BoardConfig {
     pub tcxo_ctrl: Option<TcxoCtrlVoltage>,
     pub use_dcdc: bool,
-    pub rx_boost: bool,
 }
 
 impl BoardConfig {
@@ -43,7 +42,6 @@ impl BoardConfig {
         Self {
             tcxo_ctrl: Some(TcxoCtrlVoltage::Ctrl1V8),
             use_dcdc: true,
-            rx_boost: true,
         }
     }
 
@@ -51,7 +49,6 @@ impl BoardConfig {
         Self {
             tcxo_ctrl: Some(TcxoCtrlVoltage::Ctrl1V8),
             use_dcdc: true,
-            rx_boost: true,
         }
     }
 }
@@ -245,7 +242,7 @@ where
                 chip: sx126x::Sx1262,
                 tcxo_ctrl: board.tcxo_ctrl,
                 use_dcdc: board.use_dcdc,
-                rx_boost: board.rx_boost,
+                rx_boost: config.rx_boost,
             },
         );
         let mut lora = LoRa::new(chip, ENABLE_PUBLIC_NETWORK, delay).await?;

@@ -93,6 +93,7 @@ pub struct RadioConfig {
     pub bandwidth: Bandwidth,
     pub coding_rate: CodingRate,
     pub transmit_power_dbm: i32,
+    pub rx_boost: bool,
 }
 
 /// A LoRa spreading factor, SF5 to SF12.
@@ -472,6 +473,7 @@ impl AppConfig {
             "wifi.pass" => self.wifi.password = defaults.wifi.password,
             "wifi.telnet" => self.wifi.telnet = defaults.wifi.telnet,
             "radio" => self.radio = defaults.radio,
+            "radio.rxgain" => self.radio.rx_boost = defaults.radio.rx_boost,
             "freq" => self.radio.receive_frequency_hz = defaults.radio.receive_frequency_hz,
             "tx" => self.radio.transmit_power_dbm = defaults.radio.transmit_power_dbm,
             "dutycycle" => self.duty_cycle_percent = defaults.duty_cycle_percent,
@@ -494,6 +496,10 @@ impl AppConfig {
 
     pub fn radio(&self) -> RadioConfig {
         self.radio
+    }
+
+    pub fn set_rx_boost(&mut self, enabled: bool) {
+        self.radio.rx_boost = enabled;
     }
 
     pub fn regions(&self) -> &RegionMap {
@@ -861,6 +867,7 @@ impl StoredAppConfig {
                 bandwidth: Bandwidth::Khz7_8,
                 coding_rate: CodingRate::Cr4_5,
                 transmit_power_dbm: 0,
+                rx_boost: true,
             },
             regions: RegionMap::new(),
             region_capture: false,
@@ -1063,6 +1070,7 @@ fn decode_config_layer(
             "radio.coding_rate" | "radio.coding_rate_denominator" => {
                 config.radio.coding_rate = CodingRate::from_denominator(value.parse().ok()?)?;
             }
+            "radio.rxgain" => config.radio.rx_boost = value.parse::<bool>().ok()?,
             "radio.tx_power_dbm" => {
                 config.radio.transmit_power_dbm = value.parse::<i32>().ok()?;
             }
@@ -1274,6 +1282,9 @@ fn encode_config_delta(config: &StoredAppConfig, defaults: &StoredAppConfig) -> 
             config.radio.coding_rate.denominator()
         );
     }
+    if config.radio.rx_boost != defaults.radio.rx_boost {
+        let _ = writeln!(&mut out, "radio.rxgain={}", config.radio.rx_boost);
+    }
     if config.radio.transmit_power_dbm != defaults.radio.transmit_power_dbm {
         let _ = writeln!(
             &mut out,
@@ -1432,6 +1443,7 @@ fn encode_full_config_text_redacted(config: &StoredAppConfig, redact_secrets: bo
         "radio.coding_rate={}",
         config.radio.coding_rate.denominator()
     );
+    let _ = writeln!(&mut out, "radio.rxgain={}", config.radio.rx_boost);
     let _ = writeln!(
         &mut out,
         "radio.tx_power_dbm={}",
@@ -2437,6 +2449,45 @@ mod tests {
     }
 
     #[test]
+    fn rx_gain_defaults_round_trips_and_resets() {
+        let image = network_defaults("");
+        assert!(image.radio.rx_boost);
+        assert!(
+            decode_config_text(b"version=1\n", &image)
+                .unwrap()
+                .radio
+                .rx_boost
+        );
+        for enabled in [false, true] {
+            let text = alloc::format!("radio.rxgain={enabled}\n");
+            assert_eq!(network_defaults(&text).radio.rx_boost, enabled);
+            let stored = decode_config_text(text.as_bytes(), &image).unwrap();
+            let saved = encode_config_text(&stored);
+            assert_eq!(
+                decode_config_text(&saved, &image).unwrap().radio.rx_boost,
+                enabled
+            );
+            let full = encode_full_config_text_redacted(&stored, false);
+            assert!(core::str::from_utf8(&full).unwrap().contains(&text));
+        }
+        for value in ["on", "off", "1", "0", "invalid", ""] {
+            let text = alloc::format!("radio.rxgain={value}\n");
+            assert!(decode_config_text(text.as_bytes(), &image).is_none());
+        }
+        let mut app = AppConfig::from_stored(image, "test");
+        app.set_rx_boost(false);
+        assert!(!app.radio().rx_boost);
+        let saved = encode_config_text(&StoredAppConfig::from_app_config(&app));
+        assert!(
+            core::str::from_utf8(&saved)
+                .unwrap()
+                .contains("radio.rxgain=false\n")
+        );
+        app.unset("radio.rxgain").unwrap();
+        assert_eq!(app.radio().rx_boost, defaults().radio.rx_boost);
+    }
+
+    #[test]
     fn radio_settings_load_named_bandwidths_and_reject_others() {
         let radio = RadioConfig {
             receive_frequency_hz: 869_618_000,
@@ -2444,6 +2495,7 @@ mod tests {
             bandwidth: Bandwidth::Khz62_5,
             coding_rate: CodingRate::Cr4_6,
             transmit_power_dbm: 14,
+            rx_boost: true,
         };
         let image = network_defaults("");
         assert_eq!(image.radio, radio);

@@ -95,7 +95,6 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         BoardConfig {
             tcxo_ctrl: Some(TcxoCtrlVoltage::Ctrl1V8),
             use_dcdc: true,
-            rx_boost: true,
         },
     );
     let platform = NrfPlatform::new(MODEL, Rng::new_blocking(p.RNG));

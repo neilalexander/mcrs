@@ -1040,6 +1040,11 @@ async fn handle_get_command<P: Platform, S: Storage>(
                 .with_config(|config| format!("> {}", config.node_name()))
                 .await
         }
+        "radio.rxgain" => {
+            context
+                .with_config(|config| format!("> {}", config.radio().rx_boost))
+                .await
+        }
         "radio" => {
             let radio = context.with_config(|config| config.radio()).await;
             format!(
@@ -1375,6 +1380,22 @@ async fn handle_set_command<P: Platform, S: Storage>(
                 output
             }
             Err(error) => format!("Error: {}", error),
+        };
+    }
+
+    if let Some(value) = config.strip_prefix("radio.rxgain ").map(str::trim) {
+        let Ok(enabled) = value.parse::<bool>() else {
+            return String::from("Error, invalid radio.rxgain (expected true or false)");
+        };
+        return match context
+            .update_config(|config| {
+                config.set_rx_boost(enabled);
+                Ok(())
+            })
+            .await
+        {
+            Ok(()) => String::from("OK - reboot to apply"),
+            Err(error) => format!("Error: {error}"),
         };
     }
 
@@ -2433,6 +2454,7 @@ mod tests {
             bandwidth: Bandwidth::Khz62_5,
             coding_rate: CodingRate::Cr4_6,
             transmit_power_dbm: 14,
+            rx_boost: false,
         };
         assert_eq!(
             super::parse_radio_config("869.525,7.8,12,5", current),
