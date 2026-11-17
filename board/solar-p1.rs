@@ -21,7 +21,7 @@ use mcrs_nrf::{
 };
 use mcrs_repeater::{
     Repeater,
-    platform::{NoButton, NoConsole, NoDisplay, Radio},
+    platform::{NoButton, NoConsole, NoDisplay},
 };
 use mcrs_sx1262::{BoardConfig, Sx1262, TcxoCtrlVoltage};
 use panic_probe as _;
@@ -48,19 +48,32 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     config.dcdc.reg1 = true;
     let p = embassy_nrf::init(config);
 
-    let nss = Output::new(p.P0_04, Level::High, OutputDrive::Standard);
-    let reset = Output::new(p.P0_28, Level::High, OutputDrive::Standard);
+    let mut nss = Output::new(p.P0_04, Level::High, OutputDrive::Standard);
+    let mut reset = Output::new(p.P0_28, Level::Low, OutputDrive::Standard);
+
+    let mut battery = NrfBattery::new(
+        p.SAADC,
+        Irqs,
+        p.P0_31,
+        Some(Output::new(p.P0_14, Level::Low, OutputDrive::Standard)),
+        BatteryConfig::xiao(),
+    );
+    let mut storage = NrfStorage::new(Nvmc::new(p.NVMC));
+    mcrs_nrf::sleep::check_startup_voltage(&mut battery, &mut storage).await;
+    storage.initialize();
+    reset.set_high();
+
     let dio1 = Input::new(p.P0_03, Pull::Down);
     let busy = Input::new(p.P0_29, Pull::None);
 
     let mut spi_config = spim::Config::default();
     spi_config.frequency = spim::Frequency::M16;
-    let spim = Spim::new(p.TWISPI1, Irqs, p.P1_13, p.P1_14, p.P1_15, spi_config);
-    let spi = ExclusiveDevice::new(spim, nss, Delay).unwrap();
+    let mut spim = Spim::new(p.TWISPI1, Irqs, p.P1_13, p.P1_14, p.P1_15, spi_config);
+    let spi = ExclusiveDevice::new(&mut spim, &mut nss, Delay).unwrap();
 
     let mut radio = Sx1262::new(
         spi,
-        reset,
+        &mut reset,
         dio1,
         busy,
         None,
@@ -71,21 +84,13 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         },
     );
     let platform = NrfPlatform::new(MODEL, Rng::new_blocking(p.RNG));
-    let storage = NrfStorage::new(Nvmc::new(p.NVMC));
 
     let mut console = NoConsole;
     let mut display = NoDisplay;
     let mut button = NoButton;
     let mut sensors = mcrs_nrf::sensors::NrfSensors(embassy_nrf::temp::Temp::new(p.TEMP, Irqs));
-    let mut battery = NrfBattery::new(
-        p.SAADC,
-        Irqs,
-        p.P0_31,
-        Some(Output::new(p.P0_14, Level::Low, OutputDrive::Standard)),
-        BatteryConfig::xiao(),
-    );
 
-    Repeater::new(
+    let repeater = Repeater::new(
         platform,
         storage,
         &mut radio,
@@ -94,10 +99,17 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         &mut button,
         &mut battery,
         &mut sensors,
-    )
-    .run(false) // Report voltage without automatic low-voltage shutdown.
-    .await;
-    // Low-voltage shutdown has no timer recovery on these boards yet.
-    let _ = radio.shutdown().await;
-    core::future::pending().await
+    );
+    let context = repeater.context();
+    repeater.run(true).await;
+    let lowvoltage = context.with_config(|config| config.lowvoltage()).await;
+    battery.shutdown();
+    let radio_asleep = mcrs_nrf::sleep::shutdown_radio(&mut radio).await;
+    drop(radio);
+    drop(spim);
+    drop(sensors);
+    if !radio_asleep {
+        reset.set_low();
+    }
+    mcrs_nrf::sleep::recover(&mut battery, lowvoltage).await
 }

@@ -22,6 +22,7 @@ const TEMP_PATH: &str = ".pending";
 /// Keeps the repeater's files in flash.
 pub struct NrfStorage {
     device: FlashRegion,
+    initialized: bool,
 }
 
 fn options() -> FilesystemOptions {
@@ -36,9 +37,7 @@ fn options() -> FilesystemOptions {
 }
 
 impl NrfStorage {
-    /// Mounts the filesystem, making a new one if the flash doesn't hold one.
-    /// If that fails, reading and writing fail too and the repeater runs on its
-    /// defaults.
+    /// Creates read-only storage until `initialize` prepares the filesystem.
     pub fn new(nvmc: Nvmc<'static>) -> Self {
         let start = &raw const __littlefs_start as u32;
         let end = &raw const __littlefs_end as u32;
@@ -48,11 +47,23 @@ impl NrfStorage {
             start,
             block_count: (end - start) as usize / BLOCK_SIZE,
         };
-        match mount_or_format(device) {
-            Ok(()) => info!("LittleFS ready"),
-            Err(error) => error!("LittleFS initialization failed: {}", Debug2Format(&error)),
+        Self {
+            device,
+            initialized: false,
         }
-        Self { device }
+    }
+
+    pub fn initialize(&mut self) {
+        self.initialized = match mount_or_format(self.device) {
+            Ok(()) => {
+                info!("LittleFS ready");
+                true
+            }
+            Err(error) => {
+                error!("LittleFS initialization failed: {}", Debug2Format(&error));
+                false
+            }
+        };
     }
 }
 
@@ -91,6 +102,9 @@ impl Storage for NrfStorage {
     }
 
     fn write_atomic(&mut self, key: &str, data: &[u8]) -> Result<(), Error> {
+        if !self.initialized {
+            return Err(Error::NotAvailable);
+        }
         validate_key(key)?;
         if data.len() > MAX_FILE_SIZE {
             return Err(Error::BufferTooSmall);

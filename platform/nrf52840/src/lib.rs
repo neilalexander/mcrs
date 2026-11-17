@@ -14,6 +14,7 @@ use mcrs_repeater::{
 pub mod battery;
 mod littlefs;
 pub mod sensors;
+pub mod sleep;
 pub mod usb_console;
 
 pub use littlefs::NrfStorage;

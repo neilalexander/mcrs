@@ -22,7 +22,7 @@ use mcrs_nrf::{
 };
 use mcrs_repeater::{
     Repeater,
-    platform::{NoButton, NoDisplay, Radio},
+    platform::{NoButton, NoDisplay},
 };
 use mcrs_sx1262::{BoardConfig, Sx1262, TcxoCtrlVoltage};
 use panic_probe as _;
@@ -52,9 +52,18 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     config.dcdc.reg1 = true;
     let p = embassy_nrf::init(config);
 
-    // Upstream RAK4631Board::begin enables the SX1262 supply before use.
-    let _radio_power = Output::new(p.P1_05, Level::High, OutputDrive::Standard);
+    let mut radio_power = Output::new(p.P1_05, Level::Low, OutputDrive::Standard);
+    let mut nss = Output::new(p.P1_10, Level::Low, OutputDrive::Standard);
+    let mut reset = Output::new(p.P1_06, Level::Low, OutputDrive::Standard);
+
+    let mut battery = NrfBattery::new(p.SAADC, Irqs, p.P0_05, None, BatteryConfig::rak4631());
+    let mut storage = NrfStorage::new(Nvmc::new(p.NVMC));
+    mcrs_nrf::sleep::check_startup_voltage(&mut battery, &mut storage).await;
+    storage.initialize();
+    radio_power.set_high();
     embassy_time::Timer::after_millis(10).await;
+    nss.set_high();
+    reset.set_high();
 
     let driver = embassy_nrf::usb::Driver::new(
         p.USBD,
@@ -75,19 +84,17 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     let (mut usb, mut console) =
         mcrs_nrf::usb_console::build_console(driver, usb_config, &mut usb_buffers);
 
-    let nss = Output::new(p.P1_10, Level::High, OutputDrive::Standard);
-    let reset = Output::new(p.P1_06, Level::High, OutputDrive::Standard);
     let dio1 = Input::new(p.P1_15, Pull::Down);
     let busy = Input::new(p.P1_14, Pull::None);
 
     let mut spi_config = spim::Config::default();
     spi_config.frequency = spim::Frequency::M16;
-    let spim = Spim::new(p.TWISPI1, Irqs, p.P1_11, p.P1_13, p.P1_12, spi_config);
-    let spi = ExclusiveDevice::new(spim, nss, Delay).unwrap();
+    let mut spim = Spim::new(p.TWISPI1, Irqs, p.P1_11, p.P1_13, p.P1_12, spi_config);
+    let spi = ExclusiveDevice::new(&mut spim, &mut nss, Delay).unwrap();
 
     let mut radio = Sx1262::new(
         spi,
-        reset,
+        &mut reset,
         dio1,
         busy,
         None,
@@ -98,12 +105,10 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         },
     );
     let platform = NrfPlatform::new(MODEL, Rng::new_blocking(p.RNG));
-    let storage = NrfStorage::new(Nvmc::new(p.NVMC));
 
     let mut display = NoDisplay;
     let mut button = NoButton;
     let mut sensors = mcrs_nrf::sensors::NrfSensors(embassy_nrf::temp::Temp::new(p.TEMP, Irqs));
-    let mut battery = NrfBattery::new(p.SAADC, Irqs, p.P0_05, None, BatteryConfig::rak4631());
 
     let repeater = Repeater::new(
         platform,
@@ -116,9 +121,17 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         &mut sensors,
     );
     // USB enumeration and mesh processing both run without a host connected.
-    // Report battery voltage without automatic low-voltage shutdown.
-    embassy_futures::select::select(usb.run(), repeater.run(false)).await;
-    // Low-voltage shutdown has no timer recovery on these boards yet.
-    let _ = radio.shutdown().await;
-    core::future::pending().await
+    let context = repeater.context();
+    embassy_futures::select::select(usb.run(), repeater.run(true)).await;
+    usb.disable().await;
+    let lowvoltage = context.with_config(|config| config.lowvoltage()).await;
+    battery.shutdown();
+    mcrs_nrf::sleep::shutdown_radio(&mut radio).await;
+    drop(radio);
+    drop(spim);
+    drop(sensors);
+    nss.set_low();
+    reset.set_low();
+    radio_power.set_low();
+    mcrs_nrf::sleep::recover(&mut battery, lowvoltage).await
 }

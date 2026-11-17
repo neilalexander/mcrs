@@ -3,7 +3,7 @@ use embassy_nrf::{
     Peri,
     gpio::Output,
     interrupt, peripherals,
-    saadc::{self, ChannelConfig, Gain, Saadc},
+    saadc::{self, AnyInput, ChannelConfig, Gain, Saadc},
 };
 use embassy_time::{Duration, Timer, with_timeout};
 use mcrs_repeater::platform::Battery;
@@ -40,49 +40,62 @@ impl BatteryConfig {
 const SAMPLES: u64 = 8;
 
 /// Samples eight readings, with calibration and a discarded settling sample.
-pub struct NrfBattery<'d> {
-    adc: Saadc<'d, 1>,
-    // Retain the pin in its board-configured state for the lifetime of sensing.
-    _enable: Option<Output<'d>>,
+pub struct NrfBattery<'d, IRQ> {
+    peripheral: Peri<'d, peripherals::SAADC>,
+    input: AnyInput<'d>,
+    irq: IRQ,
+    enable: Option<Output<'d>>,
     config: BatteryConfig,
 }
 
-impl<'d> NrfBattery<'d> {
+impl<'d, IRQ> NrfBattery<'d, IRQ>
+where
+    IRQ: interrupt::typelevel::Binding<interrupt::typelevel::SAADC, saadc::InterruptHandler>
+        + Copy
+        + 'd,
+{
     pub fn new(
         peripheral: Peri<'d, peripherals::SAADC>,
-        irq: impl interrupt::typelevel::Binding<interrupt::typelevel::SAADC, saadc::InterruptHandler>
-        + 'd,
+        irq: IRQ,
         input: impl saadc::Input + 'd,
         enable: Option<Output<'d>>,
         config: BatteryConfig,
     ) -> Self {
-        let mut channel = ChannelConfig::single_ended(input);
+        let mut battery = Self {
+            peripheral,
+            input: input.degrade_saadc(),
+            irq,
+            enable,
+            config,
+        };
+        battery.shutdown();
+        battery
+    }
+
+    pub fn shutdown(&mut self) {
+        if let Some(enable) = &mut self.enable {
+            enable.set_high();
+        }
+    }
+
+    async fn sample(&mut self) -> Option<u16> {
+        let config = self.config;
+        let mut channel = ChannelConfig::single_ended(self.input.reborrow());
         channel.reference = saadc::Reference::Internal;
         channel.gain = config.gain;
-        // High impedance battery dividers need the longest acquisition time.
         channel.time = saadc::Time::_40US;
         let mut adc_config = saadc::Config::default();
         adc_config.resolution = saadc::Resolution::_12bit;
-        Self {
-            adc: Saadc::new(peripheral, irq, adc_config, [channel]),
-            _enable: enable,
-            config,
-        }
-    }
-}
-
-impl Battery for NrfBattery<'_> {
-    async fn millivolts(&mut self) -> Option<u16> {
-        let config = self.config;
+        let mut adc = Saadc::new(self.peripheral.reborrow(), self.irq, adc_config, [channel]);
         Timer::after_millis(config.settle_ms).await;
 
         let sum = with_timeout(Duration::from_millis(250), async {
-            self.adc.calibrate().await;
+            adc.calibrate().await;
             let mut sample = [0];
-            self.adc.sample(&mut sample).await;
+            adc.sample(&mut sample).await;
             let mut sum = 0i32;
             for _ in 0..SAMPLES {
-                self.adc.sample(&mut sample).await;
+                adc.sample(&mut sample).await;
                 if !(0..4095).contains(&sample[0]) {
                     return None;
                 }
@@ -101,5 +114,21 @@ impl Battery for NrfBattery<'_> {
         let mv =
             (sum as u64 * u64::from(config.full_scale_battery_uv) + denominator / 2) / denominator;
         u16::try_from(mv).ok()
+    }
+}
+
+impl<'d, IRQ> Battery for NrfBattery<'d, IRQ>
+where
+    IRQ: interrupt::typelevel::Binding<interrupt::typelevel::SAADC, saadc::InterruptHandler>
+        + Copy
+        + 'd,
+{
+    async fn millivolts(&mut self) -> Option<u16> {
+        if let Some(enable) = &mut self.enable {
+            enable.set_low();
+        }
+        let reading = self.sample().await;
+        self.shutdown();
+        reading
     }
 }
