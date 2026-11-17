@@ -140,6 +140,17 @@ Telnet has the same privilege level as the serial console and requires no additi
 | `set multi.acks <state>` | `0` | `0`, `1` | Adds a multipart copy when forwarding direct ACKs, followed by the ordinary ACK 300 ms later. Incoming multipart ACKs are supported with either setting. |
 | `set loop.detect <mode>` | `minimal` | `off`, `minimal`, `moderate`, `strict` | Stops forwarding packets that appear to have visited this repeater already. `strict` rejects on the first match; `minimal` tolerates more matches with short identifiers. |
 
+### Low voltage
+
+Low-voltage protection can help solar-powered repeaters avoid brownouts by putting the repeater into deep sleep when the battery voltage falls below the sleep threshold. It wakes when voltage reaches the wake threshold. 
+
+| Command | Default | Accepted values | What it does |
+| --- | --- | --- | --- |
+| `set lowvoltage.enabled <state>` | `false` | `true`, `false` | Enables low-voltage protection. |
+| `set lowvoltage.sleep <volts>` | `3.0` | Positive voltage, at most one decimal place; lower than `lowvoltage.wake` | Battery voltage at or below which the board enters low-voltage sleep. |
+| `set lowvoltage.wake <volts>` | `3.3` | Positive voltage, at most one decimal place; higher than `lowvoltage.sleep` | Battery voltage at or above which the board wakes. |
+| `set lowvoltage.interval <seconds>` | `300` | Integer `60`–`3600` | Interval between battery voltage checks while sleeping. |
+
 ## MQTT
 
 MQTT publishes received and transmitted packet information to a server. It requires an MQTT-enabled firmware image and a Wi-Fi connection.
