@@ -1,4 +1,5 @@
 use crate::{
+    SleepRequest,
     app::{
         AppContext,
         config::{Bandwidth, CodingRate, RadioConfig, SpreadingFactor},
@@ -52,14 +53,14 @@ pub struct CliResponse {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PostReplyAction {
     Reboot,
-    LowVoltage,
+    Sleep(SleepRequest),
 }
 
 impl PostReplyAction {
     pub(crate) fn execute<P: Platform, S: Storage>(self, context: &AppContext<P, S>) {
         match self {
             Self::Reboot => context.platform.reboot(),
-            Self::LowVoltage => context.request_lowvoltage(),
+            Self::Sleep(request) => context.request_sleep(request),
         }
     }
 }
@@ -826,8 +827,21 @@ async fn handle_command<P: Platform, S: Storage>(
             if !request.privilege.is_privileged() {
                 denied_text()
             } else {
-                post_reply = Some(PostReplyAction::LowVoltage);
+                post_reply = Some(PostReplyAction::Sleep(SleepRequest::LowVoltage));
                 String::from("OK - entering lowvoltage")
+            }
+        }
+        command if command.split_ascii_whitespace().next() == Some("hibernate") => {
+            if !request.privilege.is_privileged() {
+                denied_text()
+            } else if let Some(duration) = command
+                .strip_prefix("hibernate")
+                .and_then(|value| parse_hibernate_duration(value.trim()))
+            {
+                post_reply = Some(PostReplyAction::Sleep(SleepRequest::Hibernate(duration)));
+                format!("OK - hibernating for {} minutes", duration.as_secs() / 60)
+            } else {
+                String::from("Error: expected hibernate <minutes> (1..44640 whole minutes)")
             }
         }
         "reboot" => {
@@ -2100,6 +2114,13 @@ fn denied_text() -> String {
     String::from("CLI: denied, command requires passworded login")
 }
 
+fn parse_hibernate_duration(value: &str) -> Option<core::time::Duration> {
+    let minutes = value.parse::<u32>().ok()?;
+    (1..=31 * 24 * 60)
+        .contains(&minutes)
+        .then(|| core::time::Duration::from_secs(u64::from(minutes) * 60))
+}
+
 fn help_text() -> String {
     String::from("Help: https://github.com/neilalexander/mcrs/blob/main/CONFIG.md")
 }
@@ -2331,6 +2352,29 @@ mod tests {
     };
 
     #[test]
+    fn hibernate_duration_accepts_whole_minutes_up_to_31_days() {
+        for minutes in [1, 60, 1440, 44640] {
+            let duration = super::parse_hibernate_duration(&alloc::format!("{minutes}")).unwrap();
+            assert_eq!(duration.as_secs(), minutes * 60);
+        }
+        for invalid in [
+            "",
+            "0",
+            "-1",
+            "1.5",
+            "44641",
+            "4294967295",
+            "4294967296",
+            "60 extra",
+        ] {
+            assert!(
+                super::parse_hibernate_duration(invalid).is_none(),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
     fn remote_reply_truncation_preserves_utf8() {
         use super::{REMOTE_CLI_REPLY_MAX_LEN, truncate_to_remote_reply_len};
 
@@ -2387,6 +2431,7 @@ mod tests {
             "reapply profile",
             "erase config",
             "reboot",
+            "hibernate 60",
         ] {
             for request in authenticated {
                 assert!(request.allows_command(command), "{command}");

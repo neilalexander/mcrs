@@ -1,6 +1,7 @@
 use embassy_nrf::pac::{CLOCK, POWER};
 use embassy_time::{Duration, Timer};
 use mcrs_repeater::{
+    SleepRequest,
     app::config::{AppConfig, LowVoltageConfig},
     platform::{Battery, Radio, Storage},
 };
@@ -13,23 +14,33 @@ pub async fn check_startup_voltage(battery: &mut impl Battery, storage: &mut imp
             .await
             .is_some_and(|mv| mv >= config.wake_mv)
     {
-        recover(battery, config).await;
+        enter(SleepRequest::LowVoltage, config, battery).await;
     }
 }
 
-pub async fn recover(battery: &mut impl Battery, config: LowVoltageConfig) -> ! {
+pub async fn enter(
+    request: SleepRequest,
+    config: LowVoltageConfig,
+    battery: &mut impl Battery,
+) -> ! {
     CLOCK.tasks_hfclkstop().write_value(1);
     POWER.tasks_lowpwr().write_value(1);
-    loop {
-        Timer::after(Duration::from_secs(u64::from(config.interval_seconds))).await;
-        if !config.enabled
-            || battery
-                .millivolts()
-                .await
-                .is_some_and(|mv| mv >= config.wake_mv)
-        {
+    match request {
+        SleepRequest::Hibernate(duration) => {
+            Timer::after(Duration::from_secs(duration.as_secs())).await;
             cortex_m::peripheral::SCB::sys_reset();
         }
+        SleepRequest::LowVoltage => loop {
+            Timer::after(Duration::from_secs(u64::from(config.interval_seconds))).await;
+            if !config.enabled
+                || battery
+                    .millivolts()
+                    .await
+                    .is_some_and(|mv| mv >= config.wake_mv)
+            {
+                cortex_m::peripheral::SCB::sys_reset();
+            }
+        },
     }
 }
 

@@ -130,7 +130,7 @@ pub struct AppContext<P, S> {
     pub mqtt: mqtt::MqttContext,
 
     remote_reply_action: Cell<Option<cli::PostReplyAction>>,
-    lowvoltage_requested: Signal<CriticalSectionRawMutex, ()>,
+    sleep_requested: Signal<CriticalSectionRawMutex, crate::SleepRequest>,
     periodic_changed: Signal<CriticalSectionRawMutex, ()>,
     lowvoltage_changed: Signal<CriticalSectionRawMutex, ()>,
     seen_packets: RefCell<SeenPacketCache>,
@@ -174,7 +174,7 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
             mqtt: MqttContext::new(),
 
             remote_reply_action: Cell::new(None),
-            lowvoltage_requested: Signal::new(),
+            sleep_requested: Signal::new(),
             periodic_changed: Signal::new(),
             lowvoltage_changed: Signal::new(),
             seen_packets: RefCell::new(SeenPacketCache::new_with_capacity(
@@ -641,12 +641,12 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
         self.remote_reply_action.set(action);
     }
 
-    pub(crate) fn request_lowvoltage(&self) {
-        self.lowvoltage_requested.signal(());
+    pub(crate) fn request_sleep(&self, request: crate::SleepRequest) {
+        self.sleep_requested.signal(request);
     }
 
-    pub(crate) async fn wait_for_lowvoltage(&self) {
-        self.lowvoltage_requested.wait().await;
+    pub(crate) async fn wait_for_sleep(&self) -> crate::SleepRequest {
+        self.sleep_requested.wait().await
     }
 
     fn is_seen_or_pending(&self, signature: [u8; 8]) -> bool {

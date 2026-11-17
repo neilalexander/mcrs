@@ -5,13 +5,20 @@ use crate::{
     platform::{Battery, Platform, Radio, StatusDisplay, Storage, sensors::Sensors},
 };
 use alloc::{boxed::Box, string::String};
+use core::future::Future;
 use defmt::{error, info};
 use embassy_futures::{
     join::{join, join5},
-    select::select3,
+    select::{Either3, select3},
 };
 use embedded_hal_async::digital::Wait;
 use embedded_io_async::{Read, Write};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SleepRequest {
+    LowVoltage,
+    Hibernate(core::time::Duration),
+}
 
 /// The repeater for one board, with the devices it drives.
 pub struct Repeater<'a, PLATFORM, STORAGE, RADIO, CONSOLE, DISPLAY, BUTTON, BATTERY, SENSORS>
@@ -81,10 +88,10 @@ where
         self.context
     }
 
-    /// Runs until low voltage or the lowvoltage command stops normal operation.
+    /// Runs alongside the board task and returns the reason for sleeping.
     /// `lowvoltage_supported` indicates whether the board supports recovery.
     /// Returning drops all internal task futures and releases device borrows.
-    pub async fn run(self, lowvoltage_supported: bool) {
+    pub async fn run(self, lowvoltage_supported: bool, board_task: impl Future) -> SleepRequest {
         let Self {
             context,
             radio,
@@ -95,18 +102,25 @@ where
             sensors,
         } = self;
 
-        select3(
-            context.wait_for_lowvoltage(),
+        let repeater_tasks = join5(
+            ui::run(display, button, context),
+            cli::serve_console(console, context),
+            app::handler_loop(context),
+            periodic::run(context, sensors),
+            radio_task(radio, context),
+        );
+        let all_tasks = join(repeater_tasks, board_task);
+
+        match select3(
+            context.wait_for_sleep(),
             battery::run(battery, context, lowvoltage_supported),
-            join5(
-                ui::run(display, button, context),
-                cli::serve_console(console, context),
-                app::handler_loop(context),
-                periodic::run(context, sensors),
-                radio_task(radio, context),
-            ),
+            all_tasks,
         )
-        .await;
+        .await
+        {
+            Either3::First(request) => request,
+            _ => SleepRequest::LowVoltage,
+        }
     }
 }
 

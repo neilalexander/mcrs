@@ -18,6 +18,7 @@ use embedded_hal_bus::spi::ExclusiveDevice;
 use mcrs_nrf::{
     HEAP_SIZE, NrfPlatform, NrfStorage,
     battery::{BatteryConfig, NrfBattery},
+    sleep,
 };
 use mcrs_repeater::{
     Repeater,
@@ -59,7 +60,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         BatteryConfig::xiao(),
     );
     let mut storage = NrfStorage::new(Nvmc::new(p.NVMC));
-    mcrs_nrf::sleep::check_startup_voltage(&mut battery, &mut storage).await;
+    sleep::check_startup_voltage(&mut battery, &mut storage).await;
     storage.initialize();
     reset.set_high();
 
@@ -101,15 +102,15 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         &mut sensors,
     );
     let context = repeater.context();
-    repeater.run(true).await;
+    let sleep_request = repeater.run(true, core::future::ready(())).await;
     let lowvoltage = context.with_config(|config| config.lowvoltage()).await;
     battery.shutdown();
-    let radio_asleep = mcrs_nrf::sleep::shutdown_radio(&mut radio).await;
+    let radio_asleep = sleep::shutdown_radio(&mut radio).await;
     drop(radio);
     drop(spim);
     drop(sensors);
     if !radio_asleep {
         reset.set_low();
     }
-    mcrs_nrf::sleep::recover(&mut battery, lowvoltage).await
+    sleep::enter(sleep_request, lowvoltage, &mut battery).await
 }

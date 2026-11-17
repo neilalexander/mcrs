@@ -10,6 +10,6 @@ pub mod platform;
 mod repeater;
 
 pub use platform::Platform;
-pub use repeater::Repeater;
+pub use repeater::{Repeater, SleepRequest};
 
 pub const VERSION: &str = env!("MESHCORE_FIRMWARE_VERSION");

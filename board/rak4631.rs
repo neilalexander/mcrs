@@ -19,6 +19,7 @@ use embedded_hal_bus::spi::ExclusiveDevice;
 use mcrs_nrf::{
     HEAP_SIZE, NrfPlatform, NrfStorage,
     battery::{BatteryConfig, NrfBattery},
+    sleep, usb_console,
 };
 use mcrs_repeater::{
     Repeater,
@@ -58,7 +59,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
 
     let mut battery = NrfBattery::new(p.SAADC, Irqs, p.P0_05, None, BatteryConfig::rak4631());
     let mut storage = NrfStorage::new(Nvmc::new(p.NVMC));
-    mcrs_nrf::sleep::check_startup_voltage(&mut battery, &mut storage).await;
+    sleep::check_startup_voltage(&mut battery, &mut storage).await;
     storage.initialize();
     radio_power.set_high();
     embassy_time::Timer::after_millis(10).await;
@@ -80,9 +81,8 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         embassy_nrf::pac::FICR.deviceid(0).read()
     );
     usb_config.serial_number = Some(&serial);
-    let mut usb_buffers = mcrs_nrf::usb_console::UsbBuffers::new();
-    let (mut usb, mut console) =
-        mcrs_nrf::usb_console::build_console(driver, usb_config, &mut usb_buffers);
+    let mut usb_buffers = usb_console::UsbBuffers::new();
+    let (mut usb, mut console) = usb_console::build_console(driver, usb_config, &mut usb_buffers);
 
     let dio1 = Input::new(p.P1_15, Pull::Down);
     let busy = Input::new(p.P1_14, Pull::None);
@@ -122,16 +122,17 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     );
     // USB enumeration and mesh processing both run without a host connected.
     let context = repeater.context();
-    embassy_futures::select::select(usb.run(), repeater.run(true)).await;
+    let usb_task = usb.run();
+    let sleep_request = repeater.run(true, usb_task).await;
     usb.disable().await;
     let lowvoltage = context.with_config(|config| config.lowvoltage()).await;
     battery.shutdown();
-    mcrs_nrf::sleep::shutdown_radio(&mut radio).await;
+    sleep::shutdown_radio(&mut radio).await;
     drop(radio);
     drop(spim);
     drop(sensors);
     nss.set_low();
     reset.set_low();
     radio_power.set_low();
-    mcrs_nrf::sleep::recover(&mut battery, lowvoltage).await
+    sleep::enter(sleep_request, lowvoltage, &mut battery).await
 }

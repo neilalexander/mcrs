@@ -2,7 +2,6 @@
 #![no_main]
 
 use defmt::info;
-use embassy_futures::select::select;
 use embedded_hal_async::delay::DelayNs;
 use esp_hal::{
     gpio::{Flex, InputConfig, Level, Output, OutputConfig},
@@ -35,30 +34,21 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         .await;
     let mut console = UsbSerialJtag::new(board.USB_DEVICE).into_async();
 
-    let recovery_interval;
-    {
-        let repeater = Repeater::new(
-            platform,
-            storage,
-            &mut devices.radio,
-            &mut console,
-            &mut devices.display,
-            &mut devices.button,
-            &mut devices.battery,
-            &mut devices.sensors,
-        );
-        let context = repeater.context();
-        select(repeater.run(true), wifi_task(&mut devices.wifi, context)).await;
-        recovery_interval = context
-            .with_config(|config| config.lowvoltage().interval_seconds)
-            .await;
-    } // Both futures are dropped; main owns the devices again.
-
-    info!("Entering low-power recovery");
-    devices.shutdown().await;
-    mcrs_esp32s3::deep_sleep(core::time::Duration::from_secs(u64::from(
-        recovery_interval,
-    )))
+    let repeater = Repeater::new(
+        platform,
+        storage,
+        &mut devices.radio,
+        &mut console,
+        &mut devices.display,
+        &mut devices.button,
+        &mut devices.battery,
+        &mut devices.sensors,
+    );
+    let context = repeater.context();
+    let wifi_task = wifi_task(&mut devices.wifi, context);
+    let sleep_request = repeater.run(true, wifi_task).await;
+    let lowvoltage = context.with_config(|config| config.lowvoltage()).await;
+    devices.sleep(sleep_request, lowvoltage).await
 }
 
 struct HeltecV4Frontend {

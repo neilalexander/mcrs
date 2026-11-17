@@ -5,7 +5,7 @@
 
 extern crate alloc;
 
-pub use mcrs_repeater::Repeater;
+pub use mcrs_repeater::{Repeater, SleepRequest};
 
 pub mod heltec;
 pub mod sensors;
@@ -164,6 +164,22 @@ pub struct Devices<F> {
 }
 
 impl<F: RadioFrontend> Devices<F> {
+    pub async fn sleep(
+        &mut self,
+        request: SleepRequest,
+        config: mcrs_repeater::app::config::LowVoltageConfig,
+    ) -> ! {
+        let duration = match request {
+            SleepRequest::Hibernate(duration) => duration,
+            SleepRequest::LowVoltage => {
+                core::time::Duration::from_secs(u64::from(config.interval_seconds))
+            }
+        };
+        info!("Entering sleep");
+        self.shutdown().await;
+        deep_sleep(duration)
+    }
+
     /// Shuts down externally powered devices after normal tasks have stopped.
     /// Drop the Wi-Fi task first so it releases its controller.
     /// Attempts every device, logging failures before the board enters sleep.
