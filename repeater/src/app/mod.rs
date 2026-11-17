@@ -130,8 +130,9 @@ pub struct AppContext<P, S> {
     pub mqtt: mqtt::MqttContext,
 
     remote_reply_action: Cell<Option<cli::PostReplyAction>>,
-    brownout_requested: Signal<CriticalSectionRawMutex, ()>,
+    lowvoltage_requested: Signal<CriticalSectionRawMutex, ()>,
     periodic_changed: Signal<CriticalSectionRawMutex, ()>,
+    lowvoltage_changed: Signal<CriticalSectionRawMutex, ()>,
     seen_packets: RefCell<SeenPacketCache>,
     pending_forwards: RefCell<Vec<[u8; 8]>>,
     pending_discover: RefCell<Option<PendingDiscover>>,
@@ -173,8 +174,9 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
             mqtt: MqttContext::new(),
 
             remote_reply_action: Cell::new(None),
-            brownout_requested: Signal::new(),
+            lowvoltage_requested: Signal::new(),
             periodic_changed: Signal::new(),
+            lowvoltage_changed: Signal::new(),
             seen_packets: RefCell::new(SeenPacketCache::new_with_capacity(
                 SEEN_PACKET_TTL_MS,
                 memory.seen_packet_cache_len,
@@ -244,7 +246,15 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
         let previous_acl = config.acl().clone();
         let previous_password = String::from(config.remote_cli_password());
         let previous_intervals = periodic::intervals(&config);
+        let previous_lowvoltage = config.lowvoltage();
         update(&mut config)?;
+        let lowvoltage = config.lowvoltage();
+        if lowvoltage.enabled != previous_lowvoltage.enabled
+            || lowvoltage.sleep_mv != previous_lowvoltage.sleep_mv
+            || lowvoltage.wake_mv != previous_lowvoltage.wake_mv
+        {
+            self.lowvoltage_changed.signal(());
+        }
         if periodic::intervals(&config) != previous_intervals {
             self.periodic_changed.signal(());
         }
@@ -631,12 +641,12 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
         self.remote_reply_action.set(action);
     }
 
-    pub(crate) fn request_brownout(&self) {
-        self.brownout_requested.signal(());
+    pub(crate) fn request_lowvoltage(&self) {
+        self.lowvoltage_requested.signal(());
     }
 
-    pub(crate) async fn wait_for_brownout(&self) {
-        self.brownout_requested.wait().await;
+    pub(crate) async fn wait_for_lowvoltage(&self) {
+        self.lowvoltage_requested.wait().await;
     }
 
     fn is_seen_or_pending(&self, signature: [u8; 8]) -> bool {

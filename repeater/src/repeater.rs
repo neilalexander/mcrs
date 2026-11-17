@@ -81,11 +81,10 @@ where
         self.context
     }
 
-    /// Runs until low voltage or the brownout command stops normal operation.
-    /// The board supplies the running voltage cutoff in millivolts; zero
-    /// disables low-voltage shutdown while still reporting battery readings.
+    /// Runs until low voltage or the lowvoltage command stops normal operation.
+    /// `lowvoltage_supported` indicates whether the board supports recovery.
     /// Returning drops all internal task futures and releases device borrows.
-    pub async fn run(self, voltage_warning_mv: u16) {
+    pub async fn run(self, lowvoltage_supported: bool) {
         let Self {
             context,
             radio,
@@ -97,8 +96,8 @@ where
         } = self;
 
         select3(
-            context.wait_for_brownout(),
-            battery::run(battery, context, voltage_warning_mv),
+            context.wait_for_lowvoltage(),
+            battery::run(battery, context, lowvoltage_supported),
             join5(
                 ui::run(display, button, context),
                 cli::serve_console(console, context),

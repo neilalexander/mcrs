@@ -15,20 +15,13 @@ use mcrs_esp32s3::{
 };
 
 const MODEL: &str = "Heltec V4";
-// Provisional values; validate against this board's battery and regulator.
-const STARTUP_MIN_MV: u16 = 3300;
-const VOLTAGE_WARNING_MV: u16 = 3000;
 
 #[esp_rtos::main]
 async fn main(_spawner: embassy_executor::Spawner) -> ! {
     let (peripherals, board) = mcrs_esp32s3::init();
 
-    let (platform, storage, mut devices) = Devices::new(
-        peripherals,
-        MODEL,
-        BoardConfig::heltec_v4(),
-        STARTUP_MIN_MV,
-        async {
+    let (platform, storage, mut devices) =
+        Devices::new(peripherals, MODEL, BoardConfig::heltec_v4(), async {
             let output_config = OutputConfig::default();
             HeltecV4Frontend::detect(
                 Output::new(board.GPIO7, Level::Low, output_config),
@@ -38,11 +31,11 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
                 &InputConfig::default(),
             )
             .await
-        },
-    )
-    .await;
+        })
+        .await;
     let mut console = UsbSerialJtag::new(board.USB_DEVICE).into_async();
 
+    let recovery_interval;
     {
         let repeater = Repeater::new(
             platform,
@@ -55,16 +48,17 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
             &mut devices.sensors,
         );
         let context = repeater.context();
-        select(
-            repeater.run(VOLTAGE_WARNING_MV),
-            wifi_task(&mut devices.wifi, context),
-        )
-        .await;
+        select(repeater.run(true), wifi_task(&mut devices.wifi, context)).await;
+        recovery_interval = context
+            .with_config(|config| config.lowvoltage().interval_seconds)
+            .await;
     } // Both futures are dropped; main owns the devices again.
 
     info!("Entering low-power recovery");
     devices.shutdown().await;
-    mcrs_esp32s3::deep_sleep(mcrs_esp32s3::RECOVERY_SLEEP)
+    mcrs_esp32s3::deep_sleep(core::time::Duration::from_secs(u64::from(
+        recovery_interval,
+    )))
 }
 
 struct HeltecV4Frontend {

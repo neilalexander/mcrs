@@ -20,9 +20,6 @@ pub(crate) mod rng;
 
 pub use esp::*;
 
-/// Recheck the battery after five minutes in deep sleep.
-pub const RECOVERY_SLEEP: core::time::Duration = core::time::Duration::from_secs(5 * 60);
-
 use crate::{
     heltec::{
         BatteryMonitor, BoardRadio, MEMORY_PROFILE, RadioFrontend, STORAGE_LAYOUT, WifiResources,
@@ -188,12 +185,11 @@ impl<F: RadioFrontend> Devices<F> {
     }
 
     /// Sets up the shared hardware. `model` names the board in MQTT status
-    /// reports. Battery sensing runs first if minimum_mv is above zero.
+    /// reports.
     pub async fn new(
         peripherals: CommonPeripherals,
         model: &'static str,
         board_config: BoardConfig,
-        minimum_mv: u16,
         frontend: impl core::future::Future<Output = F>,
     ) -> (EspPlatform, EspStorage, Self) {
         let CommonPeripherals {
@@ -223,10 +219,14 @@ impl<F: RadioFrontend> Devices<F> {
         let input_config = InputConfig::default();
 
         // Keep the display rail off and NSS high while checking the battery.
-        // Do not initialise SPI, I2C, the frontend, entropy or storage yet.
         let display_power = Output::new(display_power, Level::High, output_config);
         let radio_cs = Output::new(radio_cs, Level::High, output_config);
-        if minimum_mv > 0 {
+        let mut recovery_storage = esp::init_recovery_storage(STORAGE_LAYOUT);
+        let lowvoltage =
+            mcrs_repeater::app::config::AppConfig::load_lowvoltage(&mut recovery_storage);
+        drop(recovery_storage);
+        let minimum_mv = lowvoltage.wake_mv;
+        if lowvoltage.enabled {
             let mut battery = BatteryMonitor::new(
                 adc.reborrow(),
                 battery_sense.reborrow(),
@@ -239,7 +239,9 @@ impl<F: RadioFrontend> Devices<F> {
             }
             battery.shutdown();
             if !voltage.is_some_and(|mv| mv >= minimum_mv) {
-                deep_sleep(RECOVERY_SLEEP);
+                deep_sleep(core::time::Duration::from_secs(u64::from(
+                    lowvoltage.interval_seconds,
+                )));
             }
         }
         // ADC1 is free again for the entropy source before the permanent

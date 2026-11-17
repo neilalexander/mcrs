@@ -52,14 +52,14 @@ pub struct CliResponse {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PostReplyAction {
     Reboot,
-    Brownout,
+    LowVoltage,
 }
 
 impl PostReplyAction {
     pub(crate) fn execute<P: Platform, S: Storage>(self, context: &AppContext<P, S>) {
         match self {
             Self::Reboot => context.platform.reboot(),
-            Self::Brownout => context.request_brownout(),
+            Self::LowVoltage => context.request_lowvoltage(),
         }
     }
 }
@@ -822,12 +822,12 @@ async fn handle_command<P: Platform, S: Storage>(
                 denied_text()
             }
         }
-        "brownout" => {
+        "lowvoltage" => {
             if !request.privilege.is_privileged() {
                 denied_text()
             } else {
-                post_reply = Some(PostReplyAction::Brownout);
-                String::from("OK - entering brownout")
+                post_reply = Some(PostReplyAction::LowVoltage);
+                String::from("OK - entering lowvoltage")
             }
         }
         "reboot" => {
@@ -1157,6 +1157,32 @@ async fn handle_get_command<P: Platform, S: Storage>(
         "flood.advert.interval" => {
             context
                 .with_config(|config| format!("> {}", config.flood_advert_interval_hours()))
+                .await
+        }
+        "lowvoltage.enabled" => {
+            context
+                .with_config(|config| format!("> {}", config.lowvoltage().enabled))
+                .await
+        }
+        "lowvoltage.sleep" => {
+            context
+                .with_config(|config| {
+                    let mv = config.lowvoltage().sleep_mv;
+                    format!("> {}.{}", mv / 1000, mv % 1000 / 100)
+                })
+                .await
+        }
+        "lowvoltage.wake" => {
+            context
+                .with_config(|config| {
+                    let mv = config.lowvoltage().wake_mv;
+                    format!("> {}.{}", mv / 1000, mv % 1000 / 100)
+                })
+                .await
+        }
+        "lowvoltage.interval" => {
+            context
+                .with_config(|config| format!("> {}", config.lowvoltage().interval_seconds))
                 .await
         }
         "sensor.interval" => {
@@ -1536,6 +1562,27 @@ async fn handle_set_command<P: Platform, S: Storage>(
             Ok(()) => format!("OK - flood.advert.interval now: {}", hours),
             Err(error) => format!("Error: {}", error),
         };
+    }
+
+    for key in [
+        "lowvoltage.enabled",
+        "lowvoltage.sleep",
+        "lowvoltage.wake",
+        "lowvoltage.interval",
+    ] {
+        if let Some(value) = config
+            .strip_prefix(key)
+            .and_then(|s| s.strip_prefix(' '))
+            .map(str::trim)
+        {
+            return match context
+                .update_config(|config| config.set_lowvoltage_value(key, value))
+                .await
+            {
+                Ok(()) => format!("OK - {key} now: {value}"),
+                Err(error) => format!("Error: {error}"),
+            };
+        }
     }
 
     if let Some(minutes) = config.strip_prefix("sensor.interval ").map(str::trim) {

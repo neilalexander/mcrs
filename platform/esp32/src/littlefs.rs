@@ -23,6 +23,14 @@ fn options() -> FilesystemOptions {
 }
 
 impl LittleFsStorage {
+    pub fn new_read_only(device: FlashPartition, max_file_size: usize) -> Result<Self, Error> {
+        Filesystem::mount_device_with_options(&device, options()).map_err(map_error)?;
+        Ok(Self {
+            device,
+            max_file_size,
+        })
+    }
+
     pub fn new(mut device: FlashPartition, max_file_size: usize) -> Result<Self, Error> {
         let mut header = [0xff; 12];
         device.read(0, 0, &mut header).map_err(map_error)?;

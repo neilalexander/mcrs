@@ -117,8 +117,8 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     );
     // USB enumeration and mesh processing both run without a host connected.
     // Report battery voltage without automatic low-voltage shutdown.
-    embassy_futures::select::select(usb.run(), repeater.run(0)).await;
-    // Brownout has no timer recovery on these boards yet.
+    embassy_futures::select::select(usb.run(), repeater.run(false)).await;
+    // Low-voltage shutdown has no timer recovery on these boards yet.
     let _ = radio.shutdown().await;
     core::future::pending().await
 }

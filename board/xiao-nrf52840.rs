@@ -121,8 +121,8 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         &mut sensors,
     );
     // Keep USB responsive during mesh processing, including without a host.
-    embassy_futures::select::select(usb.run(), repeater.run(0)).await;
-    // Brownout has no timer recovery on these boards yet.
+    embassy_futures::select::select(usb.run(), repeater.run(false)).await;
+    // Low-voltage shutdown has no timer recovery on these boards yet.
     let _ = radio.shutdown().await;
     core::future::pending().await
 }

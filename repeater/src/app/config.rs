@@ -55,6 +55,7 @@ pub struct AppConfig {
     advert_interval_minutes: u32,
     flood_advert_interval_hours: u32,
     sensor_interval_minutes: u32,
+    lowvoltage: LowVoltageConfig,
     loop_detection: LoopDetection,
     multi_acks: bool,
     path_hash_mode: u8,
@@ -62,6 +63,44 @@ pub struct AppConfig {
     duty_cycle_percent: u8,
     #[cfg(feature = "mqtt")]
     mqtt: [MqttConfig; MQTT_SERVER_COUNT],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LowVoltageConfig {
+    pub enabled: bool,
+    pub sleep_mv: u16,
+    pub wake_mv: u16,
+    pub interval_seconds: u32,
+}
+
+impl LowVoltageConfig {
+    pub fn validate(self) -> Result<(), ConfigError> {
+        if self.sleep_mv == 0 || self.sleep_mv >= self.wake_mv {
+            return Err(ConfigError::InvalidLowVoltageVoltage);
+        }
+        if !(60..=3600).contains(&self.interval_seconds) {
+            return Err(ConfigError::InvalidLowVoltageInterval);
+        }
+        Ok(())
+    }
+}
+
+pub fn parse_lowvoltage_voltage(value: &str) -> Option<u16> {
+    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+    if whole.is_empty()
+        || !whole.bytes().all(|b| b.is_ascii_digit())
+        || fraction.len() > 1
+        || !fraction.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    let whole = whole.parse::<u16>().ok()?.checked_mul(1000)?;
+    let fraction = if fraction.is_empty() {
+        0
+    } else {
+        fraction.parse::<u16>().ok()? * 100
+    };
+    whole.checked_add(fraction).filter(|mv| *mv > 0)
 }
 
 #[cfg(feature = "mqtt")]
@@ -214,6 +253,17 @@ impl AppConfig {
         )
     }
 
+    pub fn load_lowvoltage<S: crate::platform::Storage>(storage: &mut S) -> LowVoltageConfig {
+        let defaults = StoredAppConfig::default_with_identity_seed([0; 32]);
+        let mut buffer = [0u8; APP_CONFIG_MAX_LEN];
+        let stored = storage
+            .read(APP_CONFIG_KEY, &mut buffer)
+            .ok()
+            .and_then(|len| buffer.get(..len))
+            .and_then(|data| decode_config_text(data, &defaults));
+        stored.map_or(defaults.lowvoltage, |stored| stored.lowvoltage)
+    }
+
     pub fn load_or_create<S>(storage: &mut S, defaults: Self) -> Self
     where
         S: crate::platform::Storage,
@@ -259,6 +309,7 @@ impl AppConfig {
             advert_interval_minutes: stored.advert_interval_minutes,
             flood_advert_interval_hours: stored.flood_advert_interval_hours,
             sensor_interval_minutes: stored.sensor_interval_minutes,
+            lowvoltage: stored.lowvoltage,
             loop_detection: stored.loop_detection,
             multi_acks: stored.multi_acks,
             path_hash_mode: stored.path_hash_mode,
@@ -480,6 +531,17 @@ impl AppConfig {
             "flood.max.unscoped" => self.flood_max_unscoped_hops = defaults.flood_max_unscoped_hops,
             "flood.max.advert" => self.flood_max_advert_hops = defaults.flood_max_advert_hops,
             "repeat" => self.repeat_enabled = defaults.repeat_enabled,
+            "lowvoltage.enabled" => self.lowvoltage.enabled = defaults.lowvoltage.enabled,
+            "lowvoltage.sleep" | "lowvoltage.wake" | "lowvoltage.interval" => {
+                let mut next = self.lowvoltage;
+                match setting {
+                    "lowvoltage.sleep" => next.sleep_mv = defaults.lowvoltage.sleep_mv,
+                    "lowvoltage.wake" => next.wake_mv = defaults.lowvoltage.wake_mv,
+                    _ => next.interval_seconds = defaults.lowvoltage.interval_seconds,
+                }
+                next.validate()?;
+                self.lowvoltage = next;
+            }
             "sensor.interval" => self.sensor_interval_minutes = defaults.sensor_interval_minutes,
             "advert.interval" => self.advert_interval_minutes = defaults.advert_interval_minutes,
             "flood.advert.interval" => {
@@ -540,6 +602,38 @@ impl AppConfig {
 
     pub fn set_flood_advert_interval_hours(&mut self, hours: u32) {
         self.flood_advert_interval_hours = hours;
+    }
+
+    pub fn lowvoltage(&self) -> LowVoltageConfig {
+        self.lowvoltage
+    }
+
+    pub fn set_lowvoltage_value(&mut self, key: &str, value: &str) -> Result<(), ConfigError> {
+        let mut next = self.lowvoltage;
+        match key {
+            "lowvoltage.enabled" => {
+                next.enabled = value
+                    .parse()
+                    .map_err(|_| ConfigError::InvalidLowVoltageEnabled)?
+            }
+            "lowvoltage.sleep" => {
+                next.sleep_mv =
+                    parse_lowvoltage_voltage(value).ok_or(ConfigError::InvalidLowVoltageVoltage)?
+            }
+            "lowvoltage.wake" => {
+                next.wake_mv =
+                    parse_lowvoltage_voltage(value).ok_or(ConfigError::InvalidLowVoltageVoltage)?
+            }
+            "lowvoltage.interval" => {
+                next.interval_seconds = value
+                    .parse()
+                    .map_err(|_| ConfigError::InvalidLowVoltageInterval)?
+            }
+            _ => return Err(ConfigError::UnknownSetting),
+        }
+        next.validate()?;
+        self.lowvoltage = next;
+        Ok(())
     }
 
     pub fn sensor_interval_minutes(&self) -> u32 {
@@ -827,6 +921,7 @@ struct StoredAppConfig {
     advert_interval_minutes: u32,
     flood_advert_interval_hours: u32,
     sensor_interval_minutes: u32,
+    lowvoltage: LowVoltageConfig,
     loop_detection: LoopDetection,
     multi_acks: bool,
     path_hash_mode: u8,
@@ -877,6 +972,12 @@ impl StoredAppConfig {
             advert_interval_minutes: 0,
             flood_advert_interval_hours: 0,
             sensor_interval_minutes: 1,
+            lowvoltage: LowVoltageConfig {
+                enabled: false,
+                sleep_mv: 3000,
+                wake_mv: 3300,
+                interval_seconds: 300,
+            },
             loop_detection: LoopDetection::default(),
             multi_acks: false,
             path_hash_mode: 0,
@@ -918,6 +1019,7 @@ impl StoredAppConfig {
             advert_interval_minutes: config.advert_interval_minutes,
             flood_advert_interval_hours: config.flood_advert_interval_hours,
             sensor_interval_minutes: config.sensor_interval_minutes,
+            lowvoltage: config.lowvoltage,
             loop_detection: config.loop_detection,
             multi_acks: config.multi_acks,
             path_hash_mode: config.path_hash_mode,
@@ -1098,6 +1200,10 @@ fn decode_config_layer(
             "flood.advert.interval" => {
                 config.flood_advert_interval_hours = value.parse::<u32>().ok()?;
             }
+            "lowvoltage.enabled" => config.lowvoltage.enabled = value.parse().ok()?,
+            "lowvoltage.sleep" => config.lowvoltage.sleep_mv = parse_lowvoltage_voltage(&value)?,
+            "lowvoltage.wake" => config.lowvoltage.wake_mv = parse_lowvoltage_voltage(&value)?,
+            "lowvoltage.interval" => config.lowvoltage.interval_seconds = value.parse().ok()?,
             "sensor.interval" => {
                 config.sensor_interval_minutes = value.parse::<u32>().ok()?;
             }
@@ -1136,6 +1242,7 @@ fn decode_config_layer(
     {
         config.node_name = fit_node_name(&generated_node_name(config.private_key)).ok()?;
     }
+    config.lowvoltage.validate().ok()?;
     config.radio.validate().ok()?;
     if !(1..=100).contains(&config.duty_cycle_percent) {
         return None;
@@ -1340,6 +1447,32 @@ fn encode_config_delta(config: &StoredAppConfig, defaults: &StoredAppConfig) -> 
             config.flood_advert_interval_hours
         );
     }
+    if config.lowvoltage.enabled != defaults.lowvoltage.enabled {
+        let _ = writeln!(&mut out, "lowvoltage.enabled={}", config.lowvoltage.enabled);
+    }
+    for (key, mv, default_mv) in [
+        (
+            "lowvoltage.sleep",
+            config.lowvoltage.sleep_mv,
+            defaults.lowvoltage.sleep_mv,
+        ),
+        (
+            "lowvoltage.wake",
+            config.lowvoltage.wake_mv,
+            defaults.lowvoltage.wake_mv,
+        ),
+    ] {
+        if mv != default_mv {
+            let _ = writeln!(&mut out, "{key}={}.{}", mv / 1000, mv % 1000 / 100);
+        }
+    }
+    if config.lowvoltage.interval_seconds != defaults.lowvoltage.interval_seconds {
+        let _ = writeln!(
+            &mut out,
+            "lowvoltage.interval={}",
+            config.lowvoltage.interval_seconds
+        );
+    }
     if config.sensor_interval_minutes != defaults.sensor_interval_minutes {
         let _ = writeln!(
             &mut out,
@@ -1481,6 +1614,24 @@ fn encode_full_config_text_redacted(config: &StoredAppConfig, redact_secrets: bo
         "flood.advert.interval={}",
         config.flood_advert_interval_hours
     );
+    let _ = writeln!(&mut out, "lowvoltage.enabled={}", config.lowvoltage.enabled);
+    let _ = writeln!(
+        &mut out,
+        "lowvoltage.sleep={}.{}",
+        config.lowvoltage.sleep_mv / 1000,
+        config.lowvoltage.sleep_mv % 1000 / 100
+    );
+    let _ = writeln!(
+        &mut out,
+        "lowvoltage.wake={}.{}",
+        config.lowvoltage.wake_mv / 1000,
+        config.lowvoltage.wake_mv % 1000 / 100
+    );
+    let _ = writeln!(
+        &mut out,
+        "lowvoltage.interval={}",
+        config.lowvoltage.interval_seconds
+    );
     let _ = writeln!(
         &mut out,
         "sensor.interval={}",
@@ -1591,6 +1742,9 @@ pub enum ConfigError {
     InvalidFloodMaxHops,
     InvalidPathHashMode,
     InvalidTier,
+    InvalidLowVoltageEnabled,
+    InvalidLowVoltageVoltage,
+    InvalidLowVoltageInterval,
     InvalidNtpHost,
     InvalidWifiConfig,
     #[cfg(feature = "mqtt")]
@@ -1616,6 +1770,9 @@ impl fmt::Display for ConfigError {
             ConfigError::InvalidDutyCycle => f.write_str("invalid duty cycle"),
             ConfigError::InvalidFloodMaxHops => f.write_str("invalid flood max hops"),
             ConfigError::InvalidPathHashMode => f.write_str("invalid path hash mode"),
+            ConfigError::InvalidLowVoltageEnabled => f.write_str("invalid lowvoltage.enabled (expected true or false)"),
+            ConfigError::InvalidLowVoltageVoltage => f.write_str("invalid lowvoltage voltage (positive volts with at most one decimal place required; sleep must be lower than wake)"),
+            ConfigError::InvalidLowVoltageInterval => f.write_str("invalid lowvoltage interval (expected 60..3600 whole seconds)"),
             ConfigError::InvalidTier => f.write_str("invalid tier (expected 0..10)"),
             ConfigError::InvalidNtpHost => f.write_str("invalid NTP host"),
             ConfigError::InvalidWifiConfig => f.write_str("invalid Wi-Fi setting"),
@@ -1895,6 +2052,170 @@ mod tests {
 
     fn defaults() -> StoredAppConfig {
         StoredAppConfig::default_with_identity_seed([7; 32])
+    }
+
+    #[test]
+    fn lowvoltage_defaults_round_trip_and_reset() {
+        let image = network_defaults("");
+        assert_eq!(
+            image.lowvoltage,
+            LowVoltageConfig {
+                enabled: false,
+                sleep_mv: 3000,
+                wake_mv: 3300,
+                interval_seconds: 300
+            }
+        );
+        let mut app = AppConfig::from_stored(image.clone(), "test");
+        app.set_lowvoltage_value("lowvoltage.enabled", "true")
+            .unwrap();
+        app.set_lowvoltage_value("lowvoltage.wake", "3.4").unwrap();
+        app.set_lowvoltage_value("lowvoltage.sleep", "3.1").unwrap();
+        app.set_lowvoltage_value("lowvoltage.interval", "3600")
+            .unwrap();
+        let stored = StoredAppConfig::from_app_config(&app);
+        for encoded in [
+            encode_config_text(&stored),
+            encode_config_delta(&stored, &image),
+        ] {
+            assert_eq!(
+                decode_config_text(&encoded, &image).unwrap().lowvoltage,
+                app.lowvoltage()
+            );
+            let text = core::str::from_utf8(&encoded).unwrap();
+            assert!(text.contains("lowvoltage.enabled=true\n"));
+            assert!(text.contains("lowvoltage.sleep=3.1\n"));
+            assert!(text.contains("lowvoltage.wake=3.4\n"));
+            assert!(text.contains("lowvoltage.interval=3600\n"));
+        }
+        for key in [
+            "lowvoltage.enabled",
+            "lowvoltage.sleep",
+            "lowvoltage.wake",
+            "lowvoltage.interval",
+        ] {
+            app.unset(key).unwrap();
+        }
+        assert_eq!(app.lowvoltage(), image.lowvoltage);
+        assert_eq!(
+            decode_config_text(b"version=1\n", &image)
+                .unwrap()
+                .lowvoltage,
+            image.lowvoltage
+        );
+    }
+
+    #[test]
+    fn lowvoltage_validation_is_atomic_and_applies_to_every_config_layer() {
+        let image = network_defaults("");
+        let mut app = AppConfig::from_stored(image.clone(), "test");
+        for (key, value) in [
+            ("lowvoltage.enabled", "1"),
+            ("lowvoltage.enabled", "on"),
+            ("lowvoltage.enabled", "invalid"),
+            ("lowvoltage.sleep", "3.4"),
+            ("lowvoltage.sleep", "3.3"),
+            ("lowvoltage.wake", "3.0"),
+            ("lowvoltage.wake", "2.9"),
+            ("lowvoltage.sleep", "0"),
+            ("lowvoltage.wake", "NaN"),
+            ("lowvoltage.sleep", "3.0001"),
+            ("lowvoltage.sleep", "3.01"),
+            ("lowvoltage.wake", "3.31"),
+            ("lowvoltage.sleep", "-1"),
+            ("lowvoltage.wake", "66"),
+            ("lowvoltage.interval", "59"),
+            ("lowvoltage.interval", "3601"),
+            ("lowvoltage.interval", "1.5"),
+        ] {
+            assert!(
+                app.set_lowvoltage_value(key, value).is_err(),
+                "{key}={value}"
+            );
+            assert_eq!(app.lowvoltage(), image.lowvoltage);
+            let text = alloc::format!("{key}={value}\n");
+            for source in [
+                ConfigSource::Defaults,
+                ConfigSource::Profile,
+                ConfigSource::Storage,
+            ] {
+                assert!(
+                    decode_config_layer(text.as_bytes(), &image, source).is_none(),
+                    "{text}"
+                );
+            }
+        }
+        for interval in [60, 300, 3600] {
+            app.set_lowvoltage_value("lowvoltage.interval", &alloc::format!("{interval}"))
+                .unwrap();
+        }
+        for text in [
+            "lowvoltage.sleep=3.4\nlowvoltage.wake=3.6\n",
+            "lowvoltage.wake=3.6\nlowvoltage.sleep=3.4\n",
+        ] {
+            assert_eq!(
+                decode_config_text(text.as_bytes(), &image)
+                    .unwrap()
+                    .lowvoltage
+                    .sleep_mv,
+                3400
+            );
+        }
+        app.set_lowvoltage_value("lowvoltage.sleep", "2.5").unwrap();
+        app.set_lowvoltage_value("lowvoltage.wake", "2.8").unwrap();
+        let previous = app.lowvoltage();
+        assert!(app.unset("lowvoltage.sleep").is_err());
+        assert_eq!(app.lowvoltage(), previous);
+    }
+
+    #[test]
+    fn disabling_lowvoltage_preserves_threshold_validation() {
+        let mut app = AppConfig::generated_defaults([7; 32]);
+        app.set_lowvoltage_value("lowvoltage.enabled", "false")
+            .unwrap();
+        let previous = app.lowvoltage();
+        assert!(!previous.enabled);
+        assert!(app.set_lowvoltage_value("lowvoltage.sleep", "3.3").is_err());
+        assert!(
+            app.set_lowvoltage_value("lowvoltage.interval", "59")
+                .is_err()
+        );
+        assert_eq!(app.lowvoltage(), previous);
+        app.set_lowvoltage_value("lowvoltage.enabled", "true")
+            .unwrap();
+        assert!(app.lowvoltage().enabled);
+    }
+
+    #[test]
+    fn boot_lowvoltage_reads_saved_settings_without_writes() {
+        struct ReadOnlyStorage;
+        impl crate::platform::Storage for ReadOnlyStorage {
+            fn read(
+                &mut self,
+                _: &str,
+                buffer: &mut [u8],
+            ) -> Result<usize, crate::platform::storage::Error> {
+                let text = b"lowvoltage.enabled=false\nlowvoltage.sleep=3.4\nlowvoltage.wake=3.6\nlowvoltage.interval=60\n";
+                buffer[..text.len()].copy_from_slice(text);
+                Ok(text.len())
+            }
+            fn write_atomic(
+                &mut self,
+                _: &str,
+                _: &[u8],
+            ) -> Result<(), crate::platform::storage::Error> {
+                panic!("recovery must not write flash")
+            }
+        }
+        assert_eq!(
+            AppConfig::load_lowvoltage(&mut ReadOnlyStorage),
+            LowVoltageConfig {
+                enabled: false,
+                sleep_mv: 3400,
+                wake_mv: 3600,
+                interval_seconds: 60
+            }
+        );
     }
 
     #[test]

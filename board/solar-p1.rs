@@ -95,9 +95,9 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         &mut battery,
         &mut sensors,
     )
-    .run(0) // Report voltage without automatic low-voltage shutdown.
+    .run(false) // Report voltage without automatic low-voltage shutdown.
     .await;
-    // Brownout has no timer recovery on these boards yet.
+    // Low-voltage shutdown has no timer recovery on these boards yet.
     let _ = radio.shutdown().await;
     core::future::pending().await
 }

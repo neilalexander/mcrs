@@ -4,6 +4,7 @@ use crate::{
     platform::{Battery, Platform, Storage},
 };
 use defmt::info;
+use embassy_futures::select::{Either, select};
 use embedded_hal_async::delay::DelayNs;
 
 const SAMPLE_INTERVAL_MS: u32 = 60_000;
@@ -15,7 +16,7 @@ const PERCENT_MAX_MV: u16 = 4200;
 pub(crate) async fn run<P, S, B>(
     battery: &mut B,
     context: &AppContext<P, S>,
-    voltage_warning_mv: u16,
+    lowvoltage_supported: bool,
 ) where
     P: Platform,
     S: Storage,
@@ -25,6 +26,7 @@ pub(crate) async fn run<P, S, B>(
 
     let mut low_samples = 0;
     loop {
+        context.lowvoltage_changed.reset();
         let reading = battery.millivolts().await;
         match reading {
             Some(millivolts) => {
@@ -39,11 +41,38 @@ pub(crate) async fn run<P, S, B>(
             }
         }
 
+        let voltage_warning_mv = if lowvoltage_supported {
+            context
+                .with_config(|config| {
+                    let lowvoltage = config.lowvoltage();
+                    if lowvoltage.enabled {
+                        lowvoltage.sleep_mv
+                    } else {
+                        0
+                    }
+                })
+                .await
+        } else {
+            0
+        };
+        if context.lowvoltage_changed.signaled() {
+            low_samples = 0;
+            continue;
+        }
         if update_low_samples(&mut low_samples, reading, voltage_warning_mv) {
             return;
         }
 
-        delay.delay_ms(SAMPLE_INTERVAL_MS).await;
+        if matches!(
+            select(
+                context.lowvoltage_changed.wait(),
+                delay.delay_ms(SAMPLE_INTERVAL_MS)
+            )
+            .await,
+            Either::First(())
+        ) {
+            low_samples = 0;
+        }
     }
 }
 
@@ -90,7 +119,7 @@ mod tests {
     }
 
     #[test]
-    fn voltage_cutoff_comes_from_the_board() {
+    fn voltage_cutoff_uses_the_supplied_setting() {
         let mut count = 0;
         for _ in 0..3 {
             assert!(!update_low_samples(&mut count, Some(3400), 3300));

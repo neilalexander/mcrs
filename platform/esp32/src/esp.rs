@@ -74,6 +74,17 @@ pub fn random_u32() -> u32 {
 }
 
 pub fn init_storage(layout: mcrs_repeater::platform::storage::Layout) -> EspStorage {
+    init_storage_mode(layout, false)
+}
+
+pub fn init_recovery_storage(layout: mcrs_repeater::platform::storage::Layout) -> EspStorage {
+    init_storage_mode(layout, true)
+}
+
+fn init_storage_mode(
+    layout: mcrs_repeater::platform::storage::Layout,
+    read_only: bool,
+) -> EspStorage {
     let mut flash = RomFlash;
     let mut partition_table = [0u8; esp_bootloader_esp_idf::partitions::PARTITION_TABLE_MAX_LEN];
     let inner =
@@ -88,7 +99,12 @@ pub fn init_storage(layout: mcrs_repeater::platform::storage::Layout) -> EspStor
                 if partition.is_read_only() || partition.len() < layout.partition_size as u32 {
                     None
                 } else {
-                    match super::littlefs::LittleFsStorage::new(
+                    let open = if read_only {
+                        super::littlefs::LittleFsStorage::new_read_only
+                    } else {
+                        super::littlefs::LittleFsStorage::new
+                    };
+                    match open(
                         FlashPartition {
                             offset: partition.offset(),
                             size: partition.len() as usize,
