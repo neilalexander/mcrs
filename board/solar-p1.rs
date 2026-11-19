@@ -51,6 +51,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
 
     let mut nss = Output::new(p.P0_04, Level::High, OutputDrive::Standard);
     let mut reset = Output::new(p.P0_28, Level::Low, OutputDrive::Standard);
+    let mut rx_enable = Output::new(p.P0_05, Level::Low, OutputDrive::Standard);
 
     let mut battery = NrfBattery::new(
         p.SAADC,
@@ -77,7 +78,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         &mut reset,
         dio1,
         busy,
-        None,
+        Some(&mut rx_enable),
         Delay,
         BoardConfig {
             tcxo_ctrl: Some(TcxoCtrlVoltage::Ctrl1V7),
@@ -107,6 +108,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     battery.shutdown();
     let radio_asleep = sleep::shutdown_radio(&mut radio).await;
     drop(radio);
+    rx_enable.set_low();
     drop(spim);
     drop(sensors);
     if !radio_asleep {
