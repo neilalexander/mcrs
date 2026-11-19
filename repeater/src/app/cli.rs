@@ -1012,6 +1012,7 @@ async fn handle_command<P: Platform, S: Storage>(
             }
         }
         "status" => status_text(context),
+        "board" => String::from(context.platform.model()),
         "ver" | "version" => String::from(FIRMWARE_VERSION),
         _ => String::from("CLI: unknown command; use help"),
     };

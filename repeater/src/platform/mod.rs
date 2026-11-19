@@ -28,7 +28,7 @@ pub trait Platform {
     /// Delays for the repeater's timers.
     type Delay: DelayNs;
 
-    /// The board's name, as reported over MQTT.
+    /// The board's model name, as reported by the CLI and MQTT.
     fn model(&self) -> &'static str;
 
     /// Sizes the repeater's queues and tables to the board's memory.
