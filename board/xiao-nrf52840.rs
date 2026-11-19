@@ -94,7 +94,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     let busy = Input::new(p.P0_29, Pull::None);
 
     let mut spi_config = spim::Config::default();
-    spi_config.frequency = spim::Frequency::M16;
+    spi_config.frequency = spim::Frequency::M2;
     let mut spim = Spim::new(p.TWISPI1, Irqs, p.P1_13, p.P1_14, p.P1_15, spi_config);
     let spi = ExclusiveDevice::new(&mut spim, &mut nss, Delay).unwrap();
 
