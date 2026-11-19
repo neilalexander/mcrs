@@ -11,6 +11,23 @@ pub trait Led {
     fn set_lit(&mut self, lit: bool) -> Result<(), Self::Error>;
 }
 
+/// Keeps an LED lit until the guard goes out of scope.
+pub struct LitLed<'a, L: Led>(&'a mut L);
+
+impl<'a, L: Led> LitLed<'a, L> {
+    pub fn new(led: &'a mut L) -> Result<Self, L::Error> {
+        let guard = Self(led);
+        guard.0.set_lit(true)?;
+        Ok(guard)
+    }
+}
+
+impl<L: Led> Drop for LitLed<'_, L> {
+    fn drop(&mut self) {
+        let _ = self.0.set_lit(false);
+    }
+}
+
 /// An LED connected to a GPIO output.
 pub struct GpioLed<P> {
     pin: P,

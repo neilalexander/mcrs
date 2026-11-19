@@ -1,7 +1,10 @@
 //! The status screen and the user button. A press wakes the screen, and
 //! holding the button sends a zero-hop advert.
 use super::AppContext;
-use crate::platform::{DisplayStatus, Platform, StatusDisplay, Storage};
+use crate::platform::{
+    DisplayStatus, Platform, StatusDisplay, Storage,
+    led::{Led, LitLed},
+};
 use alloc::string::String;
 use core::{
     future::{Future, poll_fn},
@@ -13,10 +16,12 @@ use embedded_hal_async::{delay::DelayNs, digital::Wait};
 
 const DISPLAY_AWAKE_MS: u32 = 5_000;
 const ADVERT_HOLD_MS: u32 = 2_000;
+const ADVERT_FLASH_MS: u32 = 150;
 
 pub(crate) async fn run<P, S, D, B>(
     display: &mut D,
     button: &mut B,
+    led: &mut impl Led,
     context: &AppContext<P, S>,
 ) -> !
 where
@@ -33,11 +38,11 @@ where
 
     if display.init(&mut delay).await.is_err() {
         error!("display init failed");
-        handle_button(&mut button, context).await
+        handle_button(&mut button, led, context).await
     }
     if show_status(display, context, None).await.is_err() {
         error!("display write failed");
-        handle_button(&mut button, context).await
+        handle_button(&mut button, led, context).await
     }
 
     let mut awake = true;
@@ -57,7 +62,7 @@ where
                     }
                     debug!("Display wake extended");
                     let action = button.release_or_hold().await;
-                    show_advert_message_if_sent(display, context, action).await;
+                    show_advert_message_if_sent(display, led, context, action).await;
                 }
             }
         } else {
@@ -88,7 +93,7 @@ where
             if wake_result.is_ok() && show_status(display, context, None).await.is_ok() {
                 debug!("Display woken by button");
                 awake = true;
-                show_advert_message_if_sent(display, context, action).await;
+                show_advert_message_if_sent(display, led, context, action).await;
             } else {
                 error!("display status or wake result error");
             }
@@ -97,7 +102,11 @@ where
 }
 
 /// Without a working display, the button only sends adverts.
-async fn handle_button<P, S, B, D>(button: &mut Button<B, D>, context: &AppContext<P, S>) -> !
+async fn handle_button<P, S, B, D>(
+    button: &mut Button<B, D>,
+    led: &mut impl Led,
+    context: &AppContext<P, S>,
+) -> !
 where
     P: Platform,
     S: Storage,
@@ -106,7 +115,7 @@ where
 {
     loop {
         if button.action().await == ButtonAction::LongHold {
-            queue_advert(context).await;
+            queue_advert(led, context).await;
         }
     }
 }
@@ -178,7 +187,10 @@ async fn wait_for_timeout_or_press<B: Wait, D: DelayNs>(
     .await
 }
 
-async fn queue_advert<P: Platform, S: Storage>(context: &AppContext<P, S>) -> bool {
+async fn queue_advert<P: Platform, S: Storage>(
+    led: &mut impl Led,
+    context: &AppContext<P, S>,
+) -> bool {
     let now = context.platform.now_seconds();
     let packet = context
         .with_config(|config| super::discovery::zero_hop_advert(config, now))
@@ -200,6 +212,9 @@ async fn queue_advert<P: Platform, S: Storage>(context: &AppContext<P, S>) -> bo
                 ),
                 None => info!("Button: queued zero-hop advert {} bytes", len),
             }
+            if let Ok(_flash) = LitLed::new(led) {
+                context.platform.delay().delay_ms(ADVERT_FLASH_MS).await;
+            }
             true
         }
         Err(_) => {
@@ -211,6 +226,7 @@ async fn queue_advert<P: Platform, S: Storage>(context: &AppContext<P, S>) -> bo
 
 async fn show_advert_message_if_sent<P, S, D>(
     display: &mut D,
+    led: &mut impl Led,
     context: &AppContext<P, S>,
     action: ButtonAction,
 ) where
@@ -222,7 +238,7 @@ async fn show_advert_message_if_sent<P, S, D>(
         return;
     }
 
-    if !queue_advert(context).await {
+    if !queue_advert(led, context).await {
         return;
     }
 

@@ -33,7 +33,7 @@ where
     button: &'a mut BUTTON,
     battery: &'a mut BATTERY,
     sensors: &'a mut SENSORS,
-    _led: &'a mut LED,
+    led: &'a mut LED,
 }
 
 impl<'a, PLATFORM, STORAGE, RADIO, CONSOLE, DISPLAY, BUTTON, BATTERY, SENSORS, LED>
@@ -82,7 +82,7 @@ where
             button,
             battery,
             sensors,
-            _led: led,
+            led,
         }
     }
 
@@ -104,11 +104,11 @@ where
             button,
             battery,
             sensors,
-            _led: _,
+            led,
         } = self;
 
         let repeater_tasks = join5(
-            ui::run(display, button, context),
+            ui::run(display, button, led, context),
             cli::serve_console(console, context),
             app::handler_loop(context),
             periodic::run(context, sensors),
