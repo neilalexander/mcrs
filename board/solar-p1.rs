@@ -1,7 +1,8 @@
-//! MCRS repeater for the SenseCAP Solar Node P1. It has no status screen,
-//! button or console.
+//! MCRS repeater for the SenseCAP Solar Node P1 with a USB CDC terminal.
 #![no_std]
 #![no_main]
+
+extern crate alloc;
 
 use defmt_rtt as _;
 use embassy_nrf::{
@@ -18,11 +19,11 @@ use embedded_hal_bus::spi::ExclusiveDevice;
 use mcrs_nrf::{
     HEAP_SIZE, NrfPlatform, NrfStorage,
     battery::{BatteryConfig, NrfBattery},
-    sleep,
+    sleep, usb_console,
 };
 use mcrs_repeater::{
     Repeater,
-    platform::{NoButton, NoConsole, NoDisplay},
+    platform::{NoButton, NoDisplay},
 };
 use mcrs_sx1262::{BoardConfig, Sx1262, TcxoCtrlVoltage};
 use panic_probe as _;
@@ -34,6 +35,8 @@ static HEAP: Heap = Heap::empty();
 
 bind_interrupts!(struct Irqs {
     TEMP => embassy_nrf::temp::InterruptHandler;
+    USBD => embassy_nrf::usb::InterruptHandler<peripherals::USBD>;
+    CLOCK_POWER => embassy_nrf::usb::vbus_detect::InterruptHandler;
     SAADC => embassy_nrf::saadc::InterruptHandler;
     TWISPI1 => spim::InterruptHandler<peripherals::TWISPI1>;
 });
@@ -46,6 +49,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
 
     let mut config = embassy_nrf::config::Config::default();
     config.lfclk_source = embassy_nrf::config::LfclkSource::ExternalXtal;
+    config.hfclk_source = embassy_nrf::config::HfclkSource::ExternalXtal;
     // Solar P1 (XIAO nRF52840 Plus) has the external components for the VDD DC/DC converter.
     config.dcdc.reg1 = true;
     let p = embassy_nrf::init(config);
@@ -65,6 +69,23 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     sleep::check_startup_voltage(&mut battery, &mut storage).await;
     storage.initialize();
     reset.set_high();
+
+    let driver = embassy_nrf::usb::Driver::new(
+        p.USBD,
+        Irqs,
+        embassy_nrf::usb::vbus_detect::HardwareVbusDetect::new(Irqs),
+    );
+    let mut usb_config = embassy_usb::Config::new(0x2886, 0x0059);
+    usb_config.manufacturer = Some("Seeed Studio");
+    usb_config.product = Some("MCRS SenseCAP Solar Node P1");
+    let serial = alloc::format!(
+        "{:08X}{:08X}",
+        embassy_nrf::pac::FICR.deviceid(1).read(),
+        embassy_nrf::pac::FICR.deviceid(0).read()
+    );
+    usb_config.serial_number = Some(&serial);
+    let mut usb_buffers = usb_console::UsbBuffers::new();
+    let (mut usb, mut console) = usb_console::build_console(driver, usb_config, &mut usb_buffers);
 
     let dio1 = Input::new(p.P0_03, Pull::Down);
     let busy = Input::new(p.P0_29, Pull::None);
@@ -88,7 +109,6 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     );
     let platform = NrfPlatform::new(MODEL, Rng::new_blocking(p.RNG));
 
-    let mut console = NoConsole;
     let mut display = NoDisplay;
     let mut button = NoButton;
     let mut sensors = mcrs_nrf::sensors::NrfSensors(embassy_nrf::temp::Temp::new(p.TEMP, Irqs));
@@ -104,7 +124,8 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         &mut sensors,
     );
     let context = repeater.context();
-    let sleep_request = repeater.run(true, core::future::ready(())).await;
+    let sleep_request = repeater.run(true, usb.run()).await;
+    usb.disable().await;
     let lowvoltage = context.with_config(|config| config.lowvoltage()).await;
     battery.shutdown();
     let radio_asleep = sleep::shutdown_radio(&mut radio).await;
