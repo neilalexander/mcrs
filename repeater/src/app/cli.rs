@@ -1064,6 +1064,11 @@ async fn handle_get_command<P: Platform, S: Storage>(
             .await;
     }
     match config {
+        "usb.console" => {
+            context
+                .with_config(|config| format!("> {}", on_off_text(config.console_enabled())))
+                .await
+        }
         "owner.info" => {
             context
                 .with_config(|config| format!("> {}", config.owner_info().replace('\n', "|")))
@@ -1290,6 +1295,22 @@ async fn handle_set_command<P: Platform, S: Storage>(
             .await
         {
             Ok(()) => String::from("OK - run 'mqtt restart' to apply"),
+            Err(error) => format!("Error: {error}"),
+        };
+    }
+
+    if let Some(value) = config.strip_prefix("usb.console ") {
+        let Some(enabled) = parse_bool(value.trim()) else {
+            return String::from("Error, invalid usb.console value (expected on or off)");
+        };
+        return match context
+            .update_config(|config| {
+                config.set_console_enabled(enabled);
+                Ok(())
+            })
+            .await
+        {
+            Ok(()) => String::from("OK - reboot to apply"),
             Err(error) => format!("Error: {error}"),
         };
     }
@@ -1723,7 +1744,7 @@ async fn handle_unset_command<P: Platform, S: Storage>(
         Ok(())
             if matches!(
                 setting,
-                "wifi.ssid" | "wifi.pass" | "wifi.telnet" | "radio" | "freq" | "tx"
+                "wifi.ssid" | "wifi.pass" | "wifi.telnet" | "usb.console" | "radio" | "freq" | "tx"
             ) =>
         {
             String::from("OK - reset to default; reboot to apply")

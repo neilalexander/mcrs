@@ -1,10 +1,12 @@
 //! A USB CDC packet endpoint presented as a terminal byte stream.
+use embassy_nrf::pac::{CLOCK, clock::vals::HfclkstatSrc};
 use embassy_usb::{
     Builder, Config, UsbDevice,
     class::cdc_acm::{CdcAcmClass, CdcAcmError, State},
     driver::Driver,
 };
 use embedded_io_async::{ErrorType, Read, Write};
+use mcrs_repeater::platform::LocalConsole;
 
 /// Descriptor and control storage kept alive alongside the USB device.
 pub struct UsbBuffers<'d> {
@@ -27,12 +29,23 @@ impl<'d> UsbBuffers<'d> {
 
 /// A CDC terminal with the same packet size and descriptors on each nRF board.
 pub fn build_console<'d, D: Driver<'d>>(
-    driver: D,
+    enabled: bool,
+    driver: impl FnOnce() -> D,
     config: Config<'d>,
     buffers: &'d mut UsbBuffers<'d>,
-) -> (UsbDevice<'d, D>, UsbConsole<'d, D>) {
+) -> (Option<UsbDevice<'d, D>>, LocalConsole<UsbConsole<'d, D>>) {
+    if !enabled {
+        CLOCK.tasks_hfclkstop().write_value(1);
+        return (None, LocalConsole(None));
+    }
+
+    CLOCK.tasks_hfclkstart().write_value(1);
+    while CLOCK.hfclkstat().read().src() != HfclkstatSrc::Xtal {
+        core::hint::spin_loop();
+    }
+
     let mut builder = Builder::new(
-        driver,
+        driver(),
         config,
         &mut buffers.config,
         &mut buffers.bos,
@@ -40,7 +53,10 @@ pub fn build_console<'d, D: Driver<'d>>(
         &mut buffers.control,
     );
     let class = CdcAcmClass::new(&mut builder, &mut buffers.state, 64);
-    (builder.build(), UsbConsole::new(class))
+    (
+        Some(builder.build()),
+        LocalConsole(Some(UsbConsole::new(class))),
+    )
 }
 
 /// Owns a full USB packet so the CLI can safely read one byte at a time.

@@ -23,6 +23,7 @@ use mcrs_nrf::{
 };
 use mcrs_repeater::{
     Repeater,
+    app::config::AppConfig,
     platform::{
         NoButton, NoDisplay,
         led::{GpioLed, PinState},
@@ -52,7 +53,6 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
 
     let mut config = embassy_nrf::config::Config::default();
     config.lfclk_source = embassy_nrf::config::LfclkSource::ExternalXtal;
-    config.hfclk_source = embassy_nrf::config::HfclkSource::ExternalXtal;
     // RAK4631 has the external components for the nRF's VDD DC/DC converter.
     config.dcdc.reg1 = true;
     let p = embassy_nrf::init(config);
@@ -70,11 +70,6 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     nss.set_high();
     reset.set_high();
 
-    let driver = embassy_nrf::usb::Driver::new(
-        p.USBD,
-        Irqs,
-        embassy_nrf::usb::vbus_detect::HardwareVbusDetect::new(Irqs),
-    );
     // Match the upstream board's USB identity for local bring-up.
     let mut usb_config = embassy_usb::Config::new(0x239a, 0x8029);
     usb_config.manufacturer = Some("RAKwireless");
@@ -86,7 +81,18 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     );
     usb_config.serial_number = Some(&serial);
     let mut usb_buffers = usb_console::UsbBuffers::new();
-    let (mut usb, mut console) = usb_console::build_console(driver, usb_config, &mut usb_buffers);
+    let (mut usb, mut console) = usb_console::build_console(
+        AppConfig::load_console_enabled(&mut storage),
+        || {
+            embassy_nrf::usb::Driver::new(
+                p.USBD,
+                Irqs,
+                embassy_nrf::usb::vbus_detect::HardwareVbusDetect::new(Irqs),
+            )
+        },
+        usb_config,
+        &mut usb_buffers,
+    );
 
     let dio1 = Input::new(p.P1_15, Pull::Down);
     let busy = Input::new(p.P1_14, Pull::None);
@@ -132,9 +138,16 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     );
     // USB enumeration and mesh processing both run without a host connected.
     let context = repeater.context();
-    let usb_task = usb.run();
-    let sleep_request = repeater.run(true, usb_task).await;
-    usb.disable().await;
+    let sleep_request = repeater
+        .run(true, async {
+            if let Some(usb) = &mut usb {
+                usb.run().await;
+            }
+        })
+        .await;
+    if let Some(usb) = &mut usb {
+        usb.disable().await;
+    }
     let lowvoltage = context.with_config(|config| config.lowvoltage()).await;
     battery.shutdown();
     sleep::shutdown_radio(&mut radio).await;

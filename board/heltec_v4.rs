@@ -5,6 +5,7 @@ use defmt::info;
 use embedded_hal_async::delay::DelayNs;
 use esp_hal::{
     gpio::{Flex, InputConfig, Level, Output, OutputConfig},
+    peripherals::SYSTEM,
     usb_serial_jtag::UsbSerialJtag,
 };
 use mcrs_esp32s3::{
@@ -13,13 +14,15 @@ use mcrs_esp32s3::{
     radio_delay,
 };
 
+use mcrs_repeater::{app::config::AppConfig, platform::LocalConsole};
+
 const MODEL: &str = "Heltec V4";
 
 #[esp_rtos::main]
 async fn main(_spawner: embassy_executor::Spawner) -> ! {
     let (peripherals, board) = mcrs_esp32s3::init();
 
-    let (platform, storage, mut devices) =
+    let (platform, mut storage, mut devices) =
         Devices::new(peripherals, MODEL, BoardConfig::heltec_v4(), async {
             let output_config = OutputConfig::default();
             HeltecV4Frontend::detect(
@@ -32,7 +35,20 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
             .await
         })
         .await;
-    let mut console = UsbSerialJtag::new(board.USB_DEVICE).into_async();
+    let mut console = LocalConsole(if AppConfig::load_console_enabled(&mut storage) {
+        Some(UsbSerialJtag::new(board.USB_DEVICE).into_async())
+    } else {
+        let usb = board.USB_DEVICE.register_block();
+        usb.conf0().modify(|_, w| {
+            w.usb_pad_enable().clear_bit();
+            w.dp_pullup().clear_bit()
+        });
+        usb.int_clr().write(|w| w.sof().clear_bit_by_one());
+        SYSTEM::regs()
+            .perip_clk_en1()
+            .modify(|_, w| w.usb_device_clk_en().clear_bit());
+        None
+    });
 
     let repeater = Repeater::new(
         platform,

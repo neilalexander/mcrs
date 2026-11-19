@@ -21,7 +21,7 @@ pub mod storage;
 use crate::{app::config::RadioConfig, memory::MemoryProfile};
 use core::{convert::Infallible, future::Future, net::SocketAddrV4};
 use embedded_hal_async::{delay::DelayNs, digital::Wait};
-use embedded_io_async::{Read, Write};
+use embedded_io_async::{ErrorType, Read, Write};
 
 /// The services the whole board provides. The repeater shares the platform
 /// between its tasks.
@@ -177,6 +177,39 @@ impl Storage for NoStorage {
 
     fn write_atomic(&mut self, _key: &str, _data: &[u8]) -> Result<(), storage::Error> {
         Err(storage::Error::NotAvailable)
+    }
+}
+
+/// A local console that can be disabled at boot.
+pub struct LocalConsole<C>(pub Option<C>);
+
+impl<C: ErrorType> ErrorType for LocalConsole<C> {
+    type Error = C::Error;
+}
+
+impl<C: Read> Read for LocalConsole<C> {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        match &mut self.0 {
+            Some(console) => console.read(buf).await,
+            None if buf.is_empty() => Ok(0),
+            None => core::future::pending().await,
+        }
+    }
+}
+
+impl<C: Write> Write for LocalConsole<C> {
+    async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        match &mut self.0 {
+            Some(console) => console.write(buf).await,
+            None => Ok(buf.len()),
+        }
+    }
+
+    async fn flush(&mut self) -> Result<(), Self::Error> {
+        match &mut self.0 {
+            Some(console) => console.flush().await,
+            None => Ok(()),
+        }
     }
 }
 

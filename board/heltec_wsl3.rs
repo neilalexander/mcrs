@@ -8,6 +8,7 @@ use mcrs_esp32s3::{
     heltec::{NoRadioFrontend, wifi_task},
     idle_loop,
 };
+use mcrs_repeater::{app::config::AppConfig, platform::LocalConsole};
 
 const MODEL: &str = "Heltec Wireless Stick Lite V3";
 
@@ -15,22 +16,27 @@ const MODEL: &str = "Heltec Wireless Stick Lite V3";
 async fn main(_spawner: embassy_executor::Spawner) -> ! {
     let (peripherals, board) = mcrs_esp32s3::init();
 
-    let (platform, storage, mut devices) =
+    let (platform, mut storage, mut devices) =
         Devices::new(peripherals, MODEL, BoardConfig::heltec_v3(), async {
             NoRadioFrontend
         })
         .await;
 
-    let mut console = match Uart::new(board.UART0, UartConfig::default()) {
-        Ok(uart) => uart
-            .with_rx(board.GPIO44)
-            .with_tx(board.GPIO43)
-            .into_async(),
-        Err(e) => {
-            error!("Failed to configure CLI UART: {:?}", e);
-            idle_loop();
+    let mut console = LocalConsole(if AppConfig::load_console_enabled(&mut storage) {
+        match Uart::new(board.UART0, UartConfig::default()) {
+            Ok(uart) => Some(
+                uart.with_rx(board.GPIO44)
+                    .with_tx(board.GPIO43)
+                    .into_async(),
+            ),
+            Err(e) => {
+                error!("Failed to configure CLI UART: {:?}", e);
+                idle_loop();
+            }
         }
-    };
+    } else {
+        None
+    });
 
     let repeater = Repeater::new(
         platform,

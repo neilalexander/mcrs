@@ -46,6 +46,7 @@ pub struct AppConfig {
     acl: super::acl::Acl,
     ntp: String,
     wifi: WifiConfig,
+    console_enabled: bool,
     radio: RadioConfig,
     regions: RegionMap,
     region_capture: bool,
@@ -255,13 +256,26 @@ impl AppConfig {
 
     pub fn load_lowvoltage<S: crate::platform::Storage>(storage: &mut S) -> LowVoltageConfig {
         let defaults = StoredAppConfig::default_with_identity_seed([0; 32]);
+        Self::read_boot_config(storage, &defaults)
+            .map_or(defaults.lowvoltage, |stored| stored.lowvoltage)
+    }
+
+    pub fn load_console_enabled<S: crate::platform::Storage>(storage: &mut S) -> bool {
+        let defaults = StoredAppConfig::default_with_identity_seed([0; 32]);
+        Self::read_boot_config(storage, &defaults)
+            .map_or(defaults.console_enabled, |stored| stored.console_enabled)
+    }
+
+    fn read_boot_config<S: crate::platform::Storage>(
+        storage: &mut S,
+        defaults: &StoredAppConfig,
+    ) -> Option<StoredAppConfig> {
         let mut buffer = [0u8; APP_CONFIG_MAX_LEN];
-        let stored = storage
+        storage
             .read(APP_CONFIG_KEY, &mut buffer)
             .ok()
             .and_then(|len| buffer.get(..len))
-            .and_then(|data| decode_config_text(data, &defaults));
-        stored.map_or(defaults.lowvoltage, |stored| stored.lowvoltage)
+            .and_then(|data| decode_config_text(data, defaults))
     }
 
     pub fn load_or_create<S>(storage: &mut S, defaults: Self) -> Self
@@ -300,6 +314,7 @@ impl AppConfig {
             acl: stored.acl,
             ntp: stored.ntp,
             wifi: stored.wifi,
+            console_enabled: stored.console_enabled,
             radio: stored.radio,
             regions: stored.regions,
             region_capture: stored.region_capture,
@@ -394,6 +409,14 @@ impl AppConfig {
 
     pub fn set_wifi_telnet(&mut self, enabled: bool) {
         self.wifi.telnet = enabled;
+    }
+
+    pub fn console_enabled(&self) -> bool {
+        self.console_enabled
+    }
+
+    pub fn set_console_enabled(&mut self, enabled: bool) {
+        self.console_enabled = enabled;
     }
 
     #[cfg(feature = "mqtt")]
@@ -523,6 +546,7 @@ impl AppConfig {
             "wifi.ssid" => self.wifi.ssid = defaults.wifi.ssid,
             "wifi.pass" => self.wifi.password = defaults.wifi.password,
             "wifi.telnet" => self.wifi.telnet = defaults.wifi.telnet,
+            "usb.console" => self.console_enabled = defaults.console_enabled,
             "radio" => self.radio = defaults.radio,
             "radio.rxgain" => self.radio.rx_boost = defaults.radio.rx_boost,
             "freq" => self.radio.receive_frequency_hz = defaults.radio.receive_frequency_hz,
@@ -912,6 +936,7 @@ struct StoredAppConfig {
     acl: super::acl::Acl,
     ntp: String,
     wifi: WifiConfig,
+    console_enabled: bool,
     radio: RadioConfig,
     regions: RegionMap,
     region_capture: bool,
@@ -956,6 +981,7 @@ impl StoredAppConfig {
             acl: super::acl::Acl::default(),
             ntp: String::new(),
             wifi: WifiConfig::default(),
+            console_enabled: true,
             radio: RadioConfig {
                 receive_frequency_hz: 0,
                 spreading_factor: SpreadingFactor::Sf5,
@@ -1010,6 +1036,7 @@ impl StoredAppConfig {
             acl: config.acl.clone(),
             ntp: config.ntp.clone(),
             wifi: config.wifi.clone(),
+            console_enabled: config.console_enabled,
             radio: config.radio,
             regions: config.regions.clone(),
             region_capture: config.region_capture,
@@ -1140,6 +1167,7 @@ fn decode_config_layer(
             "wifi.ssid" => config.wifi.ssid = value,
             "wifi.pass" => config.wifi.password = value,
             "wifi.telnet" => config.wifi.telnet = parse_bool(&value)?,
+            "usb.console" => config.console_enabled = parse_bool(&value)?,
             // The base file contains optional MQTT settings for all builds.
             #[cfg(not(feature = "mqtt"))]
             key if key.starts_with("mqtt.") && source == ConfigSource::Defaults => {}
@@ -1360,6 +1388,13 @@ fn encode_config_delta(config: &StoredAppConfig, defaults: &StoredAppConfig) -> 
     if config.wifi.telnet != defaults.wifi.telnet {
         let _ = writeln!(&mut out, "wifi.telnet={}", bool_text(config.wifi.telnet));
     }
+    if config.console_enabled != defaults.console_enabled {
+        let _ = writeln!(
+            &mut out,
+            "usb.console={}",
+            bool_text(config.console_enabled)
+        );
+    }
 
     if config.radio.receive_frequency_hz != defaults.radio.receive_frequency_hz {
         let _ = writeln!(
@@ -1531,6 +1566,11 @@ fn encode_full_config_text_redacted(config: &StoredAppConfig, redact_secrets: bo
         out.push('\n');
     }
     let _ = writeln!(&mut out, "wifi.telnet={}", bool_text(config.wifi.telnet));
+    let _ = writeln!(
+        &mut out,
+        "usb.console={}",
+        bool_text(config.console_enabled)
+    );
 
     out.push_str("identity.lat=");
     write_optional_coordinate(&mut out, config.latitude_microdegrees);
@@ -3018,6 +3058,25 @@ mod tests {
         let encoded = encode_config_text(&config);
         let decoded = decode_config_text(&encoded, &defaults()).expect("valid config");
         assert_eq!(decoded.wifi.password(), "");
+    }
+
+    #[test]
+    fn local_console_defaults_on_and_preserves_saved_override() {
+        let defaults = defaults();
+        let legacy = decode_config_text(b"version=1\n", &defaults).unwrap();
+        assert!(legacy.console_enabled);
+
+        let mut config = AppConfig::generated_defaults([7; 32]);
+        config.set_console_enabled(false);
+        let encoded = encode_config_text(&StoredAppConfig::from_app_config(&config));
+        assert!(
+            !decode_config_text(&encoded, &defaults)
+                .unwrap()
+                .console_enabled
+        );
+
+        config.unset("usb.console").unwrap();
+        assert!(config.console_enabled());
     }
 
     #[test]
