@@ -1950,7 +1950,7 @@ dependencies = [
 
 [[package]]
 name = "mcrs-esp32s3"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "critical-section",
  "defmt 1.2.0",
@@ -1993,7 +1993,7 @@ dependencies = [
 
 [[package]]
 name = "mcrs-repeater"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "aes 0.9.3",
  "base64",
