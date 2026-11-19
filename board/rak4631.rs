@@ -48,6 +48,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     }
 
     let mut config = embassy_nrf::config::Config::default();
+    config.lfclk_source = embassy_nrf::config::LfclkSource::ExternalXtal;
     config.hfclk_source = embassy_nrf::config::HfclkSource::ExternalXtal;
     // RAK4631 has the external components for the nRF's VDD DC/DC converter.
     config.dcdc.reg1 = true;

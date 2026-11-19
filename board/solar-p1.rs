@@ -45,6 +45,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     }
 
     let mut config = embassy_nrf::config::Config::default();
+    config.lfclk_source = embassy_nrf::config::LfclkSource::ExternalXtal;
     // Solar P1 (XIAO nRF52840 Plus) has the external components for the VDD DC/DC converter.
     config.dcdc.reg1 = true;
     let p = embassy_nrf::init(config);
