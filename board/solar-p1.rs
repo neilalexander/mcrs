@@ -21,7 +21,13 @@ use mcrs_nrf::{
     battery::{BatteryConfig, NrfBattery},
     sleep, usb_console,
 };
-use mcrs_repeater::{Repeater, platform::NoDisplay};
+use mcrs_repeater::{
+    Repeater,
+    platform::{
+        NoDisplay,
+        led::{GpioLed, PinState},
+    },
+};
 use mcrs_sx1262::{BoardConfig, Sx1262, TcxoCtrlVoltage};
 use panic_probe as _;
 
@@ -106,6 +112,11 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     );
     let platform = NrfPlatform::new(MODEL, Rng::new_blocking(p.RNG));
 
+    let mut led = GpioLed::new(
+        Output::new(p.P0_15, Level::Low, OutputDrive::Standard),
+        PinState::High,
+    )
+    .unwrap();
     let mut display = NoDisplay;
     let mut button = Input::new(p.P1_07, Pull::Up);
     let mut sensors = mcrs_nrf::sensors::NrfSensors(embassy_nrf::temp::Temp::new(p.TEMP, Irqs));
@@ -119,6 +130,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         &mut button,
         &mut battery,
         &mut sensors,
+        &mut led,
     );
     let context = repeater.context();
     let sleep_request = repeater.run(true, usb.run()).await;

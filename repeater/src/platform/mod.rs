@@ -14,6 +14,7 @@
 //! implement these traits in crates of their own, so the repeater depends on
 //! no hardware.
 
+pub mod led;
 pub mod sensors;
 pub mod storage;
 

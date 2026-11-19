@@ -32,6 +32,7 @@ use core::{
     task::Waker,
 };
 use defmt::{error, info};
+use embedded_hal::digital::PinState;
 use esp_hal::{
     Blocking,
     gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull},
@@ -39,8 +40,8 @@ use esp_hal::{
     interrupt::software::SoftwareInterruptControl,
     peripherals::{
         ADC1, GPIO0, GPIO1, GPIO2, GPIO5, GPIO7, GPIO8, GPIO9, GPIO10, GPIO11, GPIO12, GPIO13,
-        GPIO14, GPIO17, GPIO18, GPIO21, GPIO36, GPIO37, GPIO43, GPIO44, GPIO46, I2C0, RNG, SPI2,
-        UART0, USB_DEVICE, WIFI,
+        GPIO14, GPIO17, GPIO18, GPIO21, GPIO35, GPIO36, GPIO37, GPIO43, GPIO44, GPIO46, I2C0, RNG,
+        SPI2, UART0, USB_DEVICE, WIFI,
     },
     spi::{
         Mode,
@@ -51,7 +52,7 @@ use esp_hal::{
 };
 use mcrs_repeater::{
     memory::MemoryProfile,
-    platform::{Battery, OtaStatus, Platform, Radio},
+    platform::{Battery, OtaStatus, Platform, Radio, led::GpioLed},
 };
 use mcrs_ssd1306::PowerActiveLevel;
 use mcrs_sx1262::Sx1262;
@@ -87,6 +88,7 @@ pub struct CommonPeripherals {
     display_reset: GPIO21<'static>,
     display_power: GPIO36<'static>,
     button: GPIO0<'static>,
+    led: GPIO35<'static>,
     rng: RNG<'static>,
     adc: ADC1<'static>,
     battery_sense: GPIO1<'static>,
@@ -132,6 +134,7 @@ pub fn init() -> (CommonPeripherals, BoardPeripherals) {
         display_reset: peripherals.GPIO21,
         display_power: peripherals.GPIO36,
         button: peripherals.GPIO0,
+        led: peripherals.GPIO35,
         rng: peripherals.RNG,
         adc: peripherals.ADC1,
         battery_sense: peripherals.GPIO1,
@@ -157,6 +160,7 @@ pub struct Devices<F> {
     pub radio: HeltecRadio<F>,
     pub display: OledDisplay,
     pub button: Input<'static>,
+    pub led: GpioLed<Output<'static>>,
     pub battery: BatteryMonitor<'static>,
     pub sensors: sensors::EspSensors,
     /// Reserved for the Wi-Fi tasks.
@@ -223,6 +227,7 @@ impl<F: RadioFrontend> Devices<F> {
             display_reset,
             display_power,
             button,
+            led,
             rng,
             mut adc,
             mut battery_sense,
@@ -320,6 +325,7 @@ impl<F: RadioFrontend> Devices<F> {
             ),
             display,
             button: Input::new(button, InputConfig::default().with_pull(Pull::Up)),
+            led: GpioLed::new(Output::new(led, Level::Low, output_config), PinState::High).unwrap(),
             battery: BatteryMonitor::new(adc, battery_sense, battery_ctrl),
             wifi: WifiResources { wifi },
             sensors: sensors::EspSensors::new(temperature),

@@ -2,7 +2,7 @@
 use crate::{
     app::{self, AppContext, battery, cli, config::AppConfig, periodic, ui},
     memory::MemoryProfile,
-    platform::{Battery, Platform, Radio, StatusDisplay, Storage, sensors::Sensors},
+    platform::{Battery, Platform, Radio, StatusDisplay, Storage, led::Led, sensors::Sensors},
 };
 use alloc::{boxed::Box, string::String};
 use core::future::Future;
@@ -21,7 +21,7 @@ pub enum SleepRequest {
 }
 
 /// The repeater for one board, with the devices it drives.
-pub struct Repeater<'a, PLATFORM, STORAGE, RADIO, CONSOLE, DISPLAY, BUTTON, BATTERY, SENSORS>
+pub struct Repeater<'a, PLATFORM, STORAGE, RADIO, CONSOLE, DISPLAY, BUTTON, BATTERY, SENSORS, LED>
 where
     PLATFORM: 'static,
     STORAGE: 'static,
@@ -33,10 +33,11 @@ where
     button: &'a mut BUTTON,
     battery: &'a mut BATTERY,
     sensors: &'a mut SENSORS,
+    _led: &'a mut LED,
 }
 
-impl<'a, PLATFORM, STORAGE, RADIO, CONSOLE, DISPLAY, BUTTON, BATTERY, SENSORS>
-    Repeater<'a, PLATFORM, STORAGE, RADIO, CONSOLE, DISPLAY, BUTTON, BATTERY, SENSORS>
+impl<'a, PLATFORM, STORAGE, RADIO, CONSOLE, DISPLAY, BUTTON, BATTERY, SENSORS, LED>
+    Repeater<'a, PLATFORM, STORAGE, RADIO, CONSOLE, DISPLAY, BUTTON, BATTERY, SENSORS, LED>
 where
     PLATFORM: Platform + 'static,
     STORAGE: Storage + 'static,
@@ -46,6 +47,7 @@ where
     BUTTON: Wait,
     BATTERY: Battery,
     SENSORS: Sensors,
+    LED: Led,
 {
     /// Loads the configuration from `storage`, or creates it on first boot.
     /// `console` serves the local CLI, and a press of `button` pulls its input
@@ -60,6 +62,7 @@ where
         button: &'a mut BUTTON,
         battery: &'a mut BATTERY,
         sensors: &'a mut SENSORS,
+        led: &'a mut LED,
     ) -> Self {
         log_memory_profile(platform.memory_profile());
 
@@ -79,6 +82,7 @@ where
             button,
             battery,
             sensors,
+            _led: led,
         }
     }
 
@@ -100,6 +104,7 @@ where
             button,
             battery,
             sensors,
+            _led: _,
         } = self;
 
         let repeater_tasks = join5(

@@ -43,6 +43,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         &mut devices.button,
         &mut devices.battery,
         &mut devices.sensors,
+        &mut devices.led,
     );
     let context = repeater.context();
     let wifi_task = wifi_task(&mut devices.wifi, context);
