@@ -81,7 +81,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         Some(&mut rx_enable),
         Delay,
         BoardConfig {
-            tcxo_ctrl: Some(TcxoCtrlVoltage::Ctrl1V7),
+            tcxo_ctrl: Some(TcxoCtrlVoltage::Ctrl1V8),
             use_dcdc: true,
         },
     );
