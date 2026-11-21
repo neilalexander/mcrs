@@ -751,6 +751,18 @@ async fn handle_command<P: Platform, S: Storage>(
         return Some(command_response(request, output));
     }
 
+    if command == "wifi status" {
+        let output = if request.privilege.is_privileged() {
+            match context.platform.wifi_status() {
+                Some((ssid, ip)) => format!("Connected to {ssid}\nIP: {ip}"),
+                None => String::from("Not connected"),
+            }
+        } else {
+            denied_text()
+        };
+        return Some(command_response(request, output));
+    }
+
     #[cfg(feature = "mqtt")]
     if command == "mqtt status" {
         let output = if request.privilege.is_privileged() {
@@ -2436,6 +2448,7 @@ mod tests {
         ];
         let guest = CliRequest::remote(CliPrivilege::AnonymousRemote, 0);
         for command in [
+            "wifi status",
             "get wifi.telnet",
             "set wifi.telnet true",
             "unset wifi.telnet",

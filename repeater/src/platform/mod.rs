@@ -65,6 +65,12 @@ pub trait Platform {
     fn stop_ota(&self);
 
     fn ota_status(&self) -> OtaStatus;
+
+    /// The connected station network and IPv4 address, once DHCP completes.
+    /// Boards without Wi-Fi report no connection.
+    fn wifi_status(&self) -> Option<(alloc::string::String, core::net::Ipv4Addr)> {
+        None
+    }
 }
 
 /// Where a firmware update started with [`Platform::start_ota`] stands.

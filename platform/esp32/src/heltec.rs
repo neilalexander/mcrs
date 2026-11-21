@@ -282,6 +282,7 @@ async fn run_ota_station_mode<'a>(
                 continue;
             }
             if let Some(config) = stack.config_v4() {
+                context.platform.set_wifi_status(Some((ssid, config.address.address())));
                 info!(
                     "Wi-Fi: station connected address={} ota=http://{}:{}/",
                     config.address,
@@ -340,6 +341,7 @@ async fn run_ota_station_mode<'a>(
                     }
                 })
                 .await;
+                context.platform.set_wifi_status(None);
                 #[cfg(feature = "mqtt")]
                 mcrs_repeater::app::mqtt::client::disconnected(context).await;
             }

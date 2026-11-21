@@ -344,6 +344,7 @@ pub struct EspPlatform {
     ota_requested: Cell<bool>,
     /// Where the Wi-Fi task serves the page, once it has an address.
     ota_address: Cell<Option<SocketAddrV4>>,
+    wifi_status: RefCell<Option<(alloc::string::String, core::net::Ipv4Addr)>>,
     /// Wakes the Wi-Fi task when the request changes.
     ota_waker: RefCell<Option<Waker>>,
     /// Counts the changes, so the Wi-Fi task notices a stop and a start
@@ -360,6 +361,7 @@ impl EspPlatform {
             identity_seed,
             ota_requested: Cell::new(false),
             ota_address: Cell::new(None),
+            wifi_status: RefCell::new(None),
             ota_waker: RefCell::new(None),
             ota_generation: Cell::new(0),
         }
@@ -375,6 +377,13 @@ impl EspPlatform {
 
     pub(crate) fn register_ota_waker(&self, waker: &Waker) {
         self.ota_waker.borrow_mut().replace(waker.clone());
+    }
+
+    pub(crate) fn set_wifi_status(
+        &self,
+        status: Option<(alloc::string::String, core::net::Ipv4Addr)>,
+    ) {
+        *self.wifi_status.borrow_mut() = status;
     }
 
     pub(crate) fn set_ota_address(&self, address: Option<SocketAddrV4>) {
@@ -440,6 +449,10 @@ impl Platform for EspPlatform {
 
     fn stop_ota(&self) {
         self.request_ota(false);
+    }
+
+    fn wifi_status(&self) -> Option<(alloc::string::String, core::net::Ipv4Addr)> {
+        self.wifi_status.borrow().clone()
     }
 
     fn ota_status(&self) -> OtaStatus {
