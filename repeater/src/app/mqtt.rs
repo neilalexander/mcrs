@@ -348,16 +348,18 @@ pub fn status_json(
     origin: &str,
     model: &str,
     firmware_version: &str,
+    radio: config::RadioConfig,
     now: u32,
     stats: StatusStats,
 ) -> String {
     let status = if online { "online" } else { "offline" };
     format!(
-        "{{\"status\":\"{status}\",\"origin\":\"{}\",\"origin_id\":\"{}\",\"model\":\"{}\",\"firmware_version\":\"{}\",\"client_version\":\"MCRS MQTT\",\"timestamp\":\"{}\",\"stats\":{}}}",
+        "{{\"status\":\"{status}\",\"origin\":\"{}\",\"origin_id\":\"{}\",\"model\":\"{}\",\"firmware_version\":\"{}\",\"radio\":\"{}\",\"client_version\":\"MCRS MQTT\",\"timestamp\":\"{}\",\"stats\":{}}}",
         escape_json(origin),
         hex(public_key),
         escape_json(model),
         escape_json(firmware_version),
+        escape_json(&radio.radio_string()),
         utc_timestamp(now),
         stats.json(),
     )
@@ -495,6 +497,15 @@ mod tests {
         future::Future,
         pin::pin,
         task::{Context, Poll, Waker},
+    };
+
+    const TEST_RADIO: config::RadioConfig = config::RadioConfig {
+        receive_frequency_hz: 869_618_000,
+        spreading_factor: config::SpreadingFactor::Sf8,
+        bandwidth: config::Bandwidth::Khz62_5,
+        coding_rate: config::CodingRate::Cr4_8,
+        transmit_power_dbm: 22,
+        rx_boost: false,
     };
 
     #[test]
@@ -702,11 +713,12 @@ mod tests {
                 "Repeater",
                 "Heltec V3",
                 FIRMWARE_VERSION,
+                TEST_RADIO,
                 0,
                 StatusStats::default()
             ),
             format!(
-                "{{\"status\":\"online\",\"origin\":\"Repeater\",\"origin_id\":\"{key}\",\"model\":\"Heltec V3\",\"firmware_version\":\"{FIRMWARE_VERSION}\",\"client_version\":\"MCRS MQTT\",\"timestamp\":\"1970-01-01T00:00:00Z\",\"stats\":{{\"battery_mv\":null,\"uptime_secs\":0,\"uptime_ms\":0}}}}"
+                "{{\"status\":\"online\",\"origin\":\"Repeater\",\"origin_id\":\"{key}\",\"model\":\"Heltec V3\",\"firmware_version\":\"{FIRMWARE_VERSION}\",\"radio\":\"869.618,62.500,8,8\",\"client_version\":\"MCRS MQTT\",\"timestamp\":\"1970-01-01T00:00:00Z\",\"stats\":{{\"battery_mv\":null,\"uptime_secs\":0,\"uptime_ms\":0}}}}"
             )
         );
         assert_eq!(
@@ -716,11 +728,12 @@ mod tests {
                 "Repeater",
                 "Heltec V3",
                 FIRMWARE_VERSION,
+                TEST_RADIO,
                 0,
                 StatusStats::default()
             ),
             format!(
-                "{{\"status\":\"offline\",\"origin\":\"Repeater\",\"origin_id\":\"{key}\",\"model\":\"Heltec V3\",\"firmware_version\":\"{FIRMWARE_VERSION}\",\"client_version\":\"MCRS MQTT\",\"timestamp\":\"1970-01-01T00:00:00Z\",\"stats\":{{\"battery_mv\":null,\"uptime_secs\":0,\"uptime_ms\":0}}}}"
+                "{{\"status\":\"offline\",\"origin\":\"Repeater\",\"origin_id\":\"{key}\",\"model\":\"Heltec V3\",\"firmware_version\":\"{FIRMWARE_VERSION}\",\"radio\":\"869.618,62.500,8,8\",\"client_version\":\"MCRS MQTT\",\"timestamp\":\"1970-01-01T00:00:00Z\",\"stats\":{{\"battery_mv\":null,\"uptime_secs\":0,\"uptime_ms\":0}}}}"
             )
         );
     }
@@ -735,6 +748,7 @@ mod tests {
                 "Repeater \"北\"\n\\",
                 "Board\tV3",
                 &version_with_control,
+                TEST_RADIO,
                 1_790_539_044,
                 StatusStats::default(),
             );
@@ -742,7 +756,7 @@ mod tests {
             assert_eq!(
                 json,
                 format!(
-                    "{{\"status\":\"{status}\",\"origin\":\"Repeater \\\"北\\\"\\u000a\\\\\",\"origin_id\":\"{key}\",\"model\":\"Board\\u0009V3\",\"firmware_version\":\"{FIRMWARE_VERSION}\\u000d\",\"client_version\":\"MCRS MQTT\",\"timestamp\":\"2026-09-27T19:57:24Z\",\"stats\":{{\"battery_mv\":null,\"uptime_secs\":0,\"uptime_ms\":0}}}}"
+                    "{{\"status\":\"{status}\",\"origin\":\"Repeater \\\"北\\\"\\u000a\\\\\",\"origin_id\":\"{key}\",\"model\":\"Board\\u0009V3\",\"firmware_version\":\"{FIRMWARE_VERSION}\\u000d\",\"radio\":\"869.618,62.500,8,8\",\"client_version\":\"MCRS MQTT\",\"timestamp\":\"2026-09-27T19:57:24Z\",\"stats\":{{\"battery_mv\":null,\"uptime_secs\":0,\"uptime_ms\":0}}}}"
                 )
             );
         }
@@ -753,10 +767,29 @@ mod tests {
                 "R",
                 "B",
                 FIRMWARE_VERSION,
+                TEST_RADIO,
                 1_790_539_045,
                 StatusStats::default()
             )
             .contains("2026-09-27T19:57:25Z")
+        );
+    }
+
+    #[test]
+    fn status_radio_uses_corescope_format() {
+        assert_eq!(TEST_RADIO.radio_string(), "869.618,62.500,8,8");
+        assert!(
+            status_json(
+                &[0; 32],
+                true,
+                "Repeater",
+                "Board",
+                FIRMWARE_VERSION,
+                TEST_RADIO,
+                0,
+                StatusStats::default(),
+            )
+            .contains("\"radio\":\"869.618,62.500,8,8\"")
         );
     }
 
@@ -770,6 +803,7 @@ mod tests {
                     "Repeater",
                     "Board",
                     FIRMWARE_VERSION,
+                    TEST_RADIO,
                     0,
                     StatusStats {
                         battery_mv: Some(4_100),
@@ -861,6 +895,7 @@ mod tests {
                 "Repeater",
                 "Heltec V3",
                 FIRMWARE_VERSION,
+                TEST_RADIO,
                 0,
                 StatusStats::default(),
             );
@@ -875,6 +910,7 @@ mod tests {
             "Repeater",
             "Heltec V3",
             FIRMWARE_VERSION,
+            TEST_RADIO,
             0,
             StatusStats::default(),
         );

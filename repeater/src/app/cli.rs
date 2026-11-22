@@ -2,7 +2,7 @@ use crate::{
     SleepRequest,
     app::{
         AppContext,
-        config::{Bandwidth, CodingRate, RadioConfig, SpreadingFactor},
+        config::{Bandwidth, CodingRate, RadioConfig, SpreadingFactor, format_scaled},
         crypto::{encode_cli_text_response, encode_login_response},
         remote::ReplyRoute,
     },
@@ -1098,13 +1098,7 @@ async fn handle_get_command<P: Platform, S: Storage>(
         }
         "radio" => {
             let radio = context.with_config(|config| config.radio()).await;
-            format!(
-                "> {},{},{},{}",
-                format_scaled(radio.receive_frequency_hz, 1_000_000, 3),
-                format_scaled(radio.bandwidth.hz(), 1_000, 3),
-                radio.spreading_factor.factor(),
-                radio.coding_rate.denominator()
-            )
+            format!("> {}", radio.radio_string())
         }
         "tx" => {
             context
@@ -2017,24 +2011,6 @@ fn parse_decimal_scaled(input: &str, scale: u32) -> Option<u32> {
         0
     };
     u32::try_from(scaled_whole.checked_add(scaled_fraction)?).ok()
-}
-
-fn format_scaled(value: u32, scale: u32, decimals: usize) -> String {
-    let whole = value / scale;
-    let mut fraction = value % scale;
-    let mut divisor = scale / 10;
-    let mut output = format!("{}.", whole);
-
-    for _ in 0..decimals {
-        let digit = fraction.checked_div(divisor).unwrap_or(0);
-        output.push((b'0' + digit as u8) as char);
-        if divisor != 0 {
-            fraction %= divisor;
-            divisor /= 10;
-        }
-    }
-
-    output
 }
 
 fn format_optional_coordinate(value: Option<i32>) -> String {

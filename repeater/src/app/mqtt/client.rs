@@ -225,6 +225,7 @@ async fn mqtt_status_json<P: Platform, S: Storage>(
                 config.node_name(),
                 context.platform.model(),
                 VERSION,
+                config.radio(),
                 context.platform.now_seconds(),
                 crate::app::mqtt::StatusStats {
                     battery_mv: status.battery_millivolts,

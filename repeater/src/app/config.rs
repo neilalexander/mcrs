@@ -3,7 +3,7 @@ use super::{
     identity::{self, Identity, PrivateKey},
     regions::{RegionError, RegionMap},
 };
-use alloc::{string::String, vec::Vec};
+use alloc::{format, string::String, vec::Vec};
 use core::fmt::{self, Write};
 
 fn clamp_advert_interval(minutes: u32) -> u32 {
@@ -849,10 +849,46 @@ impl AppConfig {
     }
 }
 
+/// Formats `value / scale` with a fixed number of decimal digits, e.g.
+/// `format_scaled(869_618_000, 1_000_000, 3)` -> `"869.618"`.
+pub(crate) fn format_scaled(value: u32, scale: u32, decimals: usize) -> String {
+    let whole = value / scale;
+    let mut fraction = value % scale;
+    let mut divisor = scale / 10;
+    let mut output = format!("{}.", whole);
+
+    for _ in 0..decimals {
+        let digit = fraction.checked_div(divisor).unwrap_or(0);
+        output.push((b'0' + digit as u8) as char);
+        if divisor != 0 {
+            fraction %= divisor;
+            divisor /= 10;
+        }
+    }
+
+    output
+}
+
 impl RadioConfig {
     /// Preamble symbols before every packet, whatever the settings. Radios
     /// send and expect this many, and the airtime includes them.
     pub const PREAMBLE_LENGTH: u16 = 8;
+
+    /// Canonical `MHz,kHz,SF,CR`, as used by the CLI `radio` reply and the
+    /// `radio` field of an MQTT status message.
+    ///
+    /// CoreScope canonicalises exactly this shape (`dbschema.CanonicalRadio`);
+    /// any other spelling is stored verbatim and cannot key its per-setting
+    /// radio history.
+    pub fn radio_string(&self) -> String {
+        format!(
+            "{},{},{},{}",
+            format_scaled(self.receive_frequency_hz, 1_000_000, 3),
+            format_scaled(self.bandwidth.hz(), 1_000, 3),
+            self.spreading_factor.factor(),
+            self.coding_rate.denominator()
+        )
+    }
 
     pub fn packet_airtime_ms(self, payload_len: usize) -> u32 {
         let symbol_time_us = self.symbol_time_us();
