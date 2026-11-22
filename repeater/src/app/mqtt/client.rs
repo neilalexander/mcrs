@@ -229,6 +229,7 @@ async fn mqtt_status_json<P: Platform, S: Storage>(
                 context.platform.now_seconds(),
                 crate::app::mqtt::StatusStats {
                     battery_mv: status.battery_millivolts,
+                    noise_floor_dbm: status.noise_floor_dbm,
                     uptime_ms: status.uptime_millis,
                 },
             )

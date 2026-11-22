@@ -326,6 +326,8 @@ pub fn packet_json(event: &PacketEvent, public_key: &[u8; 32], origin: &str) -> 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct StatusStats {
     pub battery_mv: Option<u16>,
+    /// Sampled radio noise floor in dBm; unknown until the first sample.
+    pub noise_floor_dbm: Option<i16>,
     pub uptime_ms: u64,
 }
 
@@ -334,8 +336,11 @@ impl StatusStats {
         let battery_mv = self
             .battery_mv
             .map_or_else(|| String::from("null"), |mv| mv.to_string());
+        let noise_floor = self
+            .noise_floor_dbm
+            .map_or_else(|| String::from("null"), |dbm| dbm.to_string());
         format!(
-            "{{\"battery_mv\":{battery_mv},\"uptime_secs\":{},\"uptime_ms\":{}}}",
+            "{{\"battery_mv\":{battery_mv},\"noise_floor\":{noise_floor},\"uptime_secs\":{},\"uptime_ms\":{}}}",
             self.uptime_ms / 1000,
             self.uptime_ms,
         )
@@ -718,7 +723,7 @@ mod tests {
                 StatusStats::default()
             ),
             format!(
-                "{{\"status\":\"online\",\"origin\":\"Repeater\",\"origin_id\":\"{key}\",\"model\":\"Heltec V3\",\"firmware_version\":\"{FIRMWARE_VERSION}\",\"radio\":\"869.618,62.500,8,8\",\"client_version\":\"MCRS MQTT\",\"timestamp\":\"1970-01-01T00:00:00Z\",\"stats\":{{\"battery_mv\":null,\"uptime_secs\":0,\"uptime_ms\":0}}}}"
+                "{{\"status\":\"online\",\"origin\":\"Repeater\",\"origin_id\":\"{key}\",\"model\":\"Heltec V3\",\"firmware_version\":\"{FIRMWARE_VERSION}\",\"radio\":\"869.618,62.500,8,8\",\"client_version\":\"MCRS MQTT\",\"timestamp\":\"1970-01-01T00:00:00Z\",\"stats\":{{\"battery_mv\":null,\"noise_floor\":null,\"uptime_secs\":0,\"uptime_ms\":0}}}}"
             )
         );
         assert_eq!(
@@ -733,7 +738,7 @@ mod tests {
                 StatusStats::default()
             ),
             format!(
-                "{{\"status\":\"offline\",\"origin\":\"Repeater\",\"origin_id\":\"{key}\",\"model\":\"Heltec V3\",\"firmware_version\":\"{FIRMWARE_VERSION}\",\"radio\":\"869.618,62.500,8,8\",\"client_version\":\"MCRS MQTT\",\"timestamp\":\"1970-01-01T00:00:00Z\",\"stats\":{{\"battery_mv\":null,\"uptime_secs\":0,\"uptime_ms\":0}}}}"
+                "{{\"status\":\"offline\",\"origin\":\"Repeater\",\"origin_id\":\"{key}\",\"model\":\"Heltec V3\",\"firmware_version\":\"{FIRMWARE_VERSION}\",\"radio\":\"869.618,62.500,8,8\",\"client_version\":\"MCRS MQTT\",\"timestamp\":\"1970-01-01T00:00:00Z\",\"stats\":{{\"battery_mv\":null,\"noise_floor\":null,\"uptime_secs\":0,\"uptime_ms\":0}}}}"
             )
         );
     }
@@ -756,7 +761,7 @@ mod tests {
             assert_eq!(
                 json,
                 format!(
-                    "{{\"status\":\"{status}\",\"origin\":\"Repeater \\\"北\\\"\\u000a\\\\\",\"origin_id\":\"{key}\",\"model\":\"Board\\u0009V3\",\"firmware_version\":\"{FIRMWARE_VERSION}\\u000d\",\"radio\":\"869.618,62.500,8,8\",\"client_version\":\"MCRS MQTT\",\"timestamp\":\"2026-09-27T19:57:24Z\",\"stats\":{{\"battery_mv\":null,\"uptime_secs\":0,\"uptime_ms\":0}}}}"
+                    "{{\"status\":\"{status}\",\"origin\":\"Repeater \\\"北\\\"\\u000a\\\\\",\"origin_id\":\"{key}\",\"model\":\"Board\\u0009V3\",\"firmware_version\":\"{FIRMWARE_VERSION}\\u000d\",\"radio\":\"869.618,62.500,8,8\",\"client_version\":\"MCRS MQTT\",\"timestamp\":\"2026-09-27T19:57:24Z\",\"stats\":{{\"battery_mv\":null,\"noise_floor\":null,\"uptime_secs\":0,\"uptime_ms\":0}}}}"
                 )
             );
         }
@@ -807,11 +812,12 @@ mod tests {
                     0,
                     StatusStats {
                         battery_mv: Some(4_100),
+                        noise_floor_dbm: Some(-117),
                         uptime_ms,
                     },
                 );
                 let expected = format!(
-                    "\"stats\":{{\"battery_mv\":4100,\"uptime_secs\":{uptime_secs},\"uptime_ms\":{uptime_ms}}}}}"
+                    "\"stats\":{{\"battery_mv\":4100,\"noise_floor\":-117,\"uptime_secs\":{uptime_secs},\"uptime_ms\":{uptime_ms}}}}}"
                 );
                 assert!(json.ends_with(&expected), "{json}");
                 assert!(!json.contains("channel_utilization"));
