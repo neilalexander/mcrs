@@ -26,6 +26,7 @@ MCRS supports the following features:
 * Remote management:
   * Remote configuration and CLI access via remote repeater management.
   * CLI access also available via serial port and, optionally, via telnet over Wi-Fi.
+  * Admin proxy: log in to another node from the serial or telnet console and run its commands through this repeater, for sites where this repeater has a radio path but the operator is off the mesh.
 * Remote telemetry, including the neighbour list:
   * Sensors are not yet supported.
 * Regions:

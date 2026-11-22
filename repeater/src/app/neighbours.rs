@@ -169,6 +169,17 @@ impl NeighbourTable {
         self.entries.clone()
     }
 
+    /// Resolves a prefix to a full public key, matching either the key bytes
+    /// or the neighbour hash printed by `neighbours`.
+    pub fn public_key_matching_prefix(&self, prefix: &[u8]) -> Option<[u8; PUB_KEY_SIZE]> {
+        self.entries
+            .iter()
+            .find(|neighbour| {
+                neighbour.public_key.starts_with(prefix) || neighbour.hash().starts_with(prefix)
+            })
+            .map(|neighbour| neighbour.public_key)
+    }
+
     fn find_index(&self, public_key: &[u8; PUB_KEY_SIZE]) -> Option<usize> {
         self.entries
             .iter()
