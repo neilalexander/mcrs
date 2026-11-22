@@ -66,6 +66,11 @@ pub trait Platform {
 
     fn ota_status(&self) -> OtaStatus;
 
+    /// Whether the board supports Wi-Fi, independently of connection state.
+    fn supports_wifi(&self) -> bool {
+        false
+    }
+
     /// The connected station network and IPv4 address, once DHCP completes.
     /// Boards without Wi-Fi report no connection.
     fn wifi_status(&self) -> Option<(alloc::string::String, core::net::Ipv4Addr)> {

@@ -451,6 +451,10 @@ impl Platform for EspPlatform {
         self.request_ota(false);
     }
 
+    fn supports_wifi(&self) -> bool {
+        true
+    }
+
     fn wifi_status(&self) -> Option<(alloc::string::String, core::net::Ipv4Addr)> {
         self.wifi_status.borrow().clone()
     }

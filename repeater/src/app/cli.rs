@@ -752,13 +752,15 @@ async fn handle_command<P: Platform, S: Storage>(
     }
 
     if command == "wifi status" {
-        let output = if request.privilege.is_privileged() {
+        let output = if !request.privilege.is_privileged() {
+            denied_text()
+        } else if !context.platform.supports_wifi() {
+            String::from("Not supported")
+        } else {
             match context.platform.wifi_status() {
                 Some((ssid, ip)) => format!("Connected to {ssid}\nIP: {ip}"),
                 None => String::from("Not connected"),
             }
-        } else {
-            denied_text()
         };
         return Some(command_response(request, output));
     }
@@ -1066,6 +1068,9 @@ async fn handle_get_command<P: Platform, S: Storage>(
         if !request.privilege.is_privileged() {
             return denied_text();
         }
+        if !context.platform.supports_wifi() {
+            return String::from("Not supported");
+        }
         return context
             .with_config(|config| match key {
                 "ssid" => format!("> {}", config.wifi().ssid()),
@@ -1322,6 +1327,9 @@ async fn handle_set_command<P: Platform, S: Storage>(
     }
 
     if let Some(setting) = config.strip_prefix("wifi.") {
+        if !context.platform.supports_wifi() {
+            return String::from("Not supported");
+        }
         let (key, value) = match setting.split_once(' ') {
             Some((key, value)) => (key.trim(), value.trim()),
             None if setting.trim() == "pass" => ("pass", ""),
@@ -1737,6 +1745,9 @@ async fn handle_unset_command<P: Platform, S: Storage>(
     }
     if setting.is_empty() {
         return String::from("Error, missing config name");
+    }
+    if setting.starts_with("wifi.") && !context.platform.supports_wifi() {
+        return String::from("Not supported");
     }
     match context.update_config(|config| config.unset(setting)).await {
         #[cfg(feature = "mqtt")]
