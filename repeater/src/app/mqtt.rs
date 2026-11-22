@@ -350,6 +350,7 @@ impl StatusStats {
 pub fn status_json(
     public_key: &[u8; 32],
     online: bool,
+    repeat: bool,
     origin: &str,
     model: &str,
     firmware_version: &str,
@@ -359,7 +360,7 @@ pub fn status_json(
 ) -> String {
     let status = if online { "online" } else { "offline" };
     format!(
-        "{{\"status\":\"{status}\",\"origin\":\"{}\",\"origin_id\":\"{}\",\"model\":\"{}\",\"firmware_version\":\"{}\",\"radio\":\"{}\",\"client_version\":\"MCRS MQTT\",\"timestamp\":\"{}\",\"stats\":{}}}",
+        "{{\"status\":\"{status}\",\"repeat\":{repeat},\"origin\":\"{}\",\"origin_id\":\"{}\",\"model\":\"{}\",\"firmware_version\":\"{}\",\"radio\":\"{}\",\"client_version\":\"MCRS MQTT\",\"timestamp\":\"{}\",\"stats\":{}}}",
         escape_json(origin),
         hex(public_key),
         escape_json(model),
@@ -715,6 +716,7 @@ mod tests {
             status_json(
                 &public_key,
                 true,
+                true,
                 "Repeater",
                 "Heltec V3",
                 FIRMWARE_VERSION,
@@ -723,13 +725,14 @@ mod tests {
                 StatusStats::default()
             ),
             format!(
-                "{{\"status\":\"online\",\"origin\":\"Repeater\",\"origin_id\":\"{key}\",\"model\":\"Heltec V3\",\"firmware_version\":\"{FIRMWARE_VERSION}\",\"radio\":\"869.618,62.500,8,8\",\"client_version\":\"MCRS MQTT\",\"timestamp\":\"1970-01-01T00:00:00Z\",\"stats\":{{\"battery_mv\":null,\"noise_floor\":null,\"uptime_secs\":0,\"uptime_ms\":0}}}}"
+                "{{\"status\":\"online\",\"repeat\":true,\"origin\":\"Repeater\",\"origin_id\":\"{key}\",\"model\":\"Heltec V3\",\"firmware_version\":\"{FIRMWARE_VERSION}\",\"radio\":\"869.618,62.500,8,8\",\"client_version\":\"MCRS MQTT\",\"timestamp\":\"1970-01-01T00:00:00Z\",\"stats\":{{\"battery_mv\":null,\"noise_floor\":null,\"uptime_secs\":0,\"uptime_ms\":0}}}}"
             )
         );
         assert_eq!(
             status_json(
                 &public_key,
                 false,
+                true,
                 "Repeater",
                 "Heltec V3",
                 FIRMWARE_VERSION,
@@ -738,7 +741,7 @@ mod tests {
                 StatusStats::default()
             ),
             format!(
-                "{{\"status\":\"offline\",\"origin\":\"Repeater\",\"origin_id\":\"{key}\",\"model\":\"Heltec V3\",\"firmware_version\":\"{FIRMWARE_VERSION}\",\"radio\":\"869.618,62.500,8,8\",\"client_version\":\"MCRS MQTT\",\"timestamp\":\"1970-01-01T00:00:00Z\",\"stats\":{{\"battery_mv\":null,\"noise_floor\":null,\"uptime_secs\":0,\"uptime_ms\":0}}}}"
+                "{{\"status\":\"offline\",\"repeat\":true,\"origin\":\"Repeater\",\"origin_id\":\"{key}\",\"model\":\"Heltec V3\",\"firmware_version\":\"{FIRMWARE_VERSION}\",\"radio\":\"869.618,62.500,8,8\",\"client_version\":\"MCRS MQTT\",\"timestamp\":\"1970-01-01T00:00:00Z\",\"stats\":{{\"battery_mv\":null,\"noise_floor\":null,\"uptime_secs\":0,\"uptime_ms\":0}}}}"
             )
         );
     }
@@ -750,6 +753,7 @@ mod tests {
             let json = status_json(
                 &[0xab; 32],
                 online,
+                true,
                 "Repeater \"北\"\n\\",
                 "Board\tV3",
                 &version_with_control,
@@ -761,13 +765,14 @@ mod tests {
             assert_eq!(
                 json,
                 format!(
-                    "{{\"status\":\"{status}\",\"origin\":\"Repeater \\\"北\\\"\\u000a\\\\\",\"origin_id\":\"{key}\",\"model\":\"Board\\u0009V3\",\"firmware_version\":\"{FIRMWARE_VERSION}\\u000d\",\"radio\":\"869.618,62.500,8,8\",\"client_version\":\"MCRS MQTT\",\"timestamp\":\"2026-09-27T19:57:24Z\",\"stats\":{{\"battery_mv\":null,\"noise_floor\":null,\"uptime_secs\":0,\"uptime_ms\":0}}}}"
+                    "{{\"status\":\"{status}\",\"repeat\":true,\"origin\":\"Repeater \\\"北\\\"\\u000a\\\\\",\"origin_id\":\"{key}\",\"model\":\"Board\\u0009V3\",\"firmware_version\":\"{FIRMWARE_VERSION}\\u000d\",\"radio\":\"869.618,62.500,8,8\",\"client_version\":\"MCRS MQTT\",\"timestamp\":\"2026-09-27T19:57:24Z\",\"stats\":{{\"battery_mv\":null,\"noise_floor\":null,\"uptime_secs\":0,\"uptime_ms\":0}}}}"
                 )
             );
         }
         assert!(
             status_json(
                 &[0; 32],
+                true,
                 true,
                 "R",
                 "B",
@@ -781,11 +786,32 @@ mod tests {
     }
 
     #[test]
+    fn status_reports_repeat_independently_of_online_state() {
+        for online in [false, true] {
+            for repeat in [false, true] {
+                let json = status_json(
+                    &[0; 32],
+                    online,
+                    repeat,
+                    "Repeater",
+                    "Board",
+                    FIRMWARE_VERSION,
+                    TEST_RADIO,
+                    0,
+                    StatusStats::default(),
+                );
+                assert!(json.contains(&format!("\"repeat\":{repeat},")), "{json}");
+            }
+        }
+    }
+
+    #[test]
     fn status_radio_uses_corescope_format() {
         assert_eq!(TEST_RADIO.radio_string(), "869.618,62.500,8,8");
         assert!(
             status_json(
                 &[0; 32],
+                true,
                 true,
                 "Repeater",
                 "Board",
@@ -805,6 +831,7 @@ mod tests {
                 let json = status_json(
                     &[0; 32],
                     online,
+                    true,
                     "Repeater",
                     "Board",
                     FIRMWARE_VERSION,
@@ -898,6 +925,7 @@ mod tests {
             let json = status_json(
                 &key,
                 online,
+                true,
                 "Repeater",
                 "Heltec V3",
                 FIRMWARE_VERSION,
@@ -913,6 +941,7 @@ mod tests {
         let offline = status_json(
             &key,
             false,
+            true,
             "Repeater",
             "Heltec V3",
             FIRMWARE_VERSION,

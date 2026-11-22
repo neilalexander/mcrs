@@ -222,6 +222,7 @@ async fn mqtt_status_json<P: Platform, S: Storage>(
             crate::app::mqtt::status_json(
                 public_key,
                 online,
+                config.repeat_enabled(),
                 config.node_name(),
                 context.platform.model(),
                 VERSION,
