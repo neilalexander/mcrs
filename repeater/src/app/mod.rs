@@ -146,6 +146,7 @@ pub struct AppContext<P, S> {
     packets_received: AtomicU32,
     packets_sent: AtomicU32,
     tx_airtime_ms: AtomicU32,
+    rx_airtime_ms: AtomicU32,
     packet_errors: AtomicU32,
     battery_level_percent: AtomicU8,
     battery_millivolts: AtomicU16,
@@ -195,6 +196,7 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
             packets_received: AtomicU32::new(0),
             packets_sent: AtomicU32::new(0),
             tx_airtime_ms: AtomicU32::new(0),
+            rx_airtime_ms: AtomicU32::new(0),
             packet_errors: AtomicU32::new(0),
             battery_level_percent: AtomicU8::new(BATTERY_LEVEL_UNKNOWN),
             battery_millivolts: AtomicU16::new(BATTERY_MILLIVOLTS_UNKNOWN),
@@ -421,6 +423,7 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
             packets_received: self.packets_received.load(Ordering::Relaxed),
             packets_sent: self.packets_sent.load(Ordering::Relaxed),
             tx_airtime_ms: self.tx_airtime_ms.load(Ordering::Relaxed),
+            rx_airtime_ms: self.rx_airtime_ms.load(Ordering::Relaxed),
             packet_errors: self.packet_errors.load(Ordering::Relaxed),
             outbound_queue_len: self.outbound.len().min(u16::MAX as usize) as u16,
             battery_level_percent: optional_battery_level(
@@ -493,6 +496,14 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
 
     fn record_tx_airtime(&self, airtime_ms: u32) {
         self.tx_airtime_ms
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |total| {
+                Some(total.saturating_add(airtime_ms))
+            })
+            .ok();
+    }
+
+    fn record_rx_airtime(&self, airtime_ms: u32) {
+        self.rx_airtime_ms
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |total| {
                 Some(total.saturating_add(airtime_ms))
             })
@@ -776,6 +787,7 @@ pub struct Status {
     pub packets_received: u32,
     pub packets_sent: u32,
     pub tx_airtime_ms: u32,
+    pub rx_airtime_ms: u32,
     pub packet_errors: u32,
     pub outbound_queue_len: u16,
     pub battery_level_percent: Option<u8>,
@@ -1056,6 +1068,7 @@ where
                     );
                     continue;
                 }
+                context.record_rx_airtime(radio_config.packet_airtime_ms(packet.len));
                 let payload = &receive_buffer[..packet.len];
 
                 debug!(

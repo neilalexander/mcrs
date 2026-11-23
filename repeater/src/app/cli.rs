@@ -707,7 +707,7 @@ fn encode_status_binary_response(status: super::Status, out: &mut Vec<u8>) {
     // MeshCore exposes the low 16 bits of each duplicate counter on the wire.
     write_u16(stats, &mut offset, status.duplicates_direct as u16);
     write_u16(stats, &mut offset, status.duplicates_flood as u16);
-    write_u32(stats, &mut offset, 0);
+    write_u32(stats, &mut offset, status.rx_airtime_ms / 1_000);
     write_u32(stats, &mut offset, status.packet_errors);
 }
 
@@ -2164,19 +2164,21 @@ fn status_text<P: Platform, S: Storage>(context: &AppContext<P, S>) -> String {
         status.duplicates_flood
     );
 
-    let _ = writeln!(output, "TX airtime: {}ms", status.tx_airtime_ms);
-    let airtime_percent_x100 = if status.uptime_seconds == 0 {
-        0
-    } else {
-        (status.tx_airtime_ms as u64 * 10 / status.uptime_seconds.min(u32::MAX as u64)).min(10_000)
-            as u32
-    };
-    let _ = writeln!(
-        output,
-        "TX airtime percent: {}.{:02}%",
-        airtime_percent_x100 / 100,
-        airtime_percent_x100 % 100
-    );
+    for (direction, airtime_ms) in [("TX", status.tx_airtime_ms), ("RX", status.rx_airtime_ms)] {
+        let _ = writeln!(output, "{} airtime: {}ms", direction, airtime_ms);
+        let airtime_percent_x100 = if status.uptime_seconds == 0 {
+            0
+        } else {
+            (airtime_ms as u64 * 10 / status.uptime_seconds.min(u32::MAX as u64)).min(10_000) as u32
+        };
+        let _ = writeln!(
+            output,
+            "{} airtime percent: {}.{:02}%",
+            direction,
+            airtime_percent_x100 / 100,
+            airtime_percent_x100 % 100
+        );
+    }
     let _ = writeln!(output, "Packet errors: {}", status.packet_errors);
     let _ = writeln!(output, "Outbound queue: {}", status.outbound_queue_len);
     match status.noise_floor_dbm {
@@ -2531,7 +2533,8 @@ mod tests {
             duplicates_flood: 0x6789a,
             packets_received: 0,
             packets_sent: 0,
-            tx_airtime_ms: 0,
+            tx_airtime_ms: 12_345,
+            rx_airtime_ms: 67_890,
             packet_errors: 0,
             outbound_queue_len: 0,
             battery_level_percent: None,
@@ -2555,7 +2558,9 @@ mod tests {
                 0xcc, 0xbb, 0xaa, 0x99, // received direct
             ]
         );
+        assert_eq!(&stats[16..20], &12u32.to_le_bytes());
         assert_eq!(&stats[44..48], &[0x45, 0x23, 0x9a, 0x78]);
+        assert_eq!(&stats[48..52], &67u32.to_le_bytes());
         let mut unknown = alloc::vec::Vec::new();
         super::encode_status_binary_response(
             super::super::Status {
