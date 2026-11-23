@@ -617,7 +617,8 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
                         .platform
                         .now_millis()
                         .saturating_add(u64::from(delay_ms)),
-                    attempts: 0,
+                    tx_attempts: 0,
+                    cad_attempts: 0,
                     dedup_signature: None,
                     post_tx_action: None,
                     is_forward: true,
@@ -639,7 +640,8 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
     ) -> Result<(), OutboundError> {
         let queued = QueuedTransmit {
             eligible_at_ms: self.platform.now_millis().saturating_add(delay_ms as u64),
-            attempts: 0,
+            tx_attempts: 0,
+            cad_attempts: 0,
             packet,
             dedup_signature,
             post_tx_action,
@@ -805,7 +807,8 @@ struct PendingDiscover {
 
 struct QueuedTransmit {
     eligible_at_ms: u64,
-    attempts: u8,
+    tx_attempts: u8,
+    cad_attempts: usize,
     packet: Vec<u8>,
     dedup_signature: Option<[u8; 8]>,
     post_tx_action: Option<cli::PostReplyAction>,
@@ -899,28 +902,35 @@ impl SortedOutboundChannel {
         mut queued: QueuedTransmit,
         retry_delay_ms: u32,
     ) -> Option<u32> {
-        let retried = self.queue.lock(|queue| {
-            let mut queue = queue.borrow_mut();
-            queued.attempts = queued.attempts.saturating_add(1);
-            if queued.attempts >= OUTBOUND_MAX_ATTEMPTS {
-                return None;
-            }
-            queued.eligible_at_ms = context
+        queued.tx_attempts = queued.tx_attempts.saturating_add(1);
+        if queued.tx_attempts >= OUTBOUND_MAX_ATTEMPTS {
+            return None;
+        }
+        queued.cad_attempts = 0;
+        self.defer_current(
+            queued,
+            context
                 .platform
                 .now_millis()
-                .saturating_add(retry_delay_ms as u64);
+                .saturating_add(u64::from(retry_delay_ms)),
+        );
+        Some(retry_delay_ms)
+    }
+
+    // Transfer the active slot back into the queue without releasing its
+    // duplicate reservation or consuming a transmit retry.
+    fn defer_current(&self, mut queued: QueuedTransmit, eligible_at_ms: u64) {
+        self.queue.lock(|queue| {
+            let mut queue = queue.borrow_mut();
+            queued.eligible_at_ms = eligible_at_ms;
             let insert_at = queue
                 .iter()
                 .position(|pending| queued.eligible_at_ms < pending.eligible_at_ms)
                 .unwrap_or(queue.len());
             queue.insert(insert_at, queued);
             self.active.store(0, Ordering::Relaxed);
-            Some(retry_delay_ms)
         });
-        if retried.is_some() {
-            self.changed.signal(());
-        }
-        retried
+        self.changed.signal(());
     }
 
     fn complete_current(&self) {
@@ -1029,7 +1039,7 @@ where
     loop {
         // Use the settings passed to Radio::start, even if saved settings
         // change before the next reboot.
-        transmit_eligible_outbound(radio, context, radio_config, delay, &mut airtime_budget).await;
+        transmit_eligible_outbound(radio, context, radio_config, &mut airtime_budget).await;
 
         let received = match wait_for_irq_or_eligible_outbound(
             radio,
@@ -1161,15 +1171,13 @@ async fn handle_rx_event<P: Platform, S: Storage>(context: &AppContext<P, S>, ev
     }
 }
 
-async fn transmit_eligible_outbound<P: Platform, S: Storage, R, D>(
+async fn transmit_eligible_outbound<P: Platform, S: Storage, R>(
     radio: &mut R,
     context: &AppContext<P, S>,
     radio_config: config::RadioConfig,
-    delay: &mut D,
     airtime_budget: &mut AirtimeBudget,
 ) where
     R: crate::platform::Radio,
-    D: DelayNs,
 {
     let (duty_cycle_percent, repeat_enabled) = context
         .with_config(|config| (config.duty_cycle_percent(), config.repeat_enabled()))
@@ -1196,14 +1204,35 @@ async fn transmit_eligible_outbound<P: Platform, S: Storage, R, D>(
     if airtime_budget.ready_at_ms(now_ms, required_ms, duty_cycle_percent) > now_ms {
         return;
     }
-    let Some(queued) = context.outbound.take_first() else {
+    let Some(mut queued) = context.outbound.take_first() else {
         return;
     };
     let region = context.outbound_region_label(&queued.packet).await;
-    if transmit_when_clear(radio, &queued.packet, radio_config, delay)
-        .await
-        .is_err()
-    {
+    let transmit_result = match radio.channel_is_busy().await {
+        Ok(false) => radio.transmit(&queued.packet).await,
+        Ok(true) if queued.cad_attempts + 1 < CAD_MAX_ATTEMPTS => {
+            let delay_ms = cad_busy_backoff_ms(&queued.packet, radio_config, queued.cad_attempts);
+            queued.cad_attempts += 1;
+            context.outbound.defer_current(
+                queued,
+                context
+                    .platform
+                    .now_millis()
+                    .saturating_add(u64::from(delay_ms)),
+            );
+            // The radio loop restarts RX and waits on both IRQs and the deadline.
+            return;
+        }
+        Ok(true) => {
+            error!("CAD: channel stayed busy, dropping transmit");
+            Err(())
+        }
+        Err(()) => {
+            error!("CAD: failed");
+            Err(())
+        }
+    };
+    if transmit_result.is_err() {
         context.record_packet_error();
         warn!("Outbound packet: transmit failed");
         let dedup_signature = queued.dedup_signature;
@@ -1671,36 +1700,6 @@ fn forwarding_jitter_seed(signature: [u8; 8], node_hash: &[u8]) -> u32 {
     seed
 }
 
-async fn transmit_when_clear<R, D>(
-    radio: &mut R,
-    payload: &[u8],
-    radio_config: config::RadioConfig,
-    delay: &mut D,
-) -> Result<(), ()>
-where
-    R: crate::platform::Radio,
-    D: DelayNs,
-{
-    for attempt in 0..CAD_MAX_ATTEMPTS {
-        match radio.channel_is_busy().await {
-            Ok(false) => {
-                return radio.transmit(payload).await;
-            }
-            Ok(true) => {
-                let delay_ms = cad_busy_backoff_ms(payload, radio_config, attempt);
-                delay.delay_ms(delay_ms).await;
-            }
-            Err(()) => {
-                error!("CAD: failed");
-                return Err(());
-            }
-        }
-    }
-
-    error!("CAD: channel stayed busy, dropping transmit");
-    Err(())
-}
-
 fn cad_busy_backoff_ms(payload: &[u8], radio_config: config::RadioConfig, attempt: usize) -> u32 {
     let airtime_ms = radio_config.packet_airtime_ms(payload.len());
     let cad_time_ms = radio_config
@@ -1905,7 +1904,8 @@ mod tests {
     fn queued(eligible_at_ms: u64) -> QueuedTransmit {
         QueuedTransmit {
             eligible_at_ms,
-            attempts: 0,
+            tx_attempts: 0,
+            cad_attempts: 0,
             packet: Vec::new(),
             dedup_signature: None,
             post_tx_action: None,
@@ -1927,6 +1927,36 @@ mod tests {
             flood_forwarding_delay_ms([7; 8], &[1], 400, 0),
             flood_forwarding_delay_ms([7; 8], &[2], 400, 0)
         );
+    }
+
+    #[test]
+    fn cad_deferral_preserves_packet_and_capacity_and_allows_other_traffic() {
+        let channel = SortedOutboundChannel::new(2);
+        let mut packet = queued(100);
+        packet.packet = alloc::vec![1, 2, 3];
+        packet.dedup_signature = Some([7; 8]);
+        packet.is_forward = true;
+        packet.tx_attempts = 1;
+        packet.cad_attempts = 3;
+        channel.try_send(packet).unwrap();
+        let current = channel.take_first().unwrap();
+        // Another producer may fill the remaining slot while CAD is running.
+        channel.try_send(queued(200)).unwrap();
+        channel.defer_current(current, 300);
+        assert_eq!(channel.len(), 2);
+        assert!(channel.try_send(queued(150)).is_err());
+        assert_eq!(channel.next().unwrap().eligible_at_ms, 200);
+        channel.take_first().unwrap();
+        channel.complete_current();
+        let deferred = channel.take_first().unwrap();
+        assert_eq!(deferred.eligible_at_ms, 300);
+        assert_eq!(deferred.packet, alloc::vec![1, 2, 3]);
+        assert_eq!(deferred.dedup_signature, Some([7; 8]));
+        assert!(deferred.is_forward);
+        assert_eq!(deferred.tx_attempts, 1);
+        assert_eq!(deferred.cad_attempts, 3);
+        channel.complete_current();
+        assert_eq!(channel.len(), 0);
     }
 
     #[test]
