@@ -757,8 +757,13 @@ async fn handle_command<P: Platform, S: Storage>(
         } else if !context.platform.supports_wifi() {
             String::from("Not supported")
         } else {
-            match context.platform.wifi_status() {
-                Some((ssid, ip)) => format!("Connected to {ssid}\nIP: {ip}"),
+            match context.platform.wifi_status().await {
+                Some((ssid, ip, signal)) => {
+                    let signal = signal
+                        .map(|rssi| format!("{rssi} dBm"))
+                        .unwrap_or_else(|| String::from("unavailable"));
+                    format!("Connected to {ssid}\nIP: {ip}, Signal: {signal}")
+                }
                 None => String::from("Not connected"),
             }
         };

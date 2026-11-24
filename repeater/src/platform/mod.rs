@@ -71,10 +71,13 @@ pub trait Platform {
         false
     }
 
-    /// The connected station network and IPv4 address, once DHCP completes.
+    /// The connected station network, IPv4 address and signal strength in dBm.
     /// Boards without Wi-Fi report no connection.
-    fn wifi_status(&self) -> Option<(alloc::string::String, core::net::Ipv4Addr)> {
-        None
+    fn wifi_status(
+        &self,
+    ) -> impl Future<Output = Option<(alloc::string::String, core::net::Ipv4Addr, Option<i32>)>>
+    {
+        async { None }
     }
 }
 

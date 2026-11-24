@@ -282,7 +282,9 @@ async fn run_ota_station_mode<'a>(
                 continue;
             }
             if let Some(config) = stack.config_v4() {
-                context.platform.set_wifi_status(Some((ssid, config.address.address())));
+                context
+                    .platform
+                    .set_wifi_status(Some((ssid, config.address.address())));
                 info!(
                     "Wi-Fi: station connected address={} ota=http://{}:{}/",
                     config.address,
@@ -317,8 +319,10 @@ async fn run_ota_station_mode<'a>(
                     2,
                     crate::rng::WifiRng::new,
                 ));
+                let mut signal = pin!(context.platform.handle_wifi_signal_requests(&controller));
                 let mut disconnected = pin!(controller.wait_for_disconnect_async());
                 poll_fn(|cx| {
+                    let _ = signal.as_mut().poll(cx);
                     if let Poll::Ready(never) = server.as_mut().poll(cx) {
                         match never {}
                     }

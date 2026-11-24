@@ -32,6 +32,7 @@ use core::{
     task::Waker,
 };
 use defmt::{error, info};
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex, signal::Signal};
 use embedded_hal::digital::PinState;
 use esp_hal::{
     Blocking,
@@ -345,6 +346,9 @@ pub struct EspPlatform {
     /// Where the Wi-Fi task serves the page, once it has an address.
     ota_address: Cell<Option<SocketAddrV4>>,
     wifi_status: RefCell<Option<(alloc::string::String, core::net::Ipv4Addr)>>,
+    wifi_signal_lock: Mutex<CriticalSectionRawMutex, ()>,
+    wifi_signal_requested: Signal<CriticalSectionRawMutex, ()>,
+    wifi_signal_ready: Signal<CriticalSectionRawMutex, Option<i32>>,
     /// Wakes the Wi-Fi task when the request changes.
     ota_waker: RefCell<Option<Waker>>,
     /// Counts the changes, so the Wi-Fi task notices a stop and a start
@@ -362,6 +366,9 @@ impl EspPlatform {
             ota_requested: Cell::new(false),
             ota_address: Cell::new(None),
             wifi_status: RefCell::new(None),
+            wifi_signal_lock: Mutex::new(()),
+            wifi_signal_requested: Signal::new(),
+            wifi_signal_ready: Signal::new(),
             ota_waker: RefCell::new(None),
             ota_generation: Cell::new(0),
         }
@@ -383,7 +390,20 @@ impl EspPlatform {
         &self,
         status: Option<(alloc::string::String, core::net::Ipv4Addr)>,
     ) {
+        if status.is_none() {
+            self.wifi_signal_ready.signal(None);
+        }
         *self.wifi_status.borrow_mut() = status;
+    }
+
+    pub(crate) async fn handle_wifi_signal_requests(
+        &self,
+        controller: &esp_radio::wifi::WifiController<'_>,
+    ) {
+        loop {
+            self.wifi_signal_requested.wait().await;
+            self.wifi_signal_ready.signal(controller.rssi().ok());
+        }
     }
 
     pub(crate) fn set_ota_address(&self, address: Option<SocketAddrV4>) {
@@ -455,8 +475,20 @@ impl Platform for EspPlatform {
         true
     }
 
-    fn wifi_status(&self) -> Option<(alloc::string::String, core::net::Ipv4Addr)> {
-        self.wifi_status.borrow().clone()
+    async fn wifi_status(
+        &self,
+    ) -> Option<(alloc::string::String, core::net::Ipv4Addr, Option<i32>)> {
+        let _guard = self.wifi_signal_lock.lock().await;
+        if self.wifi_status.borrow().is_none() {
+            return None;
+        }
+        self.wifi_signal_ready.reset();
+        self.wifi_signal_requested.signal(());
+        let signal = self.wifi_signal_ready.wait().await;
+        self.wifi_status
+            .borrow()
+            .clone()
+            .map(|(ssid, ip)| (ssid, ip, signal))
     }
 
     fn ota_status(&self) -> OtaStatus {
