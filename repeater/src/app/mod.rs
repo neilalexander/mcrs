@@ -12,6 +12,7 @@ pub mod mqtt;
 mod neighbours;
 pub mod periodic;
 mod protocol_log;
+mod proxy;
 pub mod radio_metrics;
 pub mod regions;
 mod remote;
@@ -123,6 +124,9 @@ pub struct AppContext<P, S> {
     memory: crate::memory::MemoryProfile,
     neighbours: AppMutex<neighbours::NeighbourTable>,
     remote_logins: AppMutex<remote::RemoteLoginTable>,
+    proxy: AppMutex<proxy::ProxyTable>,
+    proxy_events: Signal<CriticalSectionRawMutex, proxy::ProxyEvent>,
+    proxy_command: AppMutex<()>,
     inbound: Channel<CriticalSectionRawMutex, RxEvent, INBOUND_QUEUE_CAPACITY>,
     outbound: SortedOutboundChannel,
 
@@ -168,6 +172,9 @@ impl<P: Platform, S: Storage> AppContext<P, S> {
             memory,
             neighbours: Mutex::new(neighbours::NeighbourTable::new(memory.max_neighbours)),
             remote_logins: Mutex::new(remote::RemoteLoginTable::new()),
+            proxy: Mutex::new(proxy::ProxyTable::new()),
+            proxy_events: Signal::new(),
+            proxy_command: Mutex::new(()),
             inbound: Channel::new(),
             outbound: SortedOutboundChannel::new(memory.outbound_queue_len),
 
@@ -1139,7 +1146,10 @@ async fn handle_rx_event<P: Platform, S: Storage>(context: &AppContext<P, S>, ev
                     event.received_at_ms,
                 )
                 .await;
-            if let Some(response) = cli::handle_remote_packet(&protocol_packet, context).await {
+            let proxy_consumed = proxy::handle_inbound(&protocol_packet, context).await;
+            if !proxy_consumed
+                && let Some(response) = cli::handle_remote_packet(&protocol_packet, context).await
+            {
                 debug!("Remote response: queueing {} bytes", response.len());
 
                 let action = context.remote_reply_action.take();
@@ -1162,7 +1172,10 @@ async fn handle_rx_event<P: Platform, S: Storage>(context: &AppContext<P, S>, ev
                     error!("Discovery response: outbound queue full");
                 }
             }
-            apply_repeater_rules(context, protocol_packet, event.snr_quarters, &node_hash).await;
+            if !proxy_consumed {
+                apply_repeater_rules(context, protocol_packet, event.snr_quarters, &node_hash)
+                    .await;
+            }
         }
         Err(error) => {
             context.record_packet_error();

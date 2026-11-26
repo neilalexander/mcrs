@@ -7,8 +7,8 @@ use aes::{
 use alloc::vec::Vec;
 use hmac::{Hmac, Mac};
 use mcrs_protocol::{
-    AnonymousRequestPayload, DirectEncryptedPayload, PERM_ACL_ADMIN, Packet, Path, PathPlaintext,
-    Payload, PayloadKind, RepeaterLoginResponsePlaintext, RoutePath, RouteType,
+    AnonymousRequestPayload, DirectEncryptedPayload, HashSize, PERM_ACL_ADMIN, Packet, Path,
+    PathPlaintext, Payload, PayloadKind, RepeaterLoginResponsePlaintext, RoutePath, RouteType,
     TextMessagePlaintext, TextType,
 };
 use sha2::Sha256;
@@ -222,7 +222,106 @@ pub fn encode_path_response_packet(
     })
 }
 
-enum PayloadKindForEncoding {
+/// Encodes an anonymous request from this node to `target_public_key`.
+///
+/// Anonymous requests carry the sender's full public key, so the target can
+/// derive the shared secret without knowing the sender in advance. The plain
+/// text starts with the request timestamp.
+pub fn encode_anonymous_request(
+    sender_public_key: &[u8; 32],
+    target_public_key: &[u8; 32],
+    shared_secret: &[u8; 32],
+    plaintext: &[u8],
+) -> Option<Vec<u8>> {
+    let (mac, ciphertext) = encrypt_payload(shared_secret, plaintext)?;
+    Packet {
+        route_type: RouteType::Flood,
+        transport_codes: None,
+        path: RoutePath::Normal(Path::empty()),
+        payload: Payload::AnonymousRequest(AnonymousRequestPayload {
+            destination_hash: target_public_key[0],
+            sender_pubkey: *sender_public_key,
+            mac,
+            ciphertext,
+        }),
+    }
+    .encode()
+    .ok()
+}
+
+/// Encodes an encrypted text payload addressed to another node.
+///
+/// `path` is the forward route to the target once one is learned; without it
+/// the packet is flooded.
+pub fn encode_direct_text(
+    shared_secret: &[u8; 32],
+    target_public_key: &[u8; 32],
+    sender_public_key: &[u8; 32],
+    plaintext: &[u8],
+    path: Option<&Path>,
+    hash_size: HashSize,
+    kind: PayloadKindForEncoding,
+) -> Option<Vec<u8>> {
+    let (mac, ciphertext) = encrypt_payload(shared_secret, plaintext)?;
+    let (route_type, path) = match path {
+        Some(path) => (RouteType::Direct, path.clone()),
+        None => (RouteType::Flood, Path::new(hash_size, Vec::new()).ok()?),
+    };
+    let payload = DirectEncryptedPayload {
+        destination_hash: target_public_key[0],
+        source_hash: sender_public_key[0],
+        mac,
+        ciphertext,
+    };
+    Packet {
+        route_type,
+        transport_codes: None,
+        path: RoutePath::Normal(path),
+        payload: match kind {
+            PayloadKindForEncoding::Response => Payload::Response(payload),
+            PayloadKindForEncoding::TextMessage => Payload::TextMessage(payload),
+        },
+    }
+    .encode()
+    .ok()
+}
+
+/// Encodes a PATH payload sent directly to a peer, teaching it the route back.
+pub fn encode_direct_path(
+    shared_secret: &[u8; 32],
+    target_public_key: &[u8; 32],
+    sender_public_key: &[u8; 32],
+    plaintext: &PathPlaintext,
+    forward_path: &Path,
+) -> Option<Vec<u8>> {
+    let (mac, ciphertext) = encrypt_payload(shared_secret, &plaintext.encode().ok()?)?;
+    Packet {
+        route_type: RouteType::Direct,
+        transport_codes: None,
+        path: RoutePath::Normal(forward_path.clone()),
+        payload: Payload::Path(DirectEncryptedPayload {
+            destination_hash: target_public_key[0],
+            source_hash: sender_public_key[0],
+            mac,
+            ciphertext,
+        }),
+    }
+    .encode()
+    .ok()
+}
+
+/// Decrypts a direct payload using a shared secret held outside the login table.
+pub fn decrypt_direct_payload(
+    shared_secret: &[u8; 32],
+    payload: &DirectEncryptedPayload,
+) -> Option<Vec<u8>> {
+    if !payload.has_complete_ciphertext_blocks() || !verify_direct_mac(shared_secret, payload) {
+        return None;
+    }
+    decrypt_payload(shared_secret, &payload.ciphertext)
+}
+
+pub(crate) enum PayloadKindForEncoding {
     Response,
     TextMessage,
 }
@@ -919,5 +1018,202 @@ mod tests {
         assert_eq!(wrapped.path, discovered_path);
         assert_eq!(wrapped.extra_type, Some(PayloadKind::Response));
         assert_eq!(wrapped.extra_payload, b"reply");
+    }
+
+    #[test]
+    fn proxy_login_request_decrypts_on_the_target() {
+        let server = Identity::from_private_key(PrivateKey::Seed([1; 32]));
+        let client = Identity::from_private_key(PrivateKey::Seed([2; 32]));
+        let secret = client
+            .shared_secret_with_ed25519_public(server.public_key())
+            .unwrap();
+        let mut plaintext = 1234u32.to_le_bytes().to_vec();
+        plaintext.extend_from_slice(b"meshcore");
+
+        let encoded = encode_anonymous_request(
+            client.public_key(),
+            server.public_key(),
+            &secret,
+            &plaintext,
+        )
+        .unwrap();
+        let packet = Packet::decode(&encoded).unwrap();
+        assert_eq!(packet.route_type, RouteType::Flood);
+        let Payload::AnonymousRequest(payload) = packet.payload else {
+            panic!("expected anonymous request");
+        };
+        assert_eq!(payload.destination_hash, server.public_key()[0]);
+
+        let decrypted = decrypt_anonymous_request(&payload, &server).unwrap();
+        assert_eq!(&decrypted.plaintext[..4], &1234u32.to_le_bytes());
+        assert_eq!(&decrypted.plaintext[4..12], b"meshcore");
+        assert_eq!(decrypted.sender_pubkey, *client.public_key());
+        assert_eq!(decrypted.shared_secret, secret);
+    }
+
+    #[test]
+    fn proxy_command_round_trips_and_preserves_route_choice() {
+        let secret = [7; 32];
+        let target = [8; 32];
+        let sender = [9; 32];
+        let plaintext = TextMessagePlaintext {
+            timestamp: 42,
+            text_type: TextType::CliData,
+            attempt: 0,
+            message: b"01|status".to_vec(),
+        }
+        .encode()
+        .unwrap();
+
+        let flooded = encode_direct_text(
+            &secret,
+            &target,
+            &sender,
+            &plaintext,
+            None,
+            HashSize::Two,
+            PayloadKindForEncoding::TextMessage,
+        )
+        .unwrap();
+        let packet = Packet::decode(&flooded).unwrap();
+        assert_eq!(packet.route_type, RouteType::Flood);
+        assert_eq!(packet.normal_path().unwrap().hash_size(), HashSize::Two);
+
+        let path = Path::new(HashSize::One, vec![0x11]).unwrap();
+        let direct = encode_direct_text(
+            &secret,
+            &target,
+            &sender,
+            &plaintext,
+            Some(&path),
+            HashSize::One,
+            PayloadKindForEncoding::TextMessage,
+        )
+        .unwrap();
+        let packet = Packet::decode(&direct).unwrap();
+        assert_eq!(packet.route_type, RouteType::Direct);
+        assert_eq!(packet.normal_path(), Some(&path));
+
+        let Payload::TextMessage(payload) = packet.payload else {
+            panic!("expected text payload");
+        };
+        assert_eq!(payload.destination_hash, target[0]);
+        assert_eq!(payload.source_hash, sender[0]);
+        let decrypted = decrypt_direct_payload(&secret, &payload).unwrap();
+        let unpadded_len = decrypted
+            .iter()
+            .rposition(|byte| *byte != 0)
+            .map_or(0, |i| i + 1);
+        let text = TextMessagePlaintext::decode(&decrypted[..unpadded_len]).unwrap();
+        assert_eq!(text.message, b"01|status");
+        assert_eq!(text.text_type, TextType::CliData);
+    }
+
+    #[test]
+    fn proxy_path_ack_round_trips() {
+        let secret = [7; 32];
+        let target = [8; 32];
+        let sender = [9; 32];
+        let forward = Path::new(HashSize::One, vec![0x21]).unwrap();
+        let reverse = Path::new(HashSize::One, vec![0x22]).unwrap();
+        let plaintext = PathPlaintext {
+            path: reverse.clone(),
+            extra_type: None,
+            extra_payload: Vec::new(),
+        };
+
+        let encoded = encode_direct_path(&secret, &target, &sender, &plaintext, &forward).unwrap();
+        let packet = Packet::decode(&encoded).unwrap();
+        assert_eq!(packet.route_type, RouteType::Direct);
+        assert_eq!(packet.normal_path(), Some(&forward));
+
+        let Payload::Path(payload) = packet.payload else {
+            panic!("expected path payload");
+        };
+        let decrypted = decrypt_direct_payload(&secret, &payload).unwrap();
+        let unpadded_len = decrypted
+            .iter()
+            .rposition(|byte| *byte != 0)
+            .map_or(0, |i| i + 1);
+        let decoded = PathPlaintext::decode(&decrypted[..unpadded_len]).unwrap();
+        assert_eq!(decoded.path, reverse);
+        assert_eq!(decoded.extra_type, None);
+    }
+
+    /// Exercises the proxy client encoders against the repeater's own
+    /// responder: login by flood, learn the path, then run a CLI command
+    /// directly and read the correlated reply.
+    #[test]
+    fn proxy_login_and_command_round_trip_through_the_repeater_handler() {
+        let server = Identity::from_private_key(PrivateKey::Seed([1; 32]));
+        let client = Identity::from_private_key(PrivateKey::Seed([2; 32]));
+        let secret = client
+            .shared_secret_with_ed25519_public(server.public_key())
+            .unwrap();
+        let mut config = super::super::config::AppConfig::generated_defaults([1; 32]);
+        config.set_remote_cli_password("secret");
+        let context = AppContext::new(TestPlatform, config, crate::platform::NoStorage);
+        assert_eq!(ready(context.public_key()), *server.public_key());
+
+        let forward = Path::new(HashSize::One, vec![0x11]).unwrap();
+        let mut login_plaintext = 100u32.to_le_bytes().to_vec();
+        login_plaintext.extend_from_slice(b"secret");
+        let login = encode_anonymous_request(
+            client.public_key(),
+            server.public_key(),
+            &secret,
+            &login_plaintext,
+        )
+        .unwrap();
+        let mut login = Packet::decode(&login).unwrap();
+        login.path = RoutePath::Normal(forward.clone());
+
+        let reply = ready(super::super::cli::handle_remote_packet(&login, &context)).unwrap();
+        let reply = Packet::decode(&reply).unwrap();
+        let Payload::Path(payload) = reply.payload else {
+            panic!("expected a path return")
+        };
+        let decrypted = decrypt_direct_payload(&secret, &payload).unwrap();
+        let path = PathPlaintext::decode(&decrypted).unwrap();
+        assert_eq!(path.path, forward);
+        let login = RepeaterLoginResponsePlaintext::decode(&path.extra_payload).unwrap();
+        assert_eq!(login.acl_permissions, PERM_ACL_ADMIN);
+
+        let command = TextMessagePlaintext {
+            timestamp: 101,
+            text_type: TextType::CliData,
+            attempt: 0,
+            message: b"0a|owner.info".to_vec(),
+        }
+        .encode()
+        .unwrap();
+        let command = encode_direct_text(
+            &secret,
+            server.public_key(),
+            client.public_key(),
+            &command,
+            Some(&Path::empty()),
+            HashSize::One,
+            PayloadKindForEncoding::TextMessage,
+        )
+        .unwrap();
+        let command = Packet::decode(&command).unwrap();
+        let reply = ready(super::super::cli::handle_remote_packet(&command, &context)).unwrap();
+        let reply = Packet::decode(&reply).unwrap();
+        let Payload::TextMessage(payload) = reply.payload else {
+            panic!("expected a text reply")
+        };
+        let decrypted = decrypt_direct_payload(&secret, &payload).unwrap();
+        let unpadded_len = decrypted
+            .iter()
+            .rposition(|byte| *byte != 0)
+            .map_or(0, |i| i + 1);
+        let text = TextMessagePlaintext::decode(&decrypted[..unpadded_len]).unwrap();
+        assert_eq!(text.text_type, TextType::CliData);
+        assert!(
+            text.message.starts_with(b"0a|"),
+            "reply was {:?}",
+            text.message
+        );
     }
 }

@@ -437,7 +437,7 @@ async fn handle_authenticated_text_message<P: Platform, S: Storage>(
     Some(reply)
 }
 
-fn split_cli_correlation_prefix(command: &str) -> (Option<&str>, &str) {
+pub(crate) fn split_cli_correlation_prefix(command: &str) -> (Option<&str>, &str) {
     let bytes = command.as_bytes();
     if bytes.len() >= 3
         && bytes[0].is_ascii_hexdigit()
@@ -748,6 +748,11 @@ async fn handle_command<P: Platform, S: Storage>(
 
     if command == "region" || command.starts_with("region ") {
         let output = handle_region_command(command, context, request).await;
+        return Some(command_response(request, output));
+    }
+
+    if command == "remote" || command.starts_with("remote ") {
+        let output = super::proxy::handle_command(command, context).await;
         return Some(command_response(request, output));
     }
 
@@ -2341,7 +2346,7 @@ fn command_requires_local_access(command: &str) -> bool {
     let mut words = command.split_ascii_whitespace();
     matches!(
         (words.next(), words.next()),
-        (Some("export"), Some("config")) | (Some("get"), Some("prv.key"))
+        (Some("export"), Some("config")) | (Some("get"), Some("prv.key")) | (Some("remote"), _)
     )
 }
 

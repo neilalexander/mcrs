@@ -113,6 +113,33 @@ Regions can be removed, for example:
 region remove another-region
 ```
 
+## Remote admin proxy
+
+A repeater can hold an admin session to another node and run its CLI from the serial or telnet console. This is useful where this repeater has a radio path to the target but the operator is connected over the network instead of the mesh.
+
+The target must authorise this repeater before the first login. On the target, add this repeater's public key (`get public.key`) to its ACL:
+
+```
+set acl <public key> admin
+```
+
+Then, from this repeater:
+
+```
+remote login <target> [password]
+remote <target> <command>
+remote list
+remote logout <target>
+```
+
+`<target>` is the other node's full public key, or at least four hex characters of it (or of the neighbour hash printed by `neighbours`) when the target is a direct neighbour. `remote login` without a password logs in against the target's ACL entry; a password logs in against its remote CLI password and is not stored.
+
+The first login is flooded so the target can return the path. The path is kept for the session, so later commands go direct: one transmission each way per command. Sessions expire after 30 minutes of inactivity, and the target may expire its own copy sooner. Keep the clock accurate (NTP over Wi-Fi) — a target may reject a login timestamp that has gone backwards after a reboot.
+
+These commands are limited to the serial and telnet consoles and are denied from a remote management session. Proxied commands must not run inside the packet handler that has to receive their reply, and an admin session should not be able to reach a second node without its own authorisation.
+
+The target caps CLI replies at 160 bytes, so long output arrives truncated.
+
 ## Wi-Fi
 
 MCRS can connect to Wi-Fi for Telnet administration, automatic time sync and OTA updates.
